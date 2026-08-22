@@ -33,6 +33,8 @@ ROOT_FILES = (
     "docker-compose.yml",
     ".env.example",
     "README.md",
+    "LICENSE",
+    "NOTICE",
 )
 
 # 文档：发行包里只放用户/部署需要的
@@ -55,6 +57,7 @@ START_MD = """# 灵犀 发行包 v{version}
 | `run.py` | 仅本地调试 |
 | `requirements.txt` | Python 依赖 |
 | `.env.example` | 配置模板，复制为 `.env` 后修改 |
+| `LICENSE` / `NOTICE` | PolyForm Shield：个人与内部自用可以，不能拿去卖或做竞品 |
 | `Dockerfile` / `docker-compose.yml` / `docker/` | Docker 部署 |
 | `docs/部署.md` | 宝塔 / 普通 Linux / Docker / MySQL 完整教程 |
 | `docs/使用说明.html` | 功能说明（浏览器打开） |
