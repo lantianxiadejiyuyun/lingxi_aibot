@@ -1,5 +1,7 @@
 # 灵犀（Lingxi）— AI 个人工作生活管理基座
 
+[![License: PolyForm Shield](https://img.shields.io/badge/license-PolyForm%20Shield-blue)](LICENSE)
+
 以 AI 为核心的个人助理基座：统一管理日程、任务、笔记、健身、出行、消费与定时提醒，并通过 AI 对话、
 早晚午间简报、多渠道通知来帮你更好地安排工作与生活。
 
