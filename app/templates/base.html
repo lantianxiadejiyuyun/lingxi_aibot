@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E%F0%9F%A4%96%3C/text%3E%3C/svg%3E">
+  <title>{% block title %}灵犀{% endblock %} · 灵犀 个人 AI 助理</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='20260823b') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css', v='1.11.3') }}">
+  <script src="{{ url_for('static', filename='js/app.js', v='20260823') }}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+{% if current_user.is_authenticated %}
+{% set ns = namespace(title_icon='') %}
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-logo"><i class="bi bi-robot"></i></span>
+      <span class="brand-text"><span class="brand-name">灵犀</span><span class="brand-sub">个人 AI 助理</span></span>
+    </div>
+    <nav class="nav">
+      {% for group, items in nav_groups %}
+        <div class="nav-group">
+          {% if group %}<span class="nav-group-label">{{ group }}</span>{% endif %}
+          {% for endpoint, label, icon in items %}
+            {% set active = (endpoint == 'dashboard.index' and request.endpoint == 'dashboard.index') or (endpoint != 'dashboard.index' and request.endpoint and request.endpoint.startswith(endpoint.split('.')[0] + '.')) %}
+            {% if active %}{% set ns.title_icon = icon %}{% endif %}
+            <a href="{{ url_for(endpoint) }}" class="nav-item {{ 'active' if active }}{{ ' nav-item-ai' if endpoint == 'chat.index' }}">
+              <span class="nav-icon"><i class="bi {{ icon }}"></i></span>
+              <span class="nav-label">{{ label }}</span>
+              {% if endpoint == 'notifications.index' and unread_count %}
+                <span class="badge badge-danger">{{ unread_count }}</span>
+              {% endif %}
+            </a>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </nav>
+    <div class="sidebar-foot">灵犀 v1.2</div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="page-title">
+          {% if ns.title_icon %}<i class="bi {{ ns.title_icon }} page-title-icon"></i>{% endif %}
+          {% block page_title %}{% endblock %}
+        </div>
+        <div class="topbar-right">
+          {% if request.endpoint != 'chat.index' %}
+          <a class="btn btn-primary btn-sm topbar-ai" href="{{ url_for('chat.index') }}"><i class="bi bi-robot"></i> AI 助手</a>
+          {% endif %}
+          <span class="user-chip"><span class="user-avatar">{{ (current_user.username or '?')[0]|upper }}</span>{{ current_user.username }}</span>
+          <a class="btn btn-ghost btn-sm" href="{{ url_for('auth.logout') }}">退出</a>
+        </div>
+      </div>
+    </header>
+    <main class="content">
+      {% include '_flash.html' %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% else %}
+  {% block fullpage %}{% endblock %}
+{% endif %}
+<div id="toast-container"></div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

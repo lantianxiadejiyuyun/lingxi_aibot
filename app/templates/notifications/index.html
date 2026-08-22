@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}通知中心{% endblock %}
+{% block page_title %}通知中心{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>通知中心</h1>
+  <div class="page-actions">
+    <form method="post" action="{{ url_for('notifications.mark_all_read', channel=channel or None, status=status or None) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-ghost btn-sm" type="submit">全部标为已读</button>
+    </form>
+    <form method="post" action="{{ url_for('notifications.clear_read', channel=channel or None, status=status or None) }}" data-confirm="确定清除所有已发送的通知记录吗？此操作不可恢复。">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-ghost btn-sm" type="submit">清除已读</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <form class="filter-row" method="get" action="{{ url_for('notifications.index') }}">
+    <select class="select" name="channel" style="width:auto; min-width:120px;">
+      <option value="" {{ 'selected' if not channel }}>全部渠道</option>
+      <option value="inapp" {{ 'selected' if channel == 'inapp' }}>站内</option>
+      <option value="serverchan" {{ 'selected' if channel == 'serverchan' }}>Server酱</option>
+      <option value="feishu" {{ 'selected' if channel == 'feishu' }}>飞书</option>
+      <option value="feishu_app" {{ 'selected' if channel == 'feishu_app' }}>飞书机器人(应用)</option>
+    </select>
+    <select class="select" name="status" style="width:auto; min-width:120px;">
+      <option value="" {{ 'selected' if not status }}>全部状态</option>
+      <option value="pending" {{ 'selected' if status == 'pending' }}>待发送</option>
+      <option value="sent" {{ 'selected' if status == 'sent' }}>已发送</option>
+      <option value="failed" {{ 'selected' if status == 'failed' }}>失败</option>
+    </select>
+    <button class="btn btn-primary" type="submit">筛选</button>
+  </form>
+
+  {% if items %}
+  <div class="notif-list">
+    {% for n in items %}
+    <div class="notif-item {{ 'unread' if not n.read }}">
+      <span class="channel-badge {{ n.channel }}">{{ n.channel_label }}</span>
+      <div class="notif-body">
+        <div class="notif-title" style="font-weight:{{ '600' if not n.read else '400' }}">{{ n.title }}</div>
+        {% if n.body %}<div class="notif-text muted">{{ n.body }}</div>{% endif %}
+        <div class="notif-meta muted" style="margin-top:4px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <span>{{ n.created_at }}</span>
+          {% if n.status == 'pending' %}
+          <span class="tag tag-yellow">待发送</span>
+          {% elif n.status == 'sent' %}
+          <span class="tag tag-green">已发送</span>
+          {% else %}
+          <span class="tag tag-red" title="{{ n.error }}">失败</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="actions" style="display:flex; gap:6px; flex-shrink:0;">
+        {% if not n.read %}
+        <form method="post" action="{{ url_for('notifications.read', notification_id=n.id, channel=channel or None, status=status or None) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-ghost btn-sm" type="submit">标已读</button>
+        </form>
+        {% endif %}
+        <form method="post" action="{{ url_for('notifications.delete', notification_id=n.id, channel=channel or None, status=status or None) }}" data-confirm="确定删除这条通知吗？删除后不可恢复。">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-danger btn-sm" type="submit">删除</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">暂无通知 🎉</p>
+  {% endif %}
+</div>
+{% endblock %}

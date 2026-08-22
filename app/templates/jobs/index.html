@@ -1,0 +1,183 @@
+{% extends 'base.html' %}
+{% block title %}定时任务{% endblock %}
+{% block page_title %}定时任务{% endblock %}
+{% block content %}
+
+<!-- 新建定时提醒 -->
+<div class="card">
+  <div class="card-head"><h2>新建定时提醒</h2></div>
+  <form method="post" action="{{ url_for('jobs.create') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="new-name">名称 *</label>
+        <input class="input" type="text" id="new-name" name="name" required maxlength="128" placeholder="如：下午喝水提醒">
+      </div>
+      <div class="form-group">
+        <label for="new-cron">cron 表达式 *</label>
+        <input class="input" type="text" id="new-cron" name="cron" required placeholder="如：30 9 * * *">
+        <div class="cron-hint">分 时 日 月 周，如 "30 9 * * *" 表示每天 9:30 执行</div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="new-title">提醒标题 *</label>
+        <input class="input" type="text" id="new-title" name="title" required maxlength="255" placeholder="通知标题">
+      </div>
+      <div class="form-group">
+        <label for="new-channels">渠道</label>
+        <select class="select" id="new-channels" name="channels">
+          {% for value, label in channel_options %}
+          <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="new-body">提醒内容</label>
+      <textarea class="textarea" id="new-body" name="body" placeholder="通知正文…"></textarea>
+    </div>
+    <button class="btn btn-primary" type="submit">创建</button>
+  </form>
+</div>
+
+<!-- 内置任务 -->
+<div class="card">
+  <div class="card-head"><h2>内置任务</h2></div>
+  {% if builtin %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>名称</th>
+        <th>动作</th>
+        <th>cron 计划</th>
+        <th>推送渠道</th>
+        <th>启用</th>
+        <th>上次执行</th>
+        <th>上次状态</th>
+        <th class="actions">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in builtin %}
+      <tr>
+        <td>{{ j.name }}</td>
+        <td><span class="tag tag-gray">{{ j.action_label }}</span></td>
+        <td style="min-width:200px;">
+          {% if j.is_interval %}
+            <span class="muted">每</span>
+            <input class="input" type="number" name="cron_interval" value="{{ j.interval_min }}" min="1" max="1440" form="job-update-{{ j.id }}" style="width:70px;">
+            <span class="muted">分钟</span>
+            <input type="hidden" name="cron_type" value="interval" form="job-update-{{ j.id }}">
+          {% else %}
+            <span class="muted">分</span>
+            <input class="input" type="number" name="cron_min" value="{{ j.cron_min }}" min="0" max="59" form="job-update-{{ j.id }}" style="width:64px;">
+            <span class="muted">时</span>
+            <input class="input" type="number" name="cron_hour" value="{{ j.cron_hour }}" min="0" max="23" form="job-update-{{ j.id }}" style="width:64px;">
+            <input type="hidden" name="cron_type" value="cron5" form="job-update-{{ j.id }}">
+          {% endif %}
+        </td>
+        <td>
+          <select class="select" name="channels" form="job-update-{{ j.id }}" style="min-width:120px;">
+            {% for value, label in channel_options %}
+            <option value="{{ value }}" {{ 'selected' if j.channel == value }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <label class="toggle" title="启用 / 停用">
+            <input type="checkbox" name="enabled" value="1" {{ 'checked' if j.enabled }} form="job-update-{{ j.id }}">
+            <span class="slider"></span>
+          </label>
+        </td>
+        <td>{{ j.last_run_text or '—' }}</td>
+        <td>
+          {% if j.status_ok %}<span class="tag tag-green">成功</span>
+          {% elif j.status_fail %}<span class="tag tag-red">{{ j.last_status }}</span>
+          {% elif j.status_other %}<span class="tag tag-gray">{{ j.last_status }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="actions">
+          <button class="btn btn-primary btn-sm" type="submit" form="job-update-{{ j.id }}">保存</button>
+          <button class="btn btn-ghost btn-sm" type="submit" form="job-update-{{ j.id }}" formaction="{{ url_for('jobs.run', job_id=j.id) }}" formmethod="post">立即执行</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">暂无内置任务</p>
+  {% endif %}
+</div>
+
+<!-- 自定义定时提醒 -->
+<div class="card">
+  <div class="card-head"><h2>自定义定时提醒</h2></div>
+  {% if custom %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>名称</th>
+        <th>cron 计划</th>
+        <th>提醒标题</th>
+        <th>提醒内容</th>
+        <th>渠道</th>
+        <th>启用</th>
+        <th class="actions">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in custom %}
+      <tr>
+        <td><input class="input" type="text" name="name" value="{{ j.name }}" maxlength="128" form="job-update-{{ j.id }}" style="min-width:110px;"></td>
+        <td style="min-width:150px;">
+          <input class="input" type="text" name="cron" value="{{ j.cron }}" form="job-update-{{ j.id }}" style="min-width:120px;">
+          <div class="cron-hint">分 时 日 月 周，如 "30 9 * * *" 表示每天 9:30</div>
+        </td>
+        <td><input class="input" type="text" name="title" value="{{ j.title }}" maxlength="255" form="job-update-{{ j.id }}"></td>
+        <td><input class="input" type="text" name="body" value="{{ j.body }}" form="job-update-{{ j.id }}"></td>
+        <td>
+          <select class="select" name="channels" form="job-update-{{ j.id }}" style="min-width:110px;">
+            {% for value, label in channel_options %}
+            <option value="{{ value }}" {{ 'selected' if j.channel == value }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <label class="toggle" title="启用 / 停用">
+            <input type="checkbox" name="enabled" value="1" {{ 'checked' if j.enabled }} form="job-update-{{ j.id }}">
+            <span class="slider"></span>
+          </label>
+        </td>
+        <td class="actions">
+          <button class="btn btn-primary btn-sm" type="submit" form="job-update-{{ j.id }}">保存</button>
+          <button class="btn btn-ghost btn-sm" type="submit" form="job-update-{{ j.id }}" formaction="{{ url_for('jobs.run', job_id=j.id) }}" formmethod="post">立即执行</button>
+          <button class="btn btn-danger btn-sm" type="submit" form="job-delete-{{ j.id }}">删除</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">还没有自定义定时提醒，用上方表单创建一个吧 🎉</p>
+  {% endif %}
+</div>
+
+<!-- 行内编辑/删除关联表单（隐藏于表格之外，通过 form 属性挂到表格控件上） -->
+{% for j in builtin %}
+<form id="job-update-{{ j.id }}" method="post" action="{{ url_for('jobs.update', job_id=j.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="enabled" value="0">
+</form>
+{% endfor %}
+{% for j in custom %}
+<form id="job-update-{{ j.id }}" method="post" action="{{ url_for('jobs.update', job_id=j.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="enabled" value="0">
+</form>
+<form id="job-delete-{{ j.id }}" method="post" action="{{ url_for('jobs.delete', job_id=j.id) }}" data-confirm="确定删除该定时提醒吗？删除后不可恢复。">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+</form>
+{% endfor %}
+
+{% endblock %}

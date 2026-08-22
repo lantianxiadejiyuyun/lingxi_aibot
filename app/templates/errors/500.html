@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block title %}500{% endblock %}
+{% block page_title %}500 服务器出错了{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="text-align:center; padding:36px 12px;">
+    <div style="font-size:48px">💥</div>
+    <h1 style="margin:8px 0">500 服务器出错了</h1>
+    <p class="muted">请稍后重试，或联系管理员查看日志。</p>
+    <p><a href="{{ url_for('dashboard.index') }}" class="btn btn-primary">回到首页</a></p>
+  </div>
+</div>
+{% endblock %}
+{% block fullpage %}
+<div class="login-page">
+  <div class="login-card center">
+    <div style="font-size: 48px">💥</div>
+    <h1>500 服务器出错了</h1>
+    <p>请稍后重试，或联系管理员查看日志。</p>
+    <p><a href="{{ url_for('auth.login') }}" class="btn btn-primary">去登录</a></p>
+  </div>
+</div>
+{% endblock %}

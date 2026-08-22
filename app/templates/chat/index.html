@@ -1,0 +1,395 @@
+{% extends 'base.html' %}
+{% block title %}AI 助手{% endblock %}
+{% block page_title %}AI 助手{% endblock %}
+{% block content %}
+<div class="chat-layout">
+  <aside class="chat-side">
+    <div class="chat-side-actions">
+      <button class="btn btn-primary" id="btn-new-chat"><i class="bi bi-plus-lg"></i> 新对话</button>
+      <button class="btn btn-ghost" id="btn-clear-all" title="清空所有对话"><i class="bi bi-trash"></i> 清空</button>
+    </div>
+    <div id="conv-list">
+      {% for c in conversations %}
+      <div class="conv-item" data-conv-id="{{ c.id }}" data-title="{{ c.title }}">
+        <span class="conv-title">{{ c.title }}</span>
+        <span class="conv-del" data-conv-del="{{ c.id }}" title="删除会话">×</span>
+      </div>
+      {% endfor %}
+    </div>
+  </aside>
+  <main class="chat-main">
+    <div class="msg-list" id="msg-list">
+      <p class="empty">开始和 {{ persona_name }} 对话吧，例如：“帮我看看今天有什么安排”
+        <a class="muted" href="{{ url_for('settings_page.index', tab='ai') }}#persona" style="margin-left:8px">设置人设</a>
+      </p>
+    </div>
+    <div class="chat-input-row">
+      <input class="input" id="chat-input" type="text" placeholder="输入消息，回车发送…" autocomplete="off">
+      <button class="btn btn-ghost" id="btn-mic" type="button" title="语音输入（浏览器）"><i class="bi bi-mic"></i></button>
+      <button class="btn btn-primary" id="btn-send">发送</button>
+    </div>
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .conv-item { display: flex; align-items: center; cursor: pointer; }
+  .conv-item .conv-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv-item .conv-del { display: none; color: var(--text-2); font-size: 14px; padding: 0 4px; margin-left: 4px; border-radius: 4px; }
+  .conv-item:hover .conv-del { display: inline; }
+  .conv-item .conv-del:hover { color: var(--danger); background: #fee2e2; }
+  .tool-row { margin: 2px 0 4px 42px; }
+  .msg-bubble .typing { color: var(--text-2); }
+  .btn-speak { border: none; background: none; cursor: pointer; font-size: 13px;
+               padding: 0 2px; margin-left: 6px; opacity: .55; vertical-align: middle; }
+  .btn-speak:hover { opacity: 1; }
+  .chat-side-actions { display: flex; gap: 6px; margin-bottom: 10px; }
+  .chat-side-actions .btn { flex: 1; }
+</style>
+<script>
+(function () {
+  "use strict";
+
+  var msgList = document.getElementById("msg-list");
+  var convList = document.getElementById("conv-list");
+  var inputEl = document.getElementById("chat-input");
+  var btnSend = document.getElementById("btn-send");
+  var btnNew = document.getElementById("btn-new-chat");
+
+  var currentConvId = null;
+  var sending = false;
+
+  function scrollBottom() { msgList.scrollTop = msgList.scrollHeight; }
+
+  /* ---------- 会话列表 ---------- */
+  function loadConversations() {
+    return window.api.get("/chat/api/conversations").then(function (res) {
+      if (!res || !res.ok) return;
+      convList.innerHTML = "";
+      // 后端按 updated_at DESC（最新在前）返回；appendConvItem 用前插，
+      // 因此先倒序再遍历，保证界面最新会话在顶部
+      (res.data || []).slice().reverse().forEach(function (c) { appendConvItem(c.id, c.title); });
+      if (!currentConvId && res.data && res.data.length) {
+        selectConversation(res.data[0].id);
+      }
+    });
+  }
+
+  function appendConvItem(id, title) {
+    var el = document.createElement("div");
+    el.className = "conv-item";
+    el.setAttribute("data-conv-id", id);
+    el.setAttribute("data-title", title || "");
+    el.innerHTML = '<span class="conv-title"></span><span class="conv-del" data-conv-del="' + id + '" title="删除会话">×</span>';
+    el.querySelector(".conv-title").textContent = title || "新对话";
+    convList.insertBefore(el, convList.firstChild);
+    return el;
+  }
+
+  function refreshActive() {
+    convList.querySelectorAll(".conv-item").forEach(function (item) {
+      item.classList.toggle("active", String(item.getAttribute("data-conv-id")) === String(currentConvId));
+    });
+  }
+
+  function selectConversation(id) {
+    currentConvId = id;
+    refreshActive();
+    msgList.innerHTML = '<p class="empty">加载中…</p>';
+    window.api.get("/chat/api/messages/" + id).then(function (res) {
+      if (!res || !res.ok) { msgList.innerHTML = '<p class="empty">加载失败</p>'; return; }
+      renderMessages(res.data || []);
+    });
+  }
+
+  /* ---------- 消息渲染 ---------- */
+  function renderMessages(rows) {
+    msgList.innerHTML = "";
+    // 工具行在库中位于其所属 assistant 行之前：先把行转成渲染计划，
+    // 用后续 assistant 的 tool_calls 为前面的 tool 行补工具名。
+    var plan = [];
+    var pendingTools = [];   // 等待命名的 tool 行
+    rows.forEach(function (m) {
+      if (m.role === "tool") {
+        pendingTools.push(m);
+      } else if (m.role === "assistant") {
+        var names = (m.tool_calls || []).map(function (tc) { return tc.name || "工具"; });
+        for (var k = 0; k < pendingTools.length && k < names.length; k++) {
+          plan.push({ type: "tool", name: names[k], content: pendingTools[k].content });
+        }
+        pendingTools = pendingTools.slice(names.length);
+        plan.push({ type: "assistant", content: m.content || "" });
+      } else {
+        pendingTools.forEach(function (t) {
+          plan.push({ type: "tool", name: "工具", content: t.content });
+        });
+        pendingTools = [];
+        plan.push({ type: "user", content: m.content || "" });
+      }
+    });
+    pendingTools.forEach(function (t) {
+      plan.push({ type: "tool", name: "工具", content: t.content });
+    });
+
+    if (!plan.length) {
+      msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
+      return;
+    }
+    plan.forEach(function (p) {
+      if (p.type === "tool") {
+        appendToolChip(p.name, p.content, null);
+      } else if (p.type === "assistant") {
+        // 历史消息同样必须转义：assistant 走 mdLite（内部先 escape）、user 只转义
+        appendBubble(p.type, window.mdLite(p.content));
+      } else {
+        appendBubble(p.type, window.escapeHtml(p.content));
+      }
+    });
+    scrollBottom();
+  }
+
+  function appendBubble(role, html) {
+    var avatar = role === "user" ? '<i class="bi bi-person-fill"></i>' : '<i class="bi bi-robot"></i>';
+    var cls = role === "user" ? "user-a" : "bot-a";
+    var msg = document.createElement("div");
+    msg.className = "msg " + role;
+    msg.innerHTML = '<div class="avatar ' + cls + '">' + avatar + '</div><div class="msg-bubble"></div>';
+    var bubble = msg.querySelector(".msg-bubble");
+    bubble.innerHTML = html;
+    if (role === "assistant") attachSpeak(bubble);
+    msgList.appendChild(msg);
+    scrollBottom();
+    return msg;
+  }
+
+  /* ---------- 语音：朗读（后端 TTS 优先，未配置降级浏览器）---------- */
+  function speakBrowser(text) {
+    if (!("speechSynthesis" in window)) { window.toast("浏览器不支持朗读", "error"); return; }
+    speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = "zh-CN";
+    speechSynthesis.speak(u);
+  }
+
+  function speakText(text) {
+    if (!text || !String(text).trim()) return;
+    fetch("/chat/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: String(text).trim() })
+    }).then(function (resp) {
+      if (!resp.ok) { speakBrowser(text); return; }
+      return resp.blob().then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var au = new Audio(url);
+        au.onended = function () { URL.revokeObjectURL(url); };
+        au.play();
+      });
+    }).catch(function () { speakBrowser(text); });
+  }
+
+  function attachSpeak(bubble) {
+    if (!bubble || bubble.querySelector(".btn-speak")) return;
+    var text = bubble.textContent.trim();
+    var sp = document.createElement("button");
+    sp.type = "button";
+    sp.className = "btn-speak";
+    sp.innerHTML = '<i class="bi bi-volume-up"></i>';
+    sp.title = "朗读";
+    sp.addEventListener("click", function () { speakText(text); });
+    bubble.appendChild(sp);
+  }
+
+  /* ---------- 语音：输入（浏览器 STT）---------- */
+  function startSTT() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { window.toast("当前浏览器不支持语音输入（建议 Chrome / Edge）", "error"); return; }
+    if (!window.__sttRec) {
+      var rec = new SR();
+      rec.lang = "zh-CN";
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.onresult = function (e) {
+        var t = e.results && e.results[0] && e.results[0][0] ? e.results[0][0].transcript : "";
+        if (t) inputEl.value = (inputEl.value ? inputEl.value + " " : "") + t;
+        inputEl.focus();
+      };
+      rec.onerror = function (e) { window.toast("语音识别失败：" + (e.error || "未知"), "error"); };
+      window.__sttRec = rec;
+    }
+    try { window.__sttRec.start(); } catch (e) { /* 已开始则忽略 */ }
+  }
+
+  function appendToolChip(name, result, ok) {
+    var chip = document.createElement("div");
+    chip.className = "tool-row";
+    var text = String(result || "");
+    var isErr = ok === false || (ok == null && /"error"|error/.test(text));
+    var cls = isErr ? "tool-chip err" : "tool-chip ok";
+    chip.innerHTML = '<span class="' + cls + '"><i class="bi bi-tools"></i> ' + window.escapeHtml((name || "工具") + "：" + text.slice(0, 60)) + '</span>';
+    msgList.appendChild(chip);
+    scrollBottom();
+    return chip;
+  }
+
+  /* ---------- 发送 ---------- */
+  function sendMessage() {
+    var text = inputEl.value.trim();
+    if (!text || sending) return;
+    sending = true;
+    btnSend.disabled = true;
+    inputEl.value = "";   // 发送后立即清空输入栏
+    inputEl.focus();
+
+    var doSend = function (convId) {
+      appendBubble("user", window.escapeHtml(text));
+      var assistantMsg = appendBubble("assistant", '<span class="typing">' +
+        '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span>');
+      var bubble = assistantMsg.querySelector(".msg-bubble");
+      var acc = "";
+      var hasError = false;
+
+      function finish() {
+        sending = false;
+        btnSend.disabled = false;
+        inputEl.disabled = false;
+      }
+
+      window.streamSSE("/chat/api/send", { conversation_id: convId, message: text }, {
+        onDelta: function (t) {
+          acc += t;
+          bubble.innerHTML = window.mdLite(acc);
+          scrollBottom();
+        },
+        onEvent: function (evt, payload) {
+          // 后端所有事件都带 event: 行，delta 也走这里：必须累积渲染，
+          // 否则流式内容丢失、onDone 还会把最终回答清空
+          if (evt === "delta") {
+            acc += payload;
+            bubble.innerHTML = window.mdLite(acc);
+            scrollBottom();
+            return;
+          }
+          if (evt === "tool") {
+            var t = {};
+            try { t = JSON.parse(payload); } catch (e) {}
+            appendToolChip(t.name || "工具", t.result || "", t.ok);
+          } else if (evt === "title") {
+            var first = convList.querySelector(".conv-item");
+            if (first) {
+              first.setAttribute("data-title", payload);
+              first.querySelector(".conv-title").textContent = payload;
+            }
+          } else if (evt === "error") {
+            hasError = true;
+            window.toast(payload || "出错了", "error");
+          } else if (evt === "done") {
+            if (hasError) {
+              assistantMsg.remove();
+            } else if (payload) {
+              bubble.innerHTML = window.mdLite(payload);
+              attachSpeak(bubble);
+              scrollBottom();
+            }
+          }
+        },
+        onDone: function () {
+          if (acc) { bubble.innerHTML = window.mdLite(acc); attachSpeak(bubble); }
+          else if (!hasError) { bubble.innerHTML = ""; }
+          finish();
+        }
+      }).catch(function (err) {
+        window.toast("网络错误：" + (err && err.message ? err.message : "请重试"), "error");
+        assistantMsg.remove();
+        finish();
+      });
+    };
+
+    if (currentConvId === null) {
+      // 没有选中会话：先新建
+      window.api.post("/chat/api/new", {}).then(function (res) {
+        if (!res || !res.ok) { window.toast("创建会话失败", "error"); sending = false; btnSend.disabled = false; return; }
+        currentConvId = res.data.id;
+        msgList.innerHTML = "";
+        appendConvItem(res.data.id, "新对话");
+        refreshActive();
+        doSend(res.data.id);
+      }).catch(function () {
+        window.toast("网络错误，请重试", "error");
+        sending = false;
+        btnSend.disabled = false;
+      });
+    } else {
+      doSend(currentConvId);
+    }
+  }
+
+  /* ---------- 删除会话 ---------- */
+  convList.addEventListener("click", function (e) {
+    var del = e.target.closest("[data-conv-del]");
+    if (del) {
+      e.stopPropagation();
+      var id = del.getAttribute("data-conv-del");
+      if (!window.confirm("确定删除该会话吗？")) return;
+      window.api.post("/chat/api/delete/" + id, {}).then(function (res) {
+        if (res && res.ok) {
+          window.toast("已删除", "success");
+          if (String(currentConvId) === String(id)) {
+            currentConvId = null;
+            msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
+          }
+          loadConversations();
+        } else {
+          window.toast((res && res.error) || "删除失败", "error");
+        }
+      });
+      return;
+    }
+    var item = e.target.closest(".conv-item");
+    if (item) selectConversation(item.getAttribute("data-conv-id"));
+  });
+
+  /* ---------- 新建会话 ---------- */
+  btnNew.addEventListener("click", function () {
+    if (sending) return;
+    window.api.post("/chat/api/new", {}).then(function (res) {
+      if (!res || !res.ok) { window.toast("创建会话失败", "error"); return; }
+      currentConvId = res.data.id;
+      msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
+      appendConvItem(res.data.id, "新对话");
+      refreshActive();
+      inputEl.value = "";
+      inputEl.focus();
+    }).catch(function () { window.toast("网络错误，请重试", "error"); });
+  });
+
+  btnSend.addEventListener("click", sendMessage);
+  document.getElementById("btn-mic").addEventListener("click", startSTT);
+
+  /* ---------- 清空所有对话 ---------- */
+  document.getElementById("btn-clear-all").addEventListener("click", function () {
+    if (!window.confirm("确定清空所有对话吗？将删除全部会话与消息（含早安简报/周报等系统会话），不可恢复。")) return;
+    window.api.post("/chat/api/clear-all", {}).then(function (r) {
+      if (r && r.ok) {
+        window.toast("已清空 " + (r.data && r.data.deleted || 0) + " 个会话", "success");
+        currentConvId = null;
+        msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
+        loadConversations();
+      } else {
+        window.toast((r && r.error) || "清空失败", "error");
+      }
+    }).catch(function () {
+      window.toast("网络错误，请重试", "error");
+    });
+  });
+
+  inputEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
+  });
+
+  /* ---------- 初始化 ---------- */
+  loadConversations();
+})();
+</script>
+{% endblock %}

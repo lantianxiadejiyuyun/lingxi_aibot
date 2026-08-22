@@ -1,0 +1,36 @@
+# 灵犀 Caddy 反代（可选）。完整步骤见 docs/部署.md 第六节。
+#
+# 启用：改好域名后 docker compose up -d（会启动 app + caddy）。
+# 无域名请：docker compose up -d --build app
+# 把下面两个域名换成你的，并在 .env / 设置页填相同值。
+# DNS A 记录都指向本机。Caddy 会自动申请 Let's Encrypt 证书。
+#
+# 无域名、只走 HTTP 时不要用本文件，直接映射 app 的 8000 端口即可。
+# 若坚持用 Caddy HTTP：
+# :80 {
+#     reverse_proxy app:8000
+# }
+
+# ===== 后台域名：灵犀 管理后台 =====
+admin.eugenstudio.cn {
+	reverse_proxy app:8000
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+}
+
+# ===== 网页域名：AI 生成的公开网站（仅路径式 web.eugenstudio.cn/<slug>）=====
+web.eugenstudio.cn {
+	reverse_proxy app:8000
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+}

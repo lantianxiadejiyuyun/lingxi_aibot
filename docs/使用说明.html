@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>灵犀 使用说明</title>
+<style>
+  :root { --primary:#4f46e5; --bg:#f1f5f9; --card:#fff; --border:#e2e8f0; --text:#0f172a; --muted:#64748b; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; background:var(--bg); color:var(--text); line-height:1.7; }
+  .wrap { max-width:860px; margin:0 auto; padding:24px 20px 60px; }
+  header.hero { background:linear-gradient(135deg,#4f46e5,#7c3aed); color:#fff; border-radius:14px; padding:32px 28px; margin-bottom:26px; }
+  header.hero h1 { font-size:26px; margin-bottom:6px; }
+  header.hero p { opacity:.92; font-size:14px; }
+  .toc { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px 20px; margin-bottom:24px; font-size:14px; }
+  .toc a { color:var(--primary); text-decoration:none; margin-right:14px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px 22px; margin-bottom:20px; }
+  .card h2 { font-size:18px; margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid var(--border); }
+  .card h3 { font-size:15px; margin:14px 0 6px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; margin:10px 0; }
+  th, td { border:1px solid var(--border); padding:8px 12px; text-align:left; vertical-align:top; }
+  th { background:#f8fafc; }
+  code { background:#eef2ff; color:#4338ca; padding:1px 6px; border-radius:5px; font-family:Consolas,monospace; font-size:13px; }
+  pre { background:#0f172a; color:#e2e8f0; border-radius:10px; padding:14px 16px; overflow:auto; font-size:13px; line-height:1.6; margin:10px 0; }
+  pre code { background:none; color:inherit; padding:0; }
+  .tag { display:inline-block; background:#eef2ff; color:#4338ca; border-radius:20px; padding:2px 10px; font-size:12px; margin-right:6px; }
+  .warn { background:#fef3c7; border:1px solid #fcd34d; border-radius:10px; padding:12px 16px; font-size:14px; margin:10px 0; }
+  .ok { background:#ecfdf5; border:1px solid #6ee7b7; border-radius:10px; padding:12px 16px; font-size:14px; margin:10px 0; }
+  ul, ol { margin:8px 0 8px 22px; }
+  footer { text-align:center; color:var(--muted); font-size:13px; margin-top:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>🤖 灵犀 使用说明</h1>
+  <p>AI 个人工作生活管理基座 · Flask + MySQL · 每用户自己的 API Key（OpenAI 兼容 / Anthropic Claude）· 技能 + 记忆 + 健身 / 出行 / 消费</p>
+</header>
+
+<div class="toc">
+  <a href="#start">快速开始</a><a href="#features">功能一览</a><a href="#ui">后台界面</a><a href="#life">健身/出行/消费</a>
+  <a href="#ai">AI 对话示例</a><a href="#settings">重要设置</a><a href="#deploy">部署</a><a href="#security">安全提示</a>
+</div>
+
+<!-- 快速开始 -->
+<div class="card" id="start">
+  <h2>🚀 快速开始（本地开发）</h2>
+  <pre><code># 1. 创建虚拟环境并安装依赖（Python 3.11+）
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
+
+# 2. 配置 .env（复制 .env.example 修改：MySQL 连接、DeepSeek API Key、渠道密钥）
+copy .env.example .env
+
+# 3. 初始化数据库（建表 + 管理员 + 内置定时任务，幂等可重复执行）
+$env:FLASK_APP = "run:app"
+.\.venv\Scripts\python -m flask init-db
+
+# 4. 启动（默认 http://127.0.0.1:5000）
+.\.venv\Scripts\python run.py</code></pre>
+  <p class="ok">默认管理员：<code>admin / admin123</code> —— <strong>登录后请立即到「设置 → 账号」修改密码</strong>。</p>
+</div>
+
+<!-- 功能一览 -->
+<div class="card" id="features">
+  <h2>📦 功能一览</h2>
+  <table>
+    <tr><th style="width:130px">模块</th><th>说明</th></tr>
+    <tr><td>📊 仪表盘</td><td>今日日程 / 待办 / 到期 / 完成数；快捷入口含日历、任务、笔记、健身、出行、消费、网页、AI</td></tr>
+    <tr><td>📅 日历</td><td>月视图 + 当日明细；重复事件（每天/周/月/年）、提前提醒</td></tr>
+    <tr><td>✅ 任务</td><td>优先级、截止时间、项目、标签；筛选与搜索</td></tr>
+    <tr><td>📝 笔记</td><td>快速记录、全文检索，作为 AI 的长期记忆素材</td></tr>
+    <tr><td>🌐 网页生成器</td><td>AI 生成自由 HTML 网页，在线编辑 + 实时预览；公开网页走独立网页域名，与后台域名分离</td></tr>
+    <tr><td>🖼️ 图片生成</td><td>OpenAI 兼容图片接口；对话生成 + AI 改图（编辑接口或自动降级重生成）；图片库可公开可私有</td></tr>
+    <tr><td>🧩 技能</td><td>AI 自写 Python 工具（受限沙箱 + 子进程 10s 超时强杀 + 编写模板）；新建默认禁用，人工审核启用后即可被对话调用</td></tr>
+    <tr><td>🧠 记忆</td><td>定时自动梳理上下文：长对话压缩为摘要 + 抽取长期记忆（带重要度与过期时间，自动遗忘），注入每次对话</td></tr>
+    <tr><td>💪 健身</td><td>训练记录 + 统计看板；每天 20:00 提醒，每周日 AI 周分析</td></tr>
+    <tr><td>🧳 出行</td><td>出行计划（多段交通/备选方案）；一键 AI 生成逐日行程；出发前一天自动提醒</td></tr>
+    <tr><td>💰 消费</td><td>记账 + 按月筛选 + 分类统计；可选 App REST（需配置 <code>API_TOKEN</code>）</td></tr>
+    <tr><td>🤖 AI 助手</td><td>SSE 流式对话，63 个工具（含健身/出行/消费）。对话里可直接记训练、建行程、记账</td></tr>
+    <tr><td>⏰ 定时任务</td><td>内置 13 个任务（含健身提醒、健身周分析、出行提醒）+ 自定义 cron 提醒，可改时间/开关/手动执行/推送渠道</td></tr>
+    <tr><td>🔔 通知中心</td><td>站内通知聚合；Server酱（推微信）/ 飞书（群 Webhook + 应用机器人双向）可插拔渠道。应用机器人收消息支持 <strong>HTTP 回调</strong> 或 <strong>官方 SDK 长连接</strong>（设置页切换）</td></tr>
+    <tr><td>⚙️ 设置</td><td>Tab 分五组：账户（账号/用户）、AI（模型与人设/语音/搜索）、通知（渠道/飞书/简报）、生成（图片/视觉）、系统（备份/网页站点）</td></tr>
+  </table>
+</div>
+
+<!-- 后台界面 -->
+<div class="card" id="ui">
+  <h2>🖥️ 后台界面</h2>
+  <p>登录后左侧导航按用途分组，顶栏随时可以进 AI 对话。</p>
+  <table>
+    <tr><th style="width:110px">分组</th><th>入口</th></tr>
+    <tr><td>置顶</td><td>仪表盘、AI 助手</td></tr>
+    <tr><td>工作</td><td>日历、任务、笔记、网页、图片</td></tr>
+    <tr><td>生活</td><td>健身、出行、消费</td></tr>
+    <tr><td>智能</td><td>技能、记忆</td></tr>
+    <tr><td>系统</td><td>定时任务、通知、设置</td></tr>
+  </table>
+  <p>设置页顶部 Tab 同样分组，并会吸顶，往下滚也能切换。窄屏侧栏会收成图标。</p>
+</div>
+
+<!-- 健身 / 出行 / 消费 -->
+<div class="card" id="life">
+  <h2>💪🧳💰 健身 / 出行 / 消费</h2>
+  <p>这三个模块在左侧导航的「生活」分组，页面、定时任务、AI 对话都能用。</p>
+
+  <h3>健身 <code>/fitness/</code></h3>
+  <ul>
+    <li>记录：日期、类型（跑步 / 力量训练 / 游泳 / 骑行 / 瑜伽 / 球类 / HIIT / 其他）、时长、强度（低/中/高）、卡路里、体重、备注</li>
+    <li>看板：训练次数、总时长、总消耗、最近体重</li>
+    <li>定时：每天 20:00「该去健身啦」；每周日 19:00 根据近 7 天记录生成周分析并推送</li>
+    <li>对话示例：「今天跑步 40 分钟」「帮我分析一下这周健身」</li>
+  </ul>
+
+  <h3>出行 <code>/travel/</code></h3>
+  <ul>
+    <li>计划：目的地、往返日期、交通方式（可多选）、多段交通（出发地/到达/时刻/历时/购票平台）、备选方案、预算、同行人</li>
+    <li>点「生成行程」：AI 按天数写出逐日安排（上午/下午/晚上 + 餐饮住宿建议），保存在该计划里</li>
+    <li>定时：每天 09:00 检查「明天出发」的计划，有则推送收拾行李提醒</li>
+    <li>对话示例：「帮我规划下周五去杭州，高铁往返」</li>
+  </ul>
+
+  <h3>消费 <code>/expenses/</code></h3>
+  <ul>
+    <li>记一笔：金额、分类（餐饮/交通/购物/娱乐/居住/医疗/教育/旅行/其他）、日期、支付方式（微信/支付宝/现金/银行卡/其他）</li>
+    <li>可按月份筛选；看板显示总支出、笔数、分类占比、按月汇总</li>
+    <li>对话示例：「午饭 38 块微信支付」「这个月花了多少」</li>
+  </ul>
+
+  <h3>给手机 App 用的消费接口（可选）</h3>
+  <p>到「设置 → 账号」生成你自己的 Token（数据记在你的账号下）。也可以在 <code>.env</code> 写全局 <code>API_TOKEN</code>（会记到第一个管理员，仅作兼容）。请求头带：</p>
+  <pre><code>X-API-Token: 你的Token
+# 或
+Authorization: Bearer 你的Token</code></pre>
+  <table>
+    <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+    <tr><td>GET</td><td><code>/api/v1/expenses</code></td><td>列表（可用 start_date / end_date / category / limit）</td></tr>
+    <tr><td>GET</td><td><code>/api/v1/expenses/stats</code></td><td>统计</td></tr>
+    <tr><td>GET</td><td><code>/api/v1/expenses/&lt;id&gt;</code></td><td>详情</td></tr>
+    <tr><td>POST</td><td><code>/api/v1/expenses</code></td><td>创建，JSON：amount / category / date / payment_method / notes</td></tr>
+    <tr><td>PUT / PATCH</td><td><code>/api/v1/expenses/&lt;id&gt;</code></td><td>更新</td></tr>
+    <tr><td>DELETE</td><td><code>/api/v1/expenses/&lt;id&gt;</code></td><td>删除</td></tr>
+  </table>
+  <p class="warn">没配任何 Token 时这些接口一律 401，不会裸奔。每个用户的 Token 只能读写自己的账单。</p>
+</div>
+
+<!-- AI 对话示例 -->
+<div class="card" id="ai">
+  <h2>💬 AI 对话示例</h2>
+  <p>AI 会根据需要自动调用工具，例如：</p>
+  <table>
+    <tr><th style="width:58%">你说</th><th>AI 会做</th></tr>
+    <tr><td>明天下午 3 点提醒我开会</td><td><code>create_event</code>（含提醒）</td></tr>
+    <tr><td>我这周有哪些任务没做完？</td><td><code>list_tasks</code></td></tr>
+    <tr><td>帮我记一下：服务器 root 密码已改</td><td><code>create_note</code></td></tr>
+    <tr><td>每天 9 点半提醒我喝水</td><td><code>create_reminder_job</code></td></tr>
+    <tr><td>帮我做一个个人主页，放上我的项目链接</td><td><code>create_page</code>（生成完整 HTML 网页）</td></tr>
+    <tr><td>帮我画一张星空下的柴犬</td><td><code>generate_image</code>（对话里直接显示图片）</td></tr>
+    <tr><td>把这张图的背景改成黄昏</td><td><code>edit_image</code>（图像编辑或降级重生成）</td></tr>
+    <tr><td>帮我创建一个新技能：把文字转成首字母大写</td><td><code>get_skill_template</code> + <code>create_skill</code>（AI 写代码，人工启用后生效）</td></tr>
+    <tr><td>帮我记住：我下周三要出差（重要，9 月 10 日前有效）</td><td><code>remember</code>（带重要度与过期时间）</td></tr>
+    <tr><td>明天下午 3 点开会（已有冲突时）</td><td><code>create_event</code>（自动检测时间冲突并给备选）</td></tr>
+    <tr><td>把明天的日程发到飞书</td><td><code>list_events</code> + <code>send_notification</code></td></tr>
+    <tr><td>今天跑步 40 分钟</td><td><code>create_fitness_record</code></td></tr>
+    <tr><td>帮我规划下周五去杭州</td><td><code>create_trip_plan</code> + <code>generate_trip_itinerary</code></td></tr>
+    <tr><td>午饭 38 块微信支付</td><td><code>create_expense</code></td></tr>
+  </table>
+</div>
+
+<!-- 重要设置 -->
+<div class="card" id="settings">
+  <h2>⚙️ 重要设置</h2>
+
+  <h3>🌐 网页站点（推荐只填端口）</h3>
+  <p>在「设置 → 系统 → 网页站点」配置。公开网页<strong>不必配 HTTPS、也不必配域名</strong>：</p>
+  <table>
+    <tr><th>项</th><th>示例</th><th>作用</th></tr>
+    <tr><td>网页端口</td><td><code>8080</code></td><td>独立 HTTP 端口，访问 <code>http://局域网IP:8080/页面slug</code></td></tr>
+    <tr><td>链接主机</td><td>可留空</td><td>留空则自动用本机局域网 IPv4</td></tr>
+  </table>
+  <p>保存后立即监听。防火墙放行该 TCP 端口即可。域名/证书属于高级选项，已有 Nginx 反代时才需要。</p>
+
+  <h3>🤖 飞书机器人接入方式</h3>
+  <p>「设置 → 通知 → 飞书」可选两种<strong>收消息</strong>方式（发消息/通知不受影响）：</p>
+  <ul>
+    <li><strong>HTTP 回调</strong>：开放平台把事件 POST 到 <code>/feishu/event</code>，需要公网 HTTPS 回调地址。</li>
+    <li><strong>官方 SDK 长连接</strong>：安装 <code>lark-oapi</code> 后，进程主动连飞书，不必暴露回调。开放平台事件订阅请选「使用长连接接收事件」。保存配置后本页可看到连接状态。
+      <strong>注意：</strong>长连接不需要入站公网端口，但 AI 构建的网页要在飞书里打开，必须有<strong>公网 IPv4</strong>。未连公网、没有公网 IPv4 时，飞书里无法显示构建的网页。</li>
+  </ul>
+  <p>两种方式不要同时开，否则可能重复回复。切换后若长连接没立刻断开，重启一次应用即可。</p>
+
+  <h3>🧠 模型接入（每人自己的 Key）</h3>
+  <p>「设置 → AI → 模型与人设」：每位用户必须填写<strong>自己的 API Key</strong>，不能使用管理员或服务器 .env 里的 Key。</p>
+  <ul>
+    <li><strong>OpenAI 兼容</strong>：官方 OpenAI、DeepSeek、通义、Kimi、Ollama、各类中转。走 <code>/chat/completions</code> + Function Calling。</li>
+    <li><strong>Anthropic</strong>：Claude 官方或兼容网关。走 <code>/v1/messages</code> + <code>tool_use</code>。地址填 <code>https://api.anthropic.com</code>，模型如 <code>claude-sonnet-4-5</code>。</li>
+  </ul>
+  <p>「快捷填入官方地址」按国内 / 国际 / 本地分组：DeepSeek、通义、Kimi、智谱、豆包、硅基流动、星火、混元、OpenAI、Claude、Grok、Gemini、Ollama 等。点一下即填入该厂商的 Base URL 和默认模型名，再粘贴你自己的 Key，保存即生效，可点「测试连接」。</p>
+
+  <h3>🎭 对话人设</h3>
+  <p>「设置 → AI → 模型与人设 → 对话人设」：改 AI 的名字、性格（默认助理 / 专业干练 / 温柔陪伴 / 幽默机智 / 讲解老师 / 行动教练 / 自定义）、怎么称呼你、回复详细度，以及一段补充说明。保存后下一轮对话生效。查日程、记账等工具规则不会被覆盖。</p>
+
+  <h3>🖼️ 图片生成配置</h3>
+  <p>「设置 → 生成 → 图片」填入 BaseURL / API Key / 模型（任何 OpenAI 兼容图片服务，如硅基流动 <code>https://api.siliconflow.cn/v1</code>、FLUX/Kolors、OpenAI gpt-image 系列）。保存即生效，可「测试生成」验证。</p>
+
+  <h3>🧩 技能安全说明</h3>
+  <div class="warn"><strong>重要：</strong>技能是 AI 生成的 Python 代码，在受限沙箱中执行（禁止 import / 文件 / 网络 / 子进程）。这是「尽力而为的护栏」而非强安全边界——<strong>启用前务必点「代码」人工审查</strong>。新建技能默认禁用。</div>
+
+  <h3>🧠 记忆梳理</h3>
+  <p>内置任务「上下文梳理」默认每日 04:00 自动执行（长对话压缩 + 抽取长期记忆）；也可在「🧠 记忆」页手动「立即梳理」。自动抽取的记忆可单条删除；手动记录的（<code>remember</code>）不会被自动覆盖。</p>
+
+  <h3>👥 用户管理（仅管理员）</h3>
+  <p>「设置 → 账户 → 用户」可创建新账号（自动带上该用户的内置定时任务），并把飞书 <code>open_id</code>（以 <code>ou_</code> 开头）绑到某个账号。各用户的日程、任务、笔记、对话、健身、出行、消费互相隔离。</p>
+
+  <h3>🔒 后台安全入口（可选）</h3>
+  <p>在 <code>.env</code> 设置 <code>ADMIN_ENTRY=一段随机路径</code> 后<strong>重启</strong>，后台变成 <code>https://你的域名/&lt;入口&gt;/login</code>。不带入口访问后台会 404；公开网页和飞书回调不受影响。</p>
+</div>
+
+<!-- 部署 -->
+<div class="card" id="deploy">
+  <h2>🚀 部署（宝塔 / 普通服务器 / Docker / MySQL）</h2>
+  <p>完整逐步教程请打开仓库 <code>docs/部署.md</code>，覆盖：环境要求、MySQL 建库连库、宝塔面板、普通 Linux（systemd）、Docker、网页 HTTP 端口、飞书两种接入、备份与安全清单。</p>
+  <h3>三种方式怎么选</h3>
+  <table>
+    <tr><th>方式</th><th>适合</th></tr>
+    <tr><td>宝塔面板</td><td>已装宝塔：用 Supervisor + waitress 监听 8000，MySQL 用面板安装</td></tr>
+    <tr><td>普通 Linux</td><td>无面板的 Ubuntu/Debian：venv + systemd，可选 Nginx</td></tr>
+    <tr><td>Docker</td><td><code>docker compose up -d --build app</code>；自带 MySQL 加 <code>--profile mysql</code></td></tr>
+  </table>
+  <h3>必须知道</h3>
+  <ul>
+    <li>只能 <strong>1 个 worker</strong>（waitress 或 gunicorn <code>-w 1</code>）。多进程会让定时任务和飞书消息重复。</li>
+    <li>不要用 uvicorn。MySQL 库要先建好，字符集 utf8mb4。</li>
+    <li>公开网页推荐只填端口（设置 → 网页站点），<strong>不必配 HTTPS / 域名</strong>；云安全组要放行该端口。</li>
+    <li>Docker 里连宿主机 MySQL 填 <code>MYSQL_HOST=host.docker.internal</code>，不要填 127.0.0.1。</li>
+    <li>首次安装打开 <code>/setup</code>，令牌在服务器 <code>data/setup_token.txt</code>。</li>
+    <li>AI 对话走 SSE：若前面有 Nginx，必须 <code>proxy_buffering off</code>。</li>
+  </ul>
+  <pre><code># Docker 接已有 MySQL（无域名）
+cp .env.example .env          # 填 MYSQL_* / LLM_API_KEY / PAGE_PORT
+docker compose up -d --build app
+docker compose exec app python -m flask init-db
+
+# Docker 自带 MySQL 8
+# .env 里 MYSQL_HOST=db
+docker compose --profile mysql up -d --build app db
+docker compose exec app python -m flask init-db</code></pre>
+</div>
+
+<!-- 安全提示 -->
+<div class="card" id="security">
+  <h2>🔒 安全提示（公网部署必读）</h2>
+  <ul>
+    <li>务必修改默认密码 <code>admin/admin123</code>；<code>SECRET_KEY</code> 改成随机长字符串</li>
+    <li><code>SESSION_COOKIE_SECURE=1</code>（HTTPS 下）；登录接口已限流（10 次/分钟）+ CSRF 防护 + 密码哈希存储</li>
+    <li>所有业务数据软删除可回滚；每日自动备份</li>
+    <li>技能启用前人工审查代码；生成网页/图片公开前确认内容合规</li>
+    <li>给 App 开接口时用「设置 → 账号」生成 Token（或足够长的 <code>API_TOKEN</code>），不要提交进 git</li>
+    <li>公网建议配置 <code>ADMIN_ENTRY</code>，避免后台路径被扫到</li>
+  </ul>
+</div>
+
+<footer>灵犀 · 个人 AI 工作生活管理基座 · 文档：<code>README.md</code> · <code>docs/部署.md</code> · <code>docs/PROJECT.md</code></footer>
+
+</div>
+</body>
+</html>

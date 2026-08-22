@@ -1,0 +1,258 @@
+{% extends 'base.html' %}
+{% block title %}任务{% endblock %}
+{% block page_title %}✅ 任务{% endblock %}
+{% block head %}
+<style>
+  .task-item .actions { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+  .task-item .chip { padding: 1px 8px; font-size: 12px; margin: 0 4px 0 0; }
+  .task-title.done { text-decoration: line-through; color: #94a3b8; }
+  .task-title.cancelled { color: #94a3b8; }
+  .task-note { color: var(--text-2); font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>任务清单</h1>
+  <div class="page-actions">
+    <button class="btn btn-primary" data-modal-open="#task-modal" id="btn-new-task"><i class="bi bi-plus-lg"></i> 新建任务</button>
+  </div>
+</div>
+
+<div class="card">
+  <form class="filter-row" method="get" action="{{ url_for('tasks.index') }}">
+    <select class="select" name="status" style="width:auto; min-width:110px;">
+      <option value="open" {{ 'selected' if status == 'open' }}>进行中</option>
+      <option value="done" {{ 'selected' if status == 'done' }}>已完成</option>
+      <option value="cancelled" {{ 'selected' if status == 'cancelled' }}>已取消</option>
+      <option value="all" {{ 'selected' if status == 'all' }}>全部</option>
+    </select>
+    <select class="select" name="priority" style="width:auto; min-width:120px;">
+      <option value="">全部优先级</option>
+      <option value="1" {{ 'selected' if priority == '1' }}>低优先级</option>
+      <option value="2" {{ 'selected' if priority == '2' }}>中优先级</option>
+      <option value="3" {{ 'selected' if priority == '3' }}>高优先级</option>
+    </select>
+    <input class="input" type="text" name="q" value="{{ q }}" placeholder="搜索标题 / 备注 / 项目…" style="flex:1; min-width:180px;">
+    <button class="btn btn-primary" type="submit">查询</button>
+  </form>
+
+  {% if tasks %}
+  <ul class="task-list" id="task-list">
+    {% for t in tasks %}
+    <li class="task-item" id="task-{{ t.id }}" data-task-id="{{ t.id }}" data-status="{{ t.status }}">
+      {% if t.status == 'open' or t.status == 'done' %}
+      <input type="checkbox" class="task-toggle" data-task-id="{{ t.id }}" {{ 'checked' if t.done }} title="标记完成 / 恢复">
+      {% else %}
+      <span style="min-width:16px;"></span>
+      {% endif %}
+      <span class="priority-dot p{{ t.priority }}" title="优先级：{{ priority_labels.get(t.priority, t.priority) }}"></span>
+      <span class="task-title {{ 'done' if t.done }}{{ 'cancelled' if t.cancelled }}">{{ t.title }}</span>
+      {% if t.project %}<span class="tag tag-gray">{{ t.project }}</span>{% endif %}
+      {% for tag in t.tags %}<span class="chip">#{{ tag }}</span>{% endfor %}
+      {% if t.due_text %}<span class="task-due {{ 'task-overdue' if t.overdue }}">⏰ {{ t.due_text }}</span>{% endif %}
+      {% if t.notes %}<span class="task-note" title="{{ t.notes }}">📝 {{ t.notes[:20] }}{{ '…' if t.notes|length > 20 }}</span>{% endif %}
+      <span class="actions">
+        <button class="btn btn-ghost btn-sm btn-edit" data-task-id="{{ t.id }}">编辑</button>
+        <button class="btn btn-danger btn-sm btn-delete" data-task-id="{{ t.id }}">删除</button>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">没有符合条件的任务 🎉</p>
+  {% endif %}
+</div>
+
+<!-- 新建 / 编辑共用弹窗 -->
+<div class="modal-mask" id="task-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="modal-title">新建任务</h3>
+      <button class="modal-close" data-modal-close>×</button>
+    </div>
+    <form id="task-form">
+      <div class="form-group">
+        <label for="f-title">标题 *</label>
+        <input class="input" type="text" id="f-title" required maxlength="255" placeholder="要做什么？">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="f-due">截止时间</label>
+          <input class="input" type="datetime-local" id="f-due">
+        </div>
+        <div class="form-group">
+          <label for="f-priority">优先级</label>
+          <select class="select" id="f-priority">
+            <option value="1">低</option>
+            <option value="2" selected>中</option>
+            <option value="3">高</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="f-project">项目</label>
+          <input class="input" type="text" id="f-project" maxlength="64" placeholder="如：工作 / 生活">
+        </div>
+        <div class="form-group">
+          <label for="f-tags">标签</label>
+          <input class="input" type="text" id="f-tags" placeholder="逗号分隔，如：重要, 紧急">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="f-notes">备注</label>
+        <textarea class="textarea" id="f-notes" placeholder="补充说明…"></textarea>
+      </div>
+      <div class="form-row">
+        <button class="btn btn-primary" type="submit" id="btn-save" style="flex:1;">保存</button>
+        <button class="btn btn-ghost" type="button" data-modal-close>取消</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="application/json" id="tasks-json">{{ tasks|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var TASKS = {};
+  try { TASKS = JSON.parse(document.getElementById("tasks-json").textContent || "{}"); } catch (e) { TASKS = {}; }
+
+  var editingId = null;
+
+  function getEl(id) { return document.getElementById(id); }
+
+  function closeModal() {
+    var m = getEl("task-modal");
+    if (m) m.classList.remove("open");
+  }
+
+  function resetForm() {
+    editingId = null;
+    getEl("f-title").value = "";
+    getEl("f-due").value = "";
+    getEl("f-priority").value = "2";
+    getEl("f-project").value = "";
+    getEl("f-tags").value = "";
+    getEl("f-notes").value = "";
+    getEl("modal-title").textContent = "新建任务";
+  }
+
+  function openEdit(id) {
+    var t = TASKS[id];
+    if (!t) return;
+    editingId = id;
+    getEl("modal-title").textContent = "编辑任务";
+    getEl("f-title").value = t.title || "";
+    getEl("f-due").value = t.due_local || "";
+    getEl("f-priority").value = String(t.priority || 2);
+    getEl("f-project").value = t.project || "";
+    getEl("f-tags").value = (t.tags || []).join(", ");
+    getEl("f-notes").value = t.notes || "";
+  }
+
+  function applyDone(row, done) {
+    var titleEl = row.querySelector(".task-title");
+    if (titleEl) titleEl.classList.toggle("done", done);
+    var dueEl = row.querySelector(".task-due");
+    if (dueEl) dueEl.classList.remove("task-overdue");
+  }
+
+  /* ---------- 新建按钮：先重置表单（app.js 的 data-modal-open 再打开弹窗） ---------- */
+  var newBtn = getEl("btn-new-task");
+  if (newBtn) newBtn.addEventListener("click", resetForm);
+
+  /* ---------- 列表：勾选切换 / 编辑 / 删除 ---------- */
+  var list = getEl("task-list");
+  if (list) {
+    list.addEventListener("change", function (e) {
+      var cb = e.target.closest(".task-toggle");
+      if (!cb) return;
+      var id = cb.getAttribute("data-task-id");
+      window.api.post("/tasks/api/toggle", { task_id: id }).then(function (res) {
+        if (res && res.ok) {
+          var row = getEl("task-" + id);
+          cb.checked = !!res.data.done;
+          if (row) applyDone(row, res.data.done);
+          window.toast(res.data.done ? "已完成 🎉" : "已恢复为进行中", "success");
+        } else {
+          cb.checked = !cb.checked;
+          window.toast((res && res.error) || "操作失败", "error");
+        }
+      }).catch(function () {
+        cb.checked = !cb.checked;
+        window.toast("网络错误，请重试", "error");
+      });
+    });
+
+    list.addEventListener("click", function (e) {
+      var del = e.target.closest(".btn-delete");
+      if (del) {
+        var id = del.getAttribute("data-task-id");
+        if (!window.confirm("确定删除该任务吗？删除后不可恢复。")) return;
+        window.api.post("/tasks/api/delete", { task_id: id }).then(function (res) {
+          if (res && res.ok) {
+            window.toast("已删除", "success");
+            var row = getEl("task-" + id);
+            if (row) row.remove();
+            if (!list.querySelector(".task-item")) {
+              list.outerHTML = '<p class="empty">没有符合条件的任务 🎉</p>';
+            }
+          } else {
+            window.toast((res && res.error) || "删除失败", "error");
+          }
+        }).catch(function () {
+          window.toast("网络错误，请重试", "error");
+        });
+        return;
+      }
+      var edit = e.target.closest(".btn-edit");
+      if (edit) {
+        openEdit(edit.getAttribute("data-task-id"));
+        getEl("task-modal").classList.add("open");
+      }
+    });
+  }
+
+  /* ---------- 表单提交：新建 / 编辑 ---------- */
+  getEl("task-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var title = getEl("f-title").value.trim();
+    if (!title) { window.toast("请输入任务标题", "error"); return; }
+
+    var payload = {
+      title: title,
+      due: getEl("f-due").value || "",
+      priority: parseInt(getEl("f-priority").value, 10) || 2,
+      project: getEl("f-project").value.trim(),
+      tags: getEl("f-tags").value.trim(),
+      notes: getEl("f-notes").value,
+    };
+    var url = "/tasks/api/create";
+    if (editingId) {
+      url = "/tasks/api/update";
+      payload.task_id = editingId;
+    }
+
+    var btn = getEl("btn-save");
+    btn.disabled = true;
+    window.api.post(url, payload).then(function (res) {
+      if (res && res.ok) {
+        window.toast(editingId ? "已保存" : "已创建", "success");
+        closeModal();
+        window.location.reload();
+      } else {
+        window.toast((res && res.error) || "保存失败", "error");
+        btn.disabled = false;
+      }
+    }).catch(function () {
+      window.toast("网络错误，请重试", "error");
+      btn.disabled = false;
+    });
+  });
+})();
+</script>
+{% endblock %}

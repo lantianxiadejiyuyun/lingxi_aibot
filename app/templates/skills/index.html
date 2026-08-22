@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+{% block title %}技能{% endblock %}
+{% block page_title %}技能{% endblock %}
+{% block content %}
+<div class="filter-row">
+  <p class="muted" style="margin:0">
+    对 AI 助手说「帮我创建一个新技能：…」，AI 会编写 Python 工具函数存为技能；
+    <strong>新建默认禁用</strong>，在此页人工审核后启用才生效。技能在受限沙箱中执行。
+  </p>
+</div>
+
+{% if skills %}
+<table class="table">
+  <thead>
+    <tr><th>技能名</th><th>用途描述</th><th>状态</th><th>更新时间</th><th class="actions">操作</th></tr>
+  </thead>
+  <tbody>
+    {% for s in skills %}
+    <tr>
+      <td><code>{{ s.name }}</code></td>
+      <td style="max-width:360px">{{ s.description }}</td>
+      <td>
+        {% if s.enabled %}<span class="tag tag-green">已启用</span>
+        {% else %}<span class="tag tag-red">已禁用</span>{% endif %}
+      </td>
+      <td class="muted">{{ s.updated_at }}</td>
+      <td class="actions">
+        <label class="toggle">
+          <input type="checkbox" data-toggle-skill="{{ s.id }}" {{ 'checked' if s.enabled }}>
+          <span class="slider"></span>
+        </label>
+        <button class="btn btn-sm btn-ghost" type="button" data-view-code="{{ s.id }}">代码</button>
+        <button class="btn btn-sm btn-danger" type="button" data-delete-skill="{{ s.id }}" data-name="{{ s.name }}">删除</button>
+      </td>
+    </tr>
+    <tr id="code-{{ s.id }}" class="skill-code-row" style="display:none">
+      <td colspan="5">
+        <div class="muted" style="margin-bottom:6px">参数 Schema：<code>{{ s.parameters|tojson }}</code></div>
+        <pre class="skill-code">{{ s.code }}</pre>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">还没有技能。去 AI 助手里说「帮我创建一个新技能，功能是…」，AI 会生成代码存到这里。</p>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>安全说明</h2></div>
+  <p class="muted" style="margin:0">
+    技能是 AI 生成的 Python 代码，在<strong>受限沙箱</strong>中执行：禁止 import、文件/网络/子进程访问，
+    只能调用 db 与内置服务。这是「尽力而为的护栏」而非强安全边界——启用前请务必先点「代码」人工审查。
+    自进化能力建立在「AI 编写 + 人工审核启用」之上。
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .skill-code { background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px;
+                overflow: auto; max-height: 320px; font-family: Consolas, "Courier New", monospace;
+                font-size: 12.5px; line-height: 1.6; white-space: pre; }
+  .skill-code-row td { background: #f8fafc; }
+</style>
+<script>
+(function () {
+  "use strict";
+  document.addEventListener("click", function (e) {
+    var tg = e.target.closest("[data-toggle-skill]");
+    if (tg) {
+      var enabled = tg.checked;
+      window.api.post("/skills/api/toggle", { skill_id: tg.getAttribute("data-toggle-skill"), enabled: enabled })
+        .then(function (r) {
+          if (r && r.ok) { window.toast(enabled ? "技能已启用" : "技能已停用", "success"); window.location.reload(); }
+          else { tg.checked = !enabled; window.toast((r && r.error) || "操作失败", "error"); }
+        }).catch(function () { tg.checked = !enabled; window.toast("网络错误，请重试", "error"); });
+      return;
+    }
+    var vc = e.target.closest("[data-view-code]");
+    if (vc) {
+      var row = document.getElementById("code-" + vc.getAttribute("data-view-code"));
+      if (row) row.style.display = row.style.display === "none" ? "" : "none";
+      return;
+    }
+    var del = e.target.closest("[data-delete-skill]");
+    if (del) {
+      var name = del.getAttribute("data-name") || "";
+      if (!window.confirm("确定删除技能「" + name + "」吗？删除后不可恢复。")) return;
+      window.api.post("/skills/api/delete", { skill_id: del.getAttribute("data-delete-skill") })
+        .then(function (r) {
+          if (r && r.ok) { window.toast("已删除", "success"); window.location.reload(); }
+          else window.toast((r && r.error) || "删除失败", "error");
+        }).catch(function () { window.toast("网络错误，请重试", "error"); });
+    }
+  });
+})();
+</script>
+{% endblock %}

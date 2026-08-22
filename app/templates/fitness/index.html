@@ -1,0 +1,224 @@
+{% extends 'base.html' %}
+{% block title %}健身{% endblock %}
+{% block page_title %}健身{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>健身记录</h1>
+  <div class="page-actions">
+    <button class="btn btn-primary" data-modal-open="#fitness-modal" id="btn-new-record"><i class="bi bi-plus-lg"></i> 记录一次训练</button>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <div class="stats-row" style="display:flex; gap:16px; flex-wrap:wrap;">
+    <div><span class="muted">训练次数</span><div style="font-size:22px;font-weight:700">{{ stats.count }}</div></div>
+    <div><span class="muted">总时长（分钟）</span><div style="font-size:22px;font-weight:700">{{ stats.total_min }}</div></div>
+    <div><span class="muted">总消耗（千卡）</span><div style="font-size:22px;font-weight:700">{{ stats.total_cal }}</div></div>
+    {% if stats.latest_weight %}<div><span class="muted">最近体重（kg）</span><div style="font-size:22px;font-weight:700">{{ stats.latest_weight }}</div></div>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  {% if records %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>日期</th><th>类型</th><th>时长</th><th>强度</th><th>消耗</th><th>体重</th><th>备注</th><th class="actions">操作</th>
+      </tr>
+    </thead>
+    <tbody id="fitness-tbody">
+      {% for r in records %}
+      <tr id="fit-{{ r.id }}">
+        <td>{{ r.date }}</td>
+        <td><span class="tag tag-blue">{{ r.workout_type }}</span></td>
+        <td>{{ r.duration_min }} 分钟</td>
+        <td>
+          {% if r.intensity == '高' %}<span class="tag tag-red">高</span>
+          {% elif r.intensity == '低' %}<span class="tag tag-green">低</span>
+          {% else %}<span class="tag tag-yellow">中</span>{% endif %}
+        </td>
+        <td>{{ r.calories if r.calories is not none else '—' }}</td>
+        <td>{{ r.weight_kg if r.weight_kg is not none else '—' }}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.notes }}">{{ r.notes or '—' }}</td>
+        <td class="actions">
+          <button class="btn btn-ghost btn-sm btn-edit" data-id="{{ r.id }}">编辑</button>
+          <button class="btn btn-danger btn-sm btn-delete" data-id="{{ r.id }}">删除</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">还没有健身记录，点击右上角「记录一次训练」开始 💪</p>
+  {% endif %}
+</div>
+
+<!-- 新建 / 编辑弹窗 -->
+<div class="modal-mask" id="fitness-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="fitness-modal-title">记录一次训练</h3>
+      <button class="modal-close" data-modal-close>×</button>
+    </div>
+    <form id="fitness-form">
+      <input type="hidden" id="f-record-id" value="">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="f-date">日期 *</label>
+          <input class="input" type="date" id="f-date" required>
+        </div>
+        <div class="form-group">
+          <label for="f-type">类型</label>
+          <select class="select" id="f-type">
+            {% for t in workout_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="f-duration">时长（分钟）</label>
+          <input class="input" type="number" id="f-duration" min="0" value="30" placeholder="30">
+        </div>
+        <div class="form-group">
+          <label for="f-intensity">强度</label>
+          <select class="select" id="f-intensity">
+            {% for i in intensities %}<option value="{{ i }}" {{ 'selected' if i == '中' }}>{{ i }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="f-calories">消耗（千卡，可选）</label>
+          <input class="input" type="number" id="f-calories" min="0" placeholder="如 300">
+        </div>
+        <div class="form-group">
+          <label for="f-weight">体重（kg，可选）</label>
+          <input class="input" type="number" id="f-weight" step="0.1" min="0" placeholder="如 65.5">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="f-notes">备注</label>
+        <textarea class="textarea" id="f-notes" placeholder="动作、感受、计划…"></textarea>
+      </div>
+      <div class="form-row">
+        <button class="btn btn-primary" type="submit" id="btn-save" style="flex:1">保存</button>
+        <button class="btn btn-ghost" type="button" data-modal-close>取消</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="application/json" id="fitness-json">{{ records|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var RECORDS = {};
+  try {
+    var raw = JSON.parse(document.getElementById("fitness-json").textContent || "[]");
+    (raw || []).forEach(function (r) { if (r && r.id != null) RECORDS[r.id] = r; });
+  } catch (e) { RECORDS = {}; }
+
+  var editingId = null;
+  function el(id) { return document.getElementById(id); }
+  function closeModal() { var m = el("fitness-modal"); if (m) m.classList.remove("open"); }
+
+  function todayStr() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  function resetForm() {
+    editingId = null;
+    el("f-record-id").value = "";
+    el("f-date").value = todayStr();
+    el("f-type").value = "力量训练";
+    el("f-duration").value = "30";
+    el("f-intensity").value = "中";
+    el("f-calories").value = "";
+    el("f-weight").value = "";
+    el("f-notes").value = "";
+    el("fitness-modal-title").textContent = "记录一次训练";
+  }
+
+  function openEdit(id) {
+    var r = RECORDS[id];
+    if (!r) return;
+    editingId = id;
+    el("fitness-modal-title").textContent = "编辑训练记录";
+    el("f-record-id").value = id;
+    el("f-date").value = r.date || todayStr();
+    el("f-type").value = r.workout_type || "力量训练";
+    el("f-duration").value = r.duration_min != null ? r.duration_min : 30;
+    el("f-intensity").value = r.intensity || "中";
+    el("f-calories").value = r.calories != null ? r.calories : "";
+    el("f-weight").value = r.weight_kg != null ? r.weight_kg : "";
+    el("f-notes").value = r.notes || "";
+  }
+
+  var newBtn = el("btn-new-record");
+  if (newBtn) newBtn.addEventListener("click", resetForm);
+
+  var tbody = el("fitness-tbody");
+  if (tbody) {
+    tbody.addEventListener("click", function (e) {
+      var del = e.target.closest(".btn-delete");
+      if (del) {
+        var id = del.getAttribute("data-id");
+        if (!window.confirm("确定删除这条记录吗？")) return;
+        window.api.post("/fitness/api/delete", { record_id: id }).then(function (res) {
+          if (res && res.ok) {
+            window.toast("已删除", "success");
+            window.location.reload();
+          } else {
+            window.toast((res && res.error) || "删除失败", "error");
+          }
+        }).catch(function () { window.toast("网络错误，请重试", "error"); });
+        return;
+      }
+      var edit = e.target.closest(".btn-edit");
+      if (edit) {
+        openEdit(edit.getAttribute("data-id"));
+        el("fitness-modal").classList.add("open");
+      }
+    });
+  }
+
+  el("fitness-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (!el("f-date").value) { window.toast("请选择日期", "error"); return; }
+    var payload = {
+      date: el("f-date").value,
+      workout_type: el("f-type").value,
+      duration_min: parseInt(el("f-duration").value, 10) || 0,
+      intensity: el("f-intensity").value,
+      calories: el("f-calories").value ? parseInt(el("f-calories").value, 10) : null,
+      weight_kg: el("f-weight").value ? parseFloat(el("f-weight").value) : null,
+      notes: el("f-notes").value,
+    };
+    var url = "/fitness/api/create";
+    if (editingId) { url = "/fitness/api/update"; payload.record_id = editingId; }
+
+    var btn = el("btn-save");
+    btn.disabled = true;
+    window.api.post(url, payload).then(function (res) {
+      if (res && res.ok) {
+        window.toast(editingId ? "已保存" : "已记录", "success");
+        closeModal();
+        window.location.reload();
+      } else {
+        window.toast((res && res.error) || "保存失败", "error");
+        btn.disabled = false;
+      }
+    }).catch(function () {
+      window.toast("网络错误，请重试", "error");
+      btn.disabled = false;
+    });
+  });
+})();
+</script>
+{% endblock %}

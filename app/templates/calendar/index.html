@@ -1,0 +1,442 @@
+{% extends 'base.html' %}
+{% block title %}日历{% endblock %}
+{% block page_title %}日历{% endblock %}
+{% block head %}
+<style>
+  .cal-cell.selected { outline: 2px solid var(--primary); }
+  .day-list-item .day-main { flex: 1; min-width: 0; }
+  .day-desc { color: var(--text-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="calendar-toolbar">
+  <button type="button" class="btn btn-ghost" id="btn-prev"><i class="bi bi-chevron-left"></i> 上月</button>
+  <button type="button" class="btn btn-ghost" id="btn-today">今天</button>
+  <button type="button" class="btn btn-ghost" id="btn-next">下月 <i class="bi bi-chevron-right"></i></button>
+  <span class="month-label" id="month-label">{{ month_label }}</span>
+  <span style="flex:1"></span>
+  <button type="button" class="btn btn-primary" id="btn-new" data-modal-open="#event-modal"><i class="bi bi-plus-lg"></i> 新建事件</button>
+</div>
+
+<div class="calendar-grid" id="calendar-grid">
+  {% for w in ['一','二','三','四','五','六','日'] %}
+  <div class="cal-weekday">{{ w }}</div>
+  {% endfor %}
+  {% for cell in cells %}
+  <div class="cal-cell {{ 'out' if cell.out }} {{ 'today' if cell.today }}" data-date="{{ cell.date }}">
+    <div class="cal-day-num">{{ cell.day_num }}</div>
+    {% for ev in cell.events %}
+    <div class="cal-event" data-id="{{ ev.id }}">{{ ev.time }} {{ ev.title }}</div>
+    {% endfor %}
+    {% if cell.more %}<div class="cal-event more">还有 {{ cell.more }} 项</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<section class="card" style="margin-top:16px">
+  <div class="card-head">
+    <h2>📋 当日明细 · <span id="day-label">{{ day }}</span></h2>
+    <a class="btn btn-sm btn-ghost" href="{{ url_for('calendar.index', year=year, month=month, day=today) }}">回到今天</a>
+  </div>
+  <div id="day-list">
+    {% if day_events %}
+      {% for it in day_events %}
+      <div class="day-list-item">
+        <span class="day-time">{{ '全天' if it.all_day else it.start[11:16] }}</span>
+        <div class="day-main">
+          <div class="day-title">{{ it.title }}{% if it.recurring %} <span class="tag">重复</span>{% endif %}</div>
+          {% if it.description %}<div class="day-desc">{{ it.description }}</div>{% endif %}
+          {% if it.location %}<div class="muted">📍 {{ it.location }}</div>{% endif %}
+        </div>
+        <button type="button" class="btn btn-sm btn-ghost" data-modal-open="#event-modal" data-mode="edit"
+          data-id="{{ it.id }}" data-title="{{ it.title }}" data-all-day="{{ 1 if it.all_day else 0 }}"
+          data-start="{{ it.start }}" data-end="{{ it.end }}" data-rrule="{{ it.rrule }}"
+          data-reminder="{{ it.reminder_minutes if it.reminder_minutes is not none else '' }}"
+          data-location="{{ it.location }}" data-description="{{ it.description }}">编辑</button>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty">当天没有日程 🎉</p>
+    {% endif %}
+  </div>
+</section>
+
+{# ============ 新建 / 编辑共用弹窗 ============ #}
+<div class="modal-mask" id="event-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="modal-title">新建事件</h3>
+      <button type="button" class="modal-close" data-modal-close>×</button>
+    </div>
+    <form id="event-form" class="form">
+      <div class="form-group">
+        <label>标题 *</label>
+        <input class="input" id="f-title" name="title" required maxlength="255" placeholder="事件标题">
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:6px;font-weight:600">
+          <input type="checkbox" id="f-all-day" style="width:16px;height:16px"> 全天
+        </label>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>开始时间 *</label>
+          <input class="input" type="datetime-local" id="f-start" name="start" required>
+        </div>
+        <div class="form-group">
+          <label>结束时间</label>
+          <input class="input" type="datetime-local" id="f-end" name="end">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>重复</label>
+          <select class="select" id="f-repeat">
+            <option value="none">不重复</option>
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+            <option value="yearly">每年</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>提醒</label>
+          <select class="select" id="f-reminder">
+            <option value="">不提醒</option>
+            <option value="0">准时</option>
+            <option value="10">提前 10 分钟</option>
+            <option value="30">提前 30 分钟</option>
+            <option value="60">提前 1 小时</option>
+            <option value="1440">提前 1 天</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>地点</label>
+        <input class="input" id="f-location" maxlength="255" placeholder="可选">
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea class="textarea" id="f-description" rows="3" placeholder="可选"></textarea>
+      </div>
+      <div class="form-row" style="justify-content:space-between;align-items:center;margin-top:10px">
+        <button type="button" class="btn btn-danger" id="event-delete" style="display:none">删除</button>
+        <span style="flex:1"></span>
+        <button type="button" class="btn btn-ghost" data-modal-close>取消</button>
+        <button type="submit" class="btn btn-primary" id="event-submit">创建</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var CAL = {
+    year: {{ year }},
+    month: {{ month }},
+    day: {{ day|tojson }},
+    today: {{ today|tojson }},
+    events: {{ month_events|tojson }}
+  };
+  var API_BASE = "/calendar/api";
+
+  function $(sel, root) { return (root || document).querySelector(sel); }
+  function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+  function dateStr(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function parseDate(s) { var p = s.split("-"); return new Date(+p[0], +p[1] - 1, +p[2]); }
+  function addDays(d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  function esc(s) { return window.escapeHtml(s); }
+
+  function gridDays(y, m) {
+    var first = new Date(y, m - 1, 1);
+    var lead = (first.getDay() + 6) % 7;          // 周一开头
+    var start = addDays(first, -lead);
+    var last = new Date(y, m, 0);                 // 当月最后一天
+    var trail = 6 - ((last.getDay() + 6) % 7);
+    var end = addDays(last, trail);
+    var days = [];
+    for (var d = new Date(start); d <= end; d = addDays(d, 1)) {
+      days.push({ date: dateStr(d), day: d.getDate(), out: d.getMonth() !== m - 1 });
+    }
+    return days;
+  }
+
+  function spreadDates(it) {
+    var dates = [it.date];
+    var end = it.end || "";
+    if (end && end.slice(0, 10) > it.date) {
+      var last = end.slice(0, 10);
+      var hasTime = end.indexOf(" ") >= 0;
+      if (!hasTime || end.indexOf(" 00:00") >= 0) {   // 午夜结束 → 结束日不包含
+        last = dateStr(addDays(parseDate(last), -1));
+        if (last < it.date) last = it.date;
+      }
+      var cur = parseDate(it.date);
+      var guard = 0;
+      while (dateStr(cur) < last && guard < 60) {
+        cur = addDays(cur, 1);
+        dates.push(dateStr(cur));
+        guard++;
+      }
+    }
+    return dates;
+  }
+
+  function bucket() {
+    var map = {};
+    CAL.events.forEach(function (it) {
+      spreadDates(it).forEach(function (d) {
+        (map[d] = map[d] || []).push(it);
+      });
+    });
+    Object.keys(map).forEach(function (d) {
+      map[d].sort(function (a, b) { return (a.start || "").localeCompare(b.start || ""); });
+    });
+    return map;
+  }
+
+  function timeOf(it) {
+    if (it.all_day) return "全天";
+    var s = it.start || "";
+    return s.length >= 16 ? s.slice(11, 16) : "";
+  }
+
+  function renderGrid() {
+    var days = gridDays(CAL.year, CAL.month);
+    var map = bucket();
+    var html = "";
+    ["一", "二", "三", "四", "五", "六", "日"].forEach(function (w) {
+      html += '<div class="cal-weekday">' + w + "</div>";
+    });
+    days.forEach(function (cell) {
+      var evs = map[cell.date] || [];
+      var cls = "cal-cell" + (cell.out ? " out" : "") + (cell.date === CAL.today ? " today" : "")
+                + (cell.date === CAL.day ? " selected" : "");
+      html += '<div class="' + cls + '" data-date="' + cell.date + '">';
+      html += '<div class="cal-day-num">' + cell.day + "</div>";
+      evs.slice(0, 3).forEach(function (it) {
+        html += '<div class="cal-event" data-id="' + it.id + '">' + esc(timeOf(it) + " " + it.title) + "</div>";
+      });
+      if (evs.length > 3) html += '<div class="cal-event more">还有 ' + (evs.length - 3) + " 项</div>";
+      html += "</div>";
+    });
+    $("#calendar-grid").innerHTML = html;
+    $("#month-label").textContent = CAL.year + " 年 " + CAL.month + " 月";
+  }
+
+  function editBtnHtml(it) {
+    var rm = it.reminder_minutes == null ? "" : String(it.reminder_minutes);
+    var attrs =
+      'data-modal-open="#event-modal" data-mode="edit"' +
+      ' data-id="' + esc(String(it.id)) + '"' +
+      ' data-title="' + esc(it.title || "") + '"' +
+      ' data-all-day="' + (it.all_day ? "1" : "0") + '"' +
+      ' data-start="' + esc(it.start || "") + '"' +
+      ' data-end="' + esc(it.end || "") + '"' +
+      ' data-rrule="' + esc(it.rrule || "") + '"' +
+      ' data-reminder="' + esc(rm) + '"' +
+      ' data-location="' + esc(it.location || "") + '"' +
+      ' data-description="' + esc(it.description || "") + '"';
+    return '<button type="button" class="btn btn-sm btn-ghost" ' + attrs + '>编辑</button>';
+  }
+
+  function renderDay() {
+    var map = bucket();
+    var evs = map[CAL.day] || [];
+    $("#day-label").textContent = CAL.day;
+    var wrap = $("#day-list");
+    if (!evs.length) {
+      wrap.innerHTML = '<p class="empty">当天没有日程 🎉</p>';
+      return;
+    }
+    var html = "";
+    evs.forEach(function (it) {
+      html += '<div class="day-list-item">';
+      html += '<span class="day-time">' + timeOf(it) + "</span>";
+      html += '<div class="day-main">';
+      html += '<div class="day-title">' + esc(it.title || "") + (it.recurring ? ' <span class="tag">重复</span>' : "") + "</div>";
+      if (it.description) html += '<div class="day-desc">' + esc(it.description) + "</div>";
+      if (it.location) html += '<div class="muted">📍 ' + esc(it.location) + "</div>";
+      html += "</div>";
+      html += editBtnHtml(it);
+      html += "</div>";
+    });
+    wrap.innerHTML = html;
+  }
+
+  function loadMonth() {
+    window.api.get(API_BASE + "/events?year=" + CAL.year + "&month=" + CAL.month).then(function (res) {
+      if (res && res.ok) {
+        CAL.events = res.data.events || [];
+        var days = gridDays(CAL.year, CAL.month);
+        var inGrid = days.some(function (c) { return c.date === CAL.day; });
+        if (!inGrid) CAL.day = CAL.today;
+        renderGrid();
+        renderDay();
+      } else {
+        window.toast((res && res.error) || "加载失败", "error");
+      }
+    }).catch(function () { window.toast("网络错误", "error"); });
+  }
+
+  /* ---------- 弹窗表单 ---------- */
+  var editingId = null;
+
+  function dtLocal(s) {
+    if (!s) return "";
+    var d = s.slice(0, 10);
+    var t = s.length >= 16 ? s.slice(11, 16) : "00:00";
+    return d + "T" + t;
+  }
+
+  function repeatKey(rrule) {
+    rrule = rrule || "";
+    if (rrule.indexOf("DAILY") >= 0) return "daily";
+    if (rrule.indexOf("WEEKLY") >= 0) return "weekly";
+    if (rrule.indexOf("MONTHLY") >= 0) return "monthly";
+    if (rrule.indexOf("YEARLY") >= 0) return "yearly";
+    return "none";
+  }
+
+  function resetForm() {
+    editingId = null;
+    $("#event-form").reset();
+    $("#modal-title").textContent = "新建事件";
+    $("#event-submit").textContent = "创建";
+    $("#event-delete").style.display = "none";
+    $("#f-start").value = CAL.today + "T09:00";
+    $("#f-end").value = "";
+  }
+
+  function fillForm(it) {
+    editingId = it.id;
+    $("#modal-title").textContent = "编辑事件";
+    $("#event-submit").textContent = "保存";
+    $("#event-delete").style.display = "";
+    $("#f-title").value = it.title || "";
+    $("#f-all-day").checked = !!it.all_day;
+    $("#f-start").value = dtLocal(it.start);
+    $("#f-end").value = it.end ? dtLocal(it.end) : "";
+    $("#f-repeat").value = repeatKey(it.rrule);
+    $("#f-reminder").value = (it.reminder_minutes == null || it.reminder_minutes === "") ? "" : String(it.reminder_minutes);
+    $("#f-location").value = it.location || "";
+    $("#f-description").value = it.description || "";
+  }
+
+  document.addEventListener("click", function (e) {
+    // 新建 / 编辑弹窗预填
+    var opener = e.target.closest('[data-modal-open="#event-modal"]');
+    if (opener) {
+      if (opener.getAttribute("data-mode") === "edit") {
+        fillForm({
+          id: opener.getAttribute("data-id"),
+          title: opener.getAttribute("data-title") || "",
+          all_day: opener.getAttribute("data-all-day") === "1",
+          start: opener.getAttribute("data-start") || "",
+          end: opener.getAttribute("data-end") || "",
+          rrule: opener.getAttribute("data-rrule") || "",
+          reminder_minutes: opener.getAttribute("data-reminder"),
+          location: opener.getAttribute("data-location") || "",
+          description: opener.getAttribute("data-description") || ""
+        });
+      } else {
+        resetForm();
+      }
+      return;
+    }
+    // 点击格子 → 选中当天并刷新明细
+    var cell = e.target.closest(".cal-cell");
+    if (cell && cell.getAttribute("data-date")) {
+      CAL.day = cell.getAttribute("data-date");
+      $$(".cal-cell").forEach(function (c) { c.classList.remove("selected"); });
+      cell.classList.add("selected");
+      renderDay();
+    }
+  });
+
+  $("#event-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var allDay = $("#f-all-day").checked;
+    var startVal = $("#f-start").value;
+    var endVal = $("#f-end").value;
+    var title = $("#f-title").value.trim();
+    if (!title) { window.toast("请填写标题", "error"); return; }
+    if (!startVal) { window.toast("请填写开始时间", "error"); return; }
+    if (allDay) {
+      startVal = startVal.slice(0, 10);
+      if (endVal) endVal = endVal.slice(0, 10);
+    }
+    var payload = {
+      title: title,
+      start: startVal,
+      end: endVal,
+      all_day: allDay,
+      repeat: $("#f-repeat").value,
+      reminder_minutes: $("#f-reminder").value,
+      location: $("#f-location").value.trim(),
+      description: $("#f-description").value
+    };
+    var url, okMsg;
+    if (editingId) {
+      url = API_BASE + "/update";
+      payload.event_id = editingId;
+      okMsg = "已保存";
+    } else {
+      url = API_BASE + "/create";
+      okMsg = "已创建";
+    }
+    window.api.post(url, payload).then(function (res) {
+      if (res && res.ok) {
+        window.toast(okMsg, "success");
+        location.reload();
+      } else {
+        window.toast((res && res.error) || "操作失败", "error");
+      }
+    }).catch(function () { window.toast("网络错误", "error"); });
+  });
+
+  $("#event-delete").addEventListener("click", function () {
+    if (!editingId) return;
+    if (!window.confirm("确定删除该事件？")) return;
+    window.api.post(API_BASE + "/delete", { event_id: editingId }).then(function (res) {
+      if (res && res.ok) {
+        window.toast("已删除", "success");
+        location.reload();
+      } else {
+        window.toast((res && res.error) || "删除失败", "error");
+      }
+    }).catch(function () { window.toast("网络错误", "error"); });
+  });
+
+  /* ---------- 工具栏 ---------- */
+  $("#btn-prev").addEventListener("click", function () {
+    CAL.month -= 1;
+    if (CAL.month < 1) { CAL.month = 12; CAL.year -= 1; }
+    loadMonth();
+  });
+  $("#btn-next").addEventListener("click", function () {
+    CAL.month += 1;
+    if (CAL.month > 12) { CAL.month = 1; CAL.year += 1; }
+    loadMonth();
+  });
+  $("#btn-today").addEventListener("click", function () {
+    var t = new Date();
+    CAL.year = t.getFullYear();
+    CAL.month = t.getMonth() + 1;
+    CAL.day = CAL.today;
+    loadMonth();
+  });
+
+  /* ---------- 初始：标记已选日期 ---------- */
+  document.addEventListener("DOMContentLoaded", function () {
+    var sel = document.querySelector('.cal-cell[data-date="' + CAL.day + '"]');
+    if (sel) sel.classList.add("selected");
+  });
+})();
+</script>
+{% endblock %}

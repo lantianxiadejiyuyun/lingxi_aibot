@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+{% block title %}网页{% endblock %}
+{% block page_title %}🌐 网页生成器{% endblock %}
+{% block content %}
+<div class="filter-row">
+  <p class="muted" style="margin:0">
+    在 AI 助手里说「帮我做一个 … 网页」自动生成，或点击「新建页面」手动编写自由 HTML。
+  </p>
+  <a class="btn btn-primary" href="{{ url_for('pages.edit') }}"><i class="bi bi-plus-lg"></i> 新建页面</a>
+</div>
+
+{% if pages %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>标题</th>
+      <th>访问地址</th>
+      <th>可见性</th>
+      <th>显示</th>
+      <th>更新时间</th>
+      <th class="actions">操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in pages %}
+    <tr data-page-row="{{ p.id }}">
+      <td>
+        <strong>{{ p.title }}</strong>
+        {% if p.description %}<div class="muted" style="margin-top:2px">{{ p.description[:80] }}</div>{% endif %}
+      </td>
+      <td style="min-width:220px">
+        <code class="clickable" data-copy-url="{{ p.url }}" title="点击复制">{{ p.url }}</code>
+      </td>
+      <td>
+        {% if p.is_public %}<span class="tag tag-green">公开</span>
+        {% else %}<span class="tag tag-red">仅登录</span>{% endif %}
+      </td>
+      <td>
+        <label class="toggle">
+          <input type="checkbox" data-toggle-page="{{ p.id }}" {{ 'checked' if p.enabled }}>
+          <span class="slider"></span>
+        </label>
+      </td>
+      <td class="muted">{{ p.updated_at }}</td>
+      <td class="actions">
+        <a class="btn btn-sm btn-ghost" href="{{ p.url }}" target="_blank" rel="noopener">预览</a>
+        <a class="btn btn-sm btn-primary" href="{{ url_for('pages.edit', page_id=p.id) }}">编辑</a>
+        <button class="btn btn-sm btn-ghost" type="button" data-duplicate-page="{{ p.id }}">复制</button>
+        <button class="btn btn-sm btn-danger" type="button" data-delete-page="{{ p.id }}" data-title="{{ p.title }}">删除</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">还没有网页。去 AI 助手里说「帮我做一个个人主页」，或点击右上角「新建页面」。</p>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>访问说明</h2></div>
+  {% if page_domain %}
+  <p class="muted" style="margin:0">
+    已配置域名分离：公开网页通过 <code>https://{{ page_domain }}/&lt;slug&gt;</code> 访问（任何人可访问）；
+    私有网页通过 <code>https://{{ admin_domain or '后台域名' }}/p/&lt;slug&gt;</code> 登录后可见。
+    隐藏页面（关闭显示）前台返回 404。可在「设置 → 域名设置」修改域名。
+  </p>
+  {% else %}
+  <p class="muted" style="margin:0">
+    未配置网页域名：页面通过当前主机 <code>/p/&lt;slug&gt;</code> 路径访问。
+    在「设置 → 域名设置」配置后台域名与网页域名后，公开网页将从独立域名
+    <code>https://网页域名/&lt;slug&gt;</code> 访问（后台与网页域名分离）。
+  </p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+
+  function copyUrl(text) {
+    if (!text) return;
+    var done = function () { window.toast("链接已复制：" + text, "success"); };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, function () { window.prompt("复制链接：", text); });
+    } else {
+      window.prompt("复制链接：", text);
+    }
+  }
+
+  document.addEventListener("click", function (e) {
+    var cp = e.target.closest("[data-copy-url]");
+    if (cp) { copyUrl(cp.getAttribute("data-copy-url")); return; }
+
+    var tg = e.target.closest("[data-toggle-page]");
+    if (tg) {
+      var enabled = tg.checked;
+      window.api.post("/pages/api/toggle", { page_id: tg.getAttribute("data-toggle-page"), enabled: enabled })
+        .then(function (r) {
+          if (!r || !r.ok) { tg.checked = !enabled; window.toast((r && r.error) || "操作失败", "error"); }
+          else window.toast(enabled ? "页面已显示" : "页面已隐藏", "success");
+        }).catch(function () { tg.checked = !enabled; window.toast("网络错误，请重试", "error"); });
+      return;
+    }
+
+    var dup = e.target.closest("[data-duplicate-page]");
+    if (dup) {
+      window.api.post("/pages/api/duplicate", { page_id: dup.getAttribute("data-duplicate-page") })
+        .then(function (r) {
+          if (r && r.ok) { window.toast("已复制为新页面", "success"); window.location.reload(); }
+          else window.toast((r && r.error) || "复制失败", "error");
+        }).catch(function () { window.toast("网络错误，请重试", "error"); });
+      return;
+    }
+
+    var del = e.target.closest("[data-delete-page]");
+    if (del) {
+      var title = del.getAttribute("data-title") || "";
+      if (!window.confirm("确定删除网页「" + title + "」吗？删除后不可恢复。")) return;
+      window.api.post("/pages/api/delete", { page_id: del.getAttribute("data-delete-page") })
+        .then(function (r) {
+          if (r && r.ok) { window.toast("已删除", "success"); window.location.reload(); }
+          else window.toast((r && r.error) || "删除失败", "error");
+        }).catch(function () { window.toast("网络错误，请重试", "error"); });
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,219 @@
+{% extends 'base.html' %}
+{% block title %}消费{% endblock %}
+{% block page_title %}消费{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>消费统计</h1>
+  <div class="page-actions">
+    <form class="form-inline" method="get" action="{{ url_for('expenses.index') }}" style="align-items:center">
+      <input class="input" type="month" name="month" value="{{ month }}" style="width:auto">
+      <button class="btn btn-primary" type="submit">筛选</button>
+      {% if month %}<a class="btn btn-ghost" href="{{ url_for('expenses.index') }}">清除</a>{% endif %}
+    </form>
+    <button class="btn btn-primary" data-modal-open="#expense-modal" id="btn-new-record"><i class="bi bi-plus-lg"></i> 记一笔</button>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <div style="display:flex; gap:18px; flex-wrap:wrap;">
+    <div><span class="muted">总支出（元）</span><div style="font-size:22px;font-weight:700">¥ {{ stats.total }}</div></div>
+    <div><span class="muted">笔数</span><div style="font-size:22px;font-weight:700">{{ stats.count }}</div></div>
+    <div><span class="muted">平均每笔</span><div style="font-size:22px;font-weight:700">¥ {{ stats.avg }}</div></div>
+  </div>
+  {% if stats.by_category %}
+  <div style="margin-top:14px">
+    <div class="muted" style="margin-bottom:6px">分类占比</div>
+    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+      {% for c, v in stats.by_category.items() %}
+      <span class="tag tag-blue">{{ c }} ¥{{ v }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if stats.by_month %}
+  <div style="margin-top:12px">
+    <div class="muted" style="margin-bottom:6px">按月汇总</div>
+    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+      {% for m, v in stats.by_month.items() %}
+      <span class="tag tag-gray">{{ m }} ¥{{ v }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  {% if records %}
+  <table class="table">
+    <thead>
+      <tr><th>日期</th><th>分类</th><th>金额</th><th>支付方式</th><th>备注</th><th class="actions">操作</th></tr>
+    </thead>
+    <tbody id="expense-tbody">
+      {% for r in records %}
+      <tr id="exp-{{ r.id }}">
+        <td>{{ r.date }}</td>
+        <td><span class="tag tag-blue">{{ r.category }}</span></td>
+        <td><strong>¥ {{ r.amount }}</strong></td>
+        <td>{{ r.payment_method }}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.notes }}">{{ r.notes or '—' }}</td>
+        <td class="actions">
+          <button class="btn btn-ghost btn-sm btn-edit" data-id="{{ r.id }}">编辑</button>
+          <button class="btn btn-danger btn-sm btn-delete" data-id="{{ r.id }}">删除</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">还没有消费记录，点击右上角「记一笔」开始记录 💰</p>
+  {% endif %}
+</div>
+
+<!-- 新建 / 编辑弹窗 -->
+<div class="modal-mask" id="expense-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="expense-modal-title">记一笔</h3>
+      <button class="modal-close" data-modal-close>×</button>
+    </div>
+    <form id="expense-form">
+      <input type="hidden" id="e-record-id" value="">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="e-amount">金额（元）*</label>
+          <input class="input" type="number" id="e-amount" step="0.01" min="0" required placeholder="如 35.5">
+        </div>
+        <div class="form-group">
+          <label for="e-date">日期 *</label>
+          <input class="input" type="date" id="e-date" required>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="e-category">分类</label>
+          <select class="select" id="e-category">
+            {% for c in categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="e-payment">支付方式</label>
+          <select class="select" id="e-payment">
+            {% for p in payment_methods %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="e-notes">备注</label>
+        <input class="input" type="text" id="e-notes" placeholder="买了什么、用途…">
+      </div>
+      <div class="form-row">
+        <button class="btn btn-primary" type="submit" id="btn-save" style="flex:1">保存</button>
+        <button class="btn btn-ghost" type="button" data-modal-close>取消</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="application/json" id="expense-json">{{ records|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var RECORDS = {};
+  try {
+    var raw = JSON.parse(document.getElementById("expense-json").textContent || "[]");
+    (raw || []).forEach(function (r) { if (r && r.id != null) RECORDS[r.id] = r; });
+  } catch (e) { RECORDS = {}; }
+
+  var editingId = null;
+  function el(id) { return document.getElementById(id); }
+  function closeModal() { var m = el("expense-modal"); if (m) m.classList.remove("open"); }
+
+  function todayStr() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  function resetForm() {
+    editingId = null;
+    el("e-record-id").value = "";
+    el("e-amount").value = "";
+    el("e-date").value = todayStr();
+    el("e-category").value = "餐饮";
+    el("e-payment").value = "微信";
+    el("e-notes").value = "";
+    el("expense-modal-title").textContent = "记一笔";
+  }
+
+  function openEdit(id) {
+    var r = RECORDS[id];
+    if (!r) return;
+    editingId = id;
+    el("expense-modal-title").textContent = "编辑消费记录";
+    el("e-record-id").value = id;
+    el("e-amount").value = r.amount != null ? r.amount : "";
+    el("e-date").value = r.date || todayStr();
+    el("e-category").value = r.category || "餐饮";
+    el("e-payment").value = r.payment_method || "微信";
+    el("e-notes").value = r.notes || "";
+  }
+
+  var newBtn = el("btn-new-record");
+  if (newBtn) newBtn.addEventListener("click", resetForm);
+
+  var tbody = el("expense-tbody");
+  if (tbody) {
+    tbody.addEventListener("click", function (e) {
+      var del = e.target.closest(".btn-delete");
+      if (del) {
+        var id = del.getAttribute("data-id");
+        if (!window.confirm("确定删除这条记录吗？")) return;
+        window.api.post("/expenses/api/delete", { record_id: id }).then(function (res) {
+          if (res && res.ok) { window.toast("已删除", "success"); window.location.reload(); }
+          else window.toast((res && res.error) || "删除失败", "error");
+        }).catch(function () { window.toast("网络错误，请重试", "error"); });
+        return;
+      }
+      var edit = e.target.closest(".btn-edit");
+      if (edit) { openEdit(edit.getAttribute("data-id")); el("expense-modal").classList.add("open"); }
+    });
+  }
+
+  el("expense-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var amt = parseFloat(el("e-amount").value);
+    if (isNaN(amt) || amt < 0) { window.toast("请输入合法金额", "error"); return; }
+    if (!el("e-date").value) { window.toast("请选择日期", "error"); return; }
+    var payload = {
+      amount: amt,
+      category: el("e-category").value,
+      date: el("e-date").value,
+      payment_method: el("e-payment").value,
+      notes: el("e-notes").value.trim(),
+    };
+    var url = "/expenses/api/create";
+    if (editingId) { url = "/expenses/api/update"; payload.record_id = editingId; }
+
+    var btn = el("btn-save");
+    btn.disabled = true;
+    window.api.post(url, payload).then(function (res) {
+      if (res && res.ok) {
+        window.toast(editingId ? "已保存" : "已记录", "success");
+        closeModal();
+        window.location.reload();
+      } else {
+        window.toast((res && res.error) || "保存失败", "error");
+        btn.disabled = false;
+      }
+    }).catch(function () {
+      window.toast("网络错误，请重试", "error");
+      btn.disabled = false;
+    });
+  });
+})();
+</script>
+{% endblock %}

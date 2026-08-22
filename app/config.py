@@ -1,0 +1,233 @@
+"""应用配置：从环境变量 / .env 加载。"""
+import logging
+import os
+import secrets
+from pathlib import Path
+from urllib.parse import quote
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+logger = logging.getLogger(__name__)
+
+# 已知弱 SECRET_KEY（模板占位符等）：发现即替换为随机值，防止会话伪造
+_WEAK_SECRET_KEYS = {
+    "please-generate-a-random-50-char-string", "dev-secret-change-me",
+    "change-me", "change-me-now", "your-secret-key",
+}
+
+
+def _ensure_env_file() -> Path:
+    """项目根缺少 .env 时自动生成（复制 .env.example 并填入随机 SECRET_KEY）。
+
+    部署时无需手动创建 .env：没有也能启动，安装向导（/setup）接管数据库等配置。
+    - 复制 .env.example（不存在则写最小模板）
+    - SECRET_KEY 替换为随机值（避免占位符当密钥）
+    - .env 已存在但 SECRET_KEY 为占位符/缺失时同样替换为随机值
+    - SESSION_COOKIE_SECURE 默认 0：HTTP/局域网阶段可正常登录，上线 HTTPS 后改 1
+    - 目录不可写时静默失败（应用照常启动，仍走安装向导）
+    """
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        # 文件已存在：若 SECRET_KEY 是占位符/缺失，替换为随机值并写回
+        try:
+            text = env_path.read_text(encoding="utf-8")
+            out_lines = []
+            changed = False
+            has_key_line = False
+            for line in text.splitlines():
+                if line.startswith("SECRET_KEY="):
+                    has_key_line = True
+                    val = line.split("=", 1)[1].strip()
+                    if not val or val in _WEAK_SECRET_KEYS:
+                        out_lines.append(f"SECRET_KEY={secrets.token_hex(32)}")
+                        changed = True
+                        continue
+                out_lines.append(line)
+            if changed:
+                env_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+            elif not has_key_line:
+                env_path.write_text(text.rstrip("\n") + "\n"
+                                    f"SECRET_KEY={secrets.token_hex(32)}\n",
+                                    encoding="utf-8")
+        except OSError:
+            pass  # 目录不可写：不阻断启动
+        return env_path
+    example = BASE_DIR / ".env.example"
+    try:
+        if example.exists():
+            content = example.read_text(encoding="utf-8")
+        else:
+            content = (
+                "# 灵犀 AiBot 自动生成的最小配置\n"
+                "# 完整模板见 .env.example；各项配置也可在网页「设置」里修改（页面值优先）\n"
+                "SECRET_KEY=please-generate-a-random-50-char-string\n"
+                "SESSION_COOKIE_SECURE=0\n"
+                "MYSQL_HOST=127.0.0.1\nMYSQL_PORT=3306\nMYSQL_USER=ai_bot\n"
+                "MYSQL_PASSWORD=\nMYSQL_DB=ai_bot\n"
+            )
+        out_lines = []
+        for line in content.splitlines():
+            if line.startswith("SECRET_KEY="):
+                out_lines.append(f"SECRET_KEY={secrets.token_hex(32)}")
+            elif line.startswith("SESSION_COOKIE_SECURE="):
+                out_lines.append("# 自动生成默认 0：HTTP/局域网阶段可正常登录；上线 HTTPS 后请改为 1")
+                out_lines.append("SESSION_COOKIE_SECURE=0")
+            else:
+                out_lines.append(line)
+        env_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass  # 目录不可写：不阻断启动
+    return env_path
+
+
+load_dotenv(_ensure_env_file())
+
+
+def _int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _bool(name: str, default: bool) -> bool:
+    """环境变量布尔解析：兼容 1/true/yes/on（防止 'true' 被静默当成关闭）。"""
+    raw = (os.getenv(name) or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off", ""):
+        return False
+    return default
+
+
+def _resolve_secret_key() -> str:
+    """SECRET_KEY：占位符/缺失时生成随机值（Docker env 注入等无法写回 .env 的场景兜底）。
+
+    注意：随机兜底值仅进程生命周期内有效，重启后会话会失效；
+    日志会提示用户修正 .env 的 SECRET_KEY。
+    """
+    key = (os.getenv("SECRET_KEY") or "").strip()
+    if key and key not in _WEAK_SECRET_KEYS:
+        return key
+    logger.warning(
+        "SECRET_KEY 缺失或仍为占位符，已生成随机临时密钥（重启后会话将失效）。"
+        "请尽快在 .env 中设置随机长字符串的 SECRET_KEY 后重启。")
+    return secrets.token_hex(32)
+
+
+class Config:
+    # ---- 基础 ----
+    SECRET_KEY = _resolve_secret_key()
+    SESSION_COOKIE_SECURE = _bool("SESSION_COOKIE_SECURE", False)
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    PERMANENT_SESSION_LIFETIME = 7 * 24 * 3600
+    APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Shanghai")
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+    # ---- App 对接 API 鉴权 ----
+    # 留空 = 禁用 /api/v1/* 接口（返回 401）；设置后 App 需在请求头携带该 Token。
+    API_TOKEN = os.getenv("API_TOKEN", "").strip()
+
+    # ---- MySQL ----
+    MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+    MYSQL_PORT = _int("MYSQL_PORT", 3306)
+    MYSQL_USER = os.getenv("MYSQL_USER", "ai_bot")
+    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+    MYSQL_DB = os.getenv("MYSQL_DB", "ai_bot")
+    SQLALCHEMY_DATABASE_URI = (
+        # quote 而非 quote_plus：空格编码为 %20，SQLAlchemy unquote 才能正确还原
+        # （quote_plus 会把空格转 +，且 SQLAlchemy 不会把 + 解码回空格）
+        f"mysql+pymysql://{quote(MYSQL_USER, safe='')}:{quote(MYSQL_PASSWORD, safe='')}"
+        f"@{MYSQL_HOST}:{MYSQL_PORT}/{quote(MYSQL_DB, safe='')}?charset=utf8mb4"
+    )
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 28000,
+        "pool_size": 5,
+        "max_overflow": 10,
+        # 数据库不可用时快速失败（首次安装向导需要快速探测，避免页面长时间卡住）
+        "connect_args": {"connect_timeout": 5},
+    }
+
+    # ---- AI（OpenAI 兼容协议，默认 DeepSeek）----
+    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+    LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+    LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+    # openai = OpenAI 兼容 chat.completions；anthropic = Claude Messages API
+    LLM_PROTOCOL = os.getenv("LLM_PROTOCOL", "openai")
+    LLM_TIMEOUT = _int("LLM_TIMEOUT", 90)
+    LLM_MAX_TOOL_ROUNDS = 8  # 单轮对话工具调用最大轮数，防死循环
+
+    # ---- 通知渠道默认值（可被设置页覆盖）----
+    SC_KEY = os.getenv("SC_KEY", "")
+    FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
+    FEISHU_SECRET = os.getenv("FEISHU_SECRET", "")
+    FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+    FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+    FEISHU_EVENT_TOKEN = os.getenv("FEISHU_EVENT_TOKEN", "")
+    FEISHU_EVENT_ENCRYPT_KEY = os.getenv("FEISHU_EVENT_ENCRYPT_KEY", "")
+    # callback = HTTP Webhook；sdk = 官方 lark-oapi 长连接
+    FEISHU_RECEIVE_MODE = os.getenv("FEISHU_RECEIVE_MODE", "callback")
+    DEFAULT_CHANNELS = os.getenv("DEFAULT_CHANNELS", "inapp")
+
+    # ---- 管理员（仅首次初始化使用）----
+    ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
+    # ---- 调度 ----
+    SCHEDULER_ENABLED = _bool("SCHEDULER_ENABLED", True)
+    SCHEDULER_TIMEZONE = APP_TIMEZONE
+    DATA_DIR = BASE_DIR / "data"
+    BACKUP_DIR = DATA_DIR / "backups"
+
+    # ---- 域名体系（后台与网页域名分离，可在设置页修改）----
+    ADMIN_DOMAIN = os.getenv("ADMIN_DOMAIN", "")   # 后台域名，如 admin.eugenstudio.cn（留空不限制）
+    PAGE_DOMAIN = os.getenv("PAGE_DOMAIN", "")     # AI 网页域名，如 web.eugenstudio.cn（留空则用当前主机路径 /p/<slug>）
+    # 独立网页 HTTP 端口（无需 HTTPS）：如 8080 → http://IP:8080/<slug>；0/空 = 不另开端口
+    PAGE_PORT = _int("PAGE_PORT", 0)
+    PAGE_HOST = os.getenv("PAGE_HOST", "").strip()  # 链接里显示的主机，留空则自动用局域网 IPv4
+    MAIN_PORT = _int("PORT", 5000)
+
+    # ---- 后台安全入口（可选）----
+    # 设置后，后台域名必须带 /<入口> 前缀访问（其余路径 404，隐藏后台存在）。
+    # 如 ADMIN_ENTRY=abc123 → https://botadmin.eugenstudio.cn/abc123/login
+    # 留空 = 不启用安全入口。改这里需重启应用。
+    ADMIN_ENTRY = os.getenv("ADMIN_ENTRY", "").strip().strip("/")
+
+    # ---- 图片生成（OpenAI 兼容 images 接口，可在设置页修改）----
+    IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "")
+    IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
+    IMAGE_MODEL = os.getenv("IMAGE_MODEL", "")
+    IMAGE_SIZE = os.getenv("IMAGE_SIZE", "1024x1024")
+    IMAGE_DIR = DATA_DIR / "images"
+
+    # ---- 视觉（多模态识图）模型：OpenAI 兼容 chat/completions + 图片输入，可在设置页修改；
+    #      未配置时收到图片仅保存不识别（与沟通模型、图片生成模型相互独立）----
+    VISION_BASE_URL = os.getenv("VISION_BASE_URL", "")
+    VISION_API_KEY = os.getenv("VISION_API_KEY", "")
+    VISION_MODEL = os.getenv("VISION_MODEL", "")
+
+    # ---- 语音（OpenAI 兼容 TTS 接口，可在设置页修改；未配置时前端用浏览器朗读）----
+    TTS_BASE_URL = os.getenv("TTS_BASE_URL", "")
+    TTS_API_KEY = os.getenv("TTS_API_KEY", "")
+    TTS_MODEL = os.getenv("TTS_MODEL", "")
+    TTS_VOICE = os.getenv("TTS_VOICE", "alloy")
+
+    # ---- RAG 语义检索（OpenAI 兼容 embeddings 接口，未配置时自动降级关键词搜索）----
+    EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "")
+    EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", "")
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "")
+
+    # ---- 联网搜索（可插拔提供方，可在设置页修改）----
+    SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "bing")   # bing/duckduckgo/searxng/serper/tavily
+    SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "")
+    SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
+    # ---- 限流 ----
+    RATELIMIT_STORAGE_URI = "memory://"
+    RATELIMIT_STRATEGY = "fixed-window"

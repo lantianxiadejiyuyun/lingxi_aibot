@@ -1,0 +1,370 @@
+{% extends 'base.html' %}
+{% block title %}出行{% endblock %}
+{% block page_title %}出行{% endblock %}
+{% block head %}
+<style>
+  .transport-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+  .transport-checks label { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+  .seg-item, .alt-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px; background: var(--bg-2); }
+  .seg-item .row, .alt-item .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .seg-item .row > * { flex: 1; min-width: 90px; }
+  .seg-item .row .btn, .alt-item .row .btn { flex: 0 0 auto; }
+  .mini-label { font-size: 12px; color: var(--text-3); display: block; margin-bottom: 2px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>出行规划</h1>
+  <div class="page-actions">
+    <button class="btn btn-primary" data-modal-open="#travel-modal" id="btn-new-plan"><i class="bi bi-plus-lg"></i> 新建出行计划</button>
+  </div>
+</div>
+
+<div class="card">
+  {% if plans %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>目的地</th><th>出发</th><th>返回</th><th>交通</th><th>多段/备选</th><th>预算</th><th class="actions">操作</th>
+      </tr>
+    </thead>
+    <tbody id="travel-tbody">
+      {% for p in plans %}
+      <tr id="trip-{{ p.id }}">
+        <td><strong>{{ p.destination }}</strong></td>
+        <td>{{ p.start_date }}</td>
+        <td>{{ p.end_date }}</td>
+        <td>{% for t in p.transports %}<span class="tag tag-blue" style="margin:0 2px">{{ t }}</span>{% else %}—{% endfor %}</td>
+        <td>{{ p.segments|length }} 段{% if p.alternatives %} / {{ p.alternatives|length }} 备选{% endif %}</td>
+        <td>{{ p.budget if p.budget is not none else '—' }}</td>
+        <td class="actions">
+          {% if p.itinerary %}<button class="btn btn-ghost btn-sm btn-view" data-id="{{ p.id }}">行程</button>{% endif %}
+          <button class="btn btn-ghost btn-sm btn-gen" data-id="{{ p.id }}">生成行程</button>
+          <button class="btn btn-ghost btn-sm btn-edit" data-id="{{ p.id }}">编辑</button>
+          <button class="btn btn-danger btn-sm btn-delete" data-id="{{ p.id }}">删除</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">还没有出行计划，点击右上角「新建出行计划」开始规划 🧳</p>
+  {% endif %}
+</div>
+
+<!-- 新建 / 编辑弹窗 -->
+<div class="modal-mask" id="travel-modal">
+  <div class="modal-card" style="max-width:760px">
+    <div class="modal-head">
+      <h3 id="travel-modal-title">新建出行计划</h3>
+      <button class="modal-close" data-modal-close>×</button>
+    </div>
+    <form id="travel-form">
+      <input type="hidden" id="t-plan-id" value="">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="t-destination">目的地 *</label>
+          <input class="input" type="text" id="t-destination" required maxlength="128" placeholder="如：杭州">
+        </div>
+        <div class="form-group">
+          <label for="t-budget">预算（元，可选）</label>
+          <input class="input" type="number" id="t-budget" min="0" placeholder="如 3000">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="t-start">出发日期 *</label>
+          <input class="input" type="date" id="t-start" required>
+        </div>
+        <div class="form-group">
+          <label for="t-end">返回日期 *</label>
+          <input class="input" type="date" id="t-end" required>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>交通方式（可多选）</label>
+        <div class="transport-checks" id="transport-checks">
+          {% for t in transport_options %}
+          <label><input type="checkbox" name="transport" value="{{ t }}"> {{ t }}</label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>多段交通（可留空）</label>
+        <div id="segments-box"></div>
+        <button class="btn btn-ghost btn-sm" type="button" id="btn-add-seg"><i class="bi bi-plus-lg"></i> 添加一段交通</button>
+      </div>
+
+      <div class="form-group">
+        <label>备选方案（可留空）</label>
+        <div id="alternatives-box"></div>
+        <button class="btn btn-ghost btn-sm" type="button" id="btn-add-alt"><i class="bi bi-plus-lg"></i> 添加备选方案</button>
+      </div>
+
+      <div class="form-group">
+        <label for="t-companions">同行人（可选）</label>
+        <input class="input" type="text" id="t-companions" maxlength="128" placeholder="如：家人 / 朋友">
+      </div>
+      <div class="form-group">
+        <label for="t-notes">备注 / 偏好</label>
+        <textarea class="textarea" id="t-notes" placeholder="想去的地方、饮食偏好、注意事项…"></textarea>
+      </div>
+      <div class="form-row">
+        <button class="btn btn-primary" type="submit" id="btn-save" style="flex:1">保存</button>
+        <button class="btn btn-ghost" type="button" data-modal-close>取消</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 查看行程弹窗 -->
+<div class="modal-mask" id="itinerary-modal">
+  <div class="modal-card" style="max-width:720px">
+    <div class="modal-head">
+      <h3 id="itinerary-title">行程安排</h3>
+      <button class="modal-close" data-modal-close>×</button>
+    </div>
+    <div id="itinerary-body" style="max-height:60vh;overflow:auto;line-height:1.7;"></div>
+  </div>
+</div>
+
+<script type="application/json" id="travel-json">{{ plans|tojson }}</script>
+<script type="application/json" id="transport-options-json">{{ transport_options|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var PLANS = {};
+  try {
+    var raw = JSON.parse(document.getElementById("travel-json").textContent || "[]");
+    (raw || []).forEach(function (p) { if (p && p.id != null) PLANS[p.id] = p; });
+  } catch (e) { PLANS = {}; }
+  var TRANSPORT_OPTIONS = JSON.parse(document.getElementById("transport-options-json").textContent || "[]");
+
+  var editingId = null;
+  function el(id) { return document.getElementById(id); }
+  function closeModal(id) { var m = el(id); if (m) m.classList.remove("open"); }
+
+  function todayStr() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  /* ---------- 多段交通编辑器 ---------- */
+  function addSegment(data) {
+    data = data || {};
+    var box = el("segments-box");
+    var item = document.createElement("div");
+    item.className = "seg-item";
+    item.innerHTML =
+      '<div class="row">' +
+        '<div><span class="mini-label">方式</span><select class="select seg-type">' +
+          TRANSPORT_OPTIONS.map(function (t) { return '<option value="' + t + '">' + t + '</option>'; }).join('') +
+        '</select></div>' +
+        '<div><span class="mini-label">出发地</span><input class="input seg-from" type="text" placeholder="如 北京"></div>' +
+        '<div><span class="mini-label">到达地</span><input class="input seg-to" type="text" placeholder="如 上海"></div>' +
+        '<button class="btn btn-ghost btn-sm" type="button" data-remove>×</button>' +
+      '</div>' +
+      '<div class="row" style="margin-top:6px">' +
+        '<div><span class="mini-label">搭乘时间</span><input class="input seg-depart" type="text" placeholder="如 08:00"></div>' +
+        '<div><span class="mini-label">到达时间</span><input class="input seg-arrive" type="text" placeholder="如 10:30"></div>' +
+        '<div><span class="mini-label">旅行时间</span><input class="input seg-duration" type="text" placeholder="如 2.5 小时"></div>' +
+        '<div><span class="mini-label">购票平台</span><input class="input seg-platform" type="text" placeholder="如 12306/携程"></div>' +
+        '<div><span class="mini-label">备注</span><input class="input seg-note" type="text" placeholder="车次/航班号"></div>' +
+      '</div>';
+    item.querySelector(".seg-type").value = data.type || "飞机";
+    item.querySelector(".seg-from").value = data.from || "";
+    item.querySelector(".seg-to").value = data.to || "";
+    item.querySelector(".seg-depart").value = data.depart_time || data.time || "";
+    item.querySelector(".seg-arrive").value = data.arrive_time || "";
+    item.querySelector(".seg-duration").value = data.duration || "";
+    item.querySelector(".seg-platform").value = data.platform || "";
+    item.querySelector(".seg-note").value = data.note || "";
+    item.querySelector("[data-remove]").addEventListener("click", function () { item.remove(); });
+    box.appendChild(item);
+  }
+
+  /* ---------- 备选方案编辑器 ---------- */
+  function addAlternative(data) {
+    data = data || {};
+    var box = el("alternatives-box");
+    var item = document.createElement("div");
+    item.className = "alt-item";
+    item.innerHTML =
+      '<div class="row">' +
+        '<div style="flex:0 0 200px"><span class="mini-label">方案名</span><input class="input alt-title" type="text" placeholder="如 方案B（省钱）"></div>' +
+        '<div style="flex:1"><span class="mini-label">说明</span><input class="input alt-desc" type="text" placeholder="如 高铁到上海，再打车到酒店"></div>' +
+        '<button class="btn btn-ghost btn-sm" type="button" data-remove>×</button>' +
+      '</div>';
+    item.querySelector(".alt-title").value = data.title || "";
+    item.querySelector(".alt-desc").value = data.desc || "";
+    item.querySelector("[data-remove]").addEventListener("click", function () { item.remove(); });
+    box.appendChild(item);
+  }
+
+  function collectSegments() {
+    return Array.prototype.map.call(el("segments-box").querySelectorAll(".seg-item"), function (it) {
+      return {
+        type: it.querySelector(".seg-type").value,
+        from: it.querySelector(".seg-from").value.trim(),
+        to: it.querySelector(".seg-to").value.trim(),
+        depart_time: it.querySelector(".seg-depart").value.trim(),
+        arrive_time: it.querySelector(".seg-arrive").value.trim(),
+        duration: it.querySelector(".seg-duration").value.trim(),
+        platform: it.querySelector(".seg-platform").value.trim(),
+        note: it.querySelector(".seg-note").value.trim()
+      };
+    });
+  }
+  function collectAlternatives() {
+    return Array.prototype.map.call(el("alternatives-box").querySelectorAll(".alt-item"), function (it) {
+      return {
+        title: it.querySelector(".alt-title").value.trim(),
+        desc: it.querySelector(".alt-desc").value.trim()
+      };
+    });
+  }
+  function collectTransports() {
+    var vals = [];
+    el("transport-checks").querySelectorAll('input[type=checkbox]:checked').forEach(function (c) {
+      vals.push(c.value);
+    });
+    return vals;
+  }
+
+  function clearBoxes() {
+    el("segments-box").innerHTML = "";
+    el("alternatives-box").innerHTML = "";
+  }
+  function setTransports(vals) {
+    var map = {};
+    (vals || []).forEach(function (v) { map[v] = true; });
+    el("transport-checks").querySelectorAll('input[type=checkbox]').forEach(function (c) {
+      c.checked = !!map[c.value];
+    });
+  }
+
+  function resetForm() {
+    editingId = null;
+    el("t-plan-id").value = "";
+    el("t-destination").value = "";
+    el("t-start").value = todayStr();
+    el("t-end").value = todayStr();
+    el("t-budget").value = "";
+    el("t-companions").value = "";
+    el("t-notes").value = "";
+    setTransports([]);
+    clearBoxes();
+    el("travel-modal-title").textContent = "新建出行计划";
+  }
+
+  function openEdit(id) {
+    var p = PLANS[id];
+    if (!p) return;
+    editingId = id;
+    el("travel-modal-title").textContent = "编辑出行计划";
+    el("t-plan-id").value = id;
+    el("t-destination").value = p.destination || "";
+    el("t-start").value = p.start_date || todayStr();
+    el("t-end").value = p.end_date || todayStr();
+    el("t-budget").value = p.budget != null ? p.budget : "";
+    el("t-companions").value = p.companions || "";
+    el("t-notes").value = p.notes || "";
+    setTransports(p.transports || []);
+    clearBoxes();
+    (p.segments || []).forEach(addSegment);
+    (p.alternatives || []).forEach(addAlternative);
+  }
+
+  var newBtn = el("btn-new-plan");
+  if (newBtn) newBtn.addEventListener("click", resetForm);
+  el("btn-add-seg").addEventListener("click", function () { addSegment(); });
+  el("btn-add-alt").addEventListener("click", function () { addAlternative(); });
+
+  var tbody = el("travel-tbody");
+  if (tbody) {
+    tbody.addEventListener("click", function (e) {
+      var del = e.target.closest(".btn-delete");
+      if (del) {
+        var id = del.getAttribute("data-id");
+        if (!window.confirm("确定删除这个出行计划吗？")) return;
+        window.api.post("/travel/api/delete", { plan_id: id }).then(function (res) {
+          if (res && res.ok) { window.toast("已删除", "success"); window.location.reload(); }
+          else window.toast((res && res.error) || "删除失败", "error");
+        }).catch(function () { window.toast("网络错误，请重试", "error"); });
+        return;
+      }
+      var edit = e.target.closest(".btn-edit");
+      if (edit) { openEdit(edit.getAttribute("data-id")); el("travel-modal").classList.add("open"); return; }
+      var view = e.target.closest(".btn-view");
+      if (view) {
+        var p = PLANS[view.getAttribute("data-id")];
+        el("itinerary-title").textContent = (p ? p.destination : "") + " · 行程安排";
+        var body = el("itinerary-body");
+        body.innerHTML = (p && p.itinerary) ? (window.mdLite ? window.mdLite(p.itinerary) : "") : "<p>暂无行程</p>";
+        el("itinerary-modal").classList.add("open");
+        return;
+      }
+      var gen = e.target.closest(".btn-gen");
+      if (gen) {
+        var gid = gen.getAttribute("data-id");
+        gen.disabled = true;
+        gen.textContent = "生成中…";
+        window.api.post("/travel/api/generate-itinerary", { plan_id: gid }).then(function (res) {
+          gen.disabled = false;
+          gen.textContent = "生成行程";
+          if (res && res.ok) { window.toast("行程已生成", "success"); window.location.reload(); }
+          else window.toast((res && res.error) || "生成失败", "error");
+        }).catch(function () {
+          gen.disabled = false;
+          gen.textContent = "生成行程";
+          window.toast("网络错误，请重试", "error");
+        });
+      }
+    });
+  }
+
+  el("travel-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (!el("t-destination").value.trim()) { window.toast("请输入目的地", "error"); return; }
+    if (!el("t-start").value || !el("t-end").value) { window.toast("请选择出发/返回日期", "error"); return; }
+    if (el("t-end").value < el("t-start").value) { window.toast("返回日期不能早于出发日期", "error"); return; }
+    var payload = {
+      destination: el("t-destination").value.trim(),
+      start_date: el("t-start").value,
+      end_date: el("t-end").value,
+      transports: collectTransports(),
+      segments: collectSegments(),
+      alternatives: collectAlternatives(),
+      budget: el("t-budget").value ? parseInt(el("t-budget").value, 10) : null,
+      companions: el("t-companions").value.trim(),
+      notes: el("t-notes").value,
+    };
+    var url = "/travel/api/create";
+    if (editingId) { url = "/travel/api/update"; payload.plan_id = editingId; }
+
+    var btn = el("btn-save");
+    btn.disabled = true;
+    window.api.post(url, payload).then(function (res) {
+      if (res && res.ok) {
+        window.toast(editingId ? "已保存" : "已创建", "success");
+        closeModal("travel-modal");
+        window.location.reload();
+      } else {
+        window.toast((res && res.error) || "保存失败", "error");
+        btn.disabled = false;
+      }
+    }).catch(function () {
+      window.toast("网络错误，请重试", "error");
+      btn.disabled = false;
+    });
+  });
+})();
+</script>
+{% endblock %}

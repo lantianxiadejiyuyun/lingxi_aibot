@@ -1,0 +1,220 @@
+{% extends 'base.html' %}
+{% block title %}安装引导{% endblock %}
+
+{% block fullpage %}
+<style>
+  .setup-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px 18px; }
+  .setup-card { max-width: 640px; width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 28px 32px; }
+  .setup-card .logo { font-size: 38px; text-align: center; }
+  .setup-card h1 { text-align: center; font-size: 21px; margin: 6px 0 4px; }
+  .setup-card .sub { text-align: center; color: var(--text-2); font-size: 13.5px; margin-bottom: 18px; }
+  .setup-card h2 { font-size: 15.5px; margin: 16px 0 12px; }
+  .setup-card .warn { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin: 12px 0; }
+  .setup-card .okbox { background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin: 12px 0; }
+  .setup-card .errbox { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin: 12px 0; color: #b91c1c; white-space: pre-wrap; }
+  .setup-card .msgbox { display: none; }
+  .setup-card .actions { margin-top: 16px; }
+  .setup-card label { display: block; font-size: 13px; color: var(--text-2); margin: 10px 0 4px; }
+  .setup-card input[type=text], .setup-card input[type=password], .setup-card input[type=number] { width: 100%; }
+  .setup-card .row2 { display: flex; gap: 12px; }
+  .setup-card .row2 > div { flex: 1; }
+  .setup-card .hint { font-size: 12.5px; color: var(--text-3); margin-top: 4px; }
+  .setup-card .done { text-align: center; color: #047857; font-size: 14px; padding: 8px 0; }
+  .muted { color: var(--text-2); font-size: 12.5px; }
+  /* 步骤条 */
+  .steps { display: flex; gap: 6px; margin: 14px 0 6px; }
+  .steps .step { flex: 1; text-align: center; font-size: 12.5px; padding: 7px 4px; border-radius: 8px; background: var(--bg-2); color: var(--text-3); border: 1px solid var(--border); }
+  .steps .step.cur { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .steps .step.done { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
+</style>
+
+<div class="setup-page">
+  <div class="setup-card">
+    <div class="logo">🤖</div>
+    <h1>灵犀 安装引导</h1>
+    <p class="sub">AI 个人工作生活管理基座 · 系统尚未初始化，请按步骤完成安装</p>
+
+    <div class="steps">
+      <div class="step {% if status.db_ok %}done{% else %}cur{% endif %}">① 配置数据库</div>
+      <div class="step {% if status.tables_ok %}done{% elif status.db_ok %}cur{% endif %}">② 初始化</div>
+      <div class="step {% if status.admin_ok %}done{% elif status.tables_ok %}cur{% endif %}">③ 管理员</div>
+    </div>
+
+    {% if not status.db_ok %}
+    {# ---------- 步骤 1：数据库配置 ---------- #}
+    <h2>① 配置数据库连接</h2>
+    <p class="muted">填写 MySQL 连接信息，保存后写入项目 <code>.env</code> 并立即生效（无需手动编辑、无需重启）。</p>
+    <form id="db-form" autocomplete="off">
+      <div class="row2">
+        <div>
+          <label>主机（Host）</label>
+          <input type="text" name="host" value="{{ dbcfg.host }}" placeholder="127.0.0.1">
+        </div>
+        <div>
+          <label>端口（Port）</label>
+          <input type="number" name="port" value="{{ dbcfg.port }}" placeholder="3306">
+        </div>
+      </div>
+      <label>用户名（User）</label>
+      <input type="text" name="user" value="{{ dbcfg.user }}" placeholder="ai_bot">
+      <label>密码（Password）</label>
+      <input type="password" name="password" placeholder="数据库密码" data-pw>
+      <label>数据库名（Database）</label>
+      <input type="text" name="db" value="{{ dbcfg.db }}" placeholder="ai_bot">
+      <div class="warn">数据库需要先创建好（宝塔「数据库」页新建，字符集 utf8mb4），本页不负责建库。</div>
+      <div class="msgbox" id="db-msg"></div>
+      <div class="actions" style="display:flex; gap:10px;">
+        <button type="button" class="btn btn-ghost" id="btn-db-test" style="flex:1"><i class="bi bi-plug"></i> 测试连接</button>
+        <button type="submit" class="btn btn-primary" id="btn-db-save" style="flex:1"><i class="bi bi-save"></i> 保存配置</button>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if status.db_ok and not status.tables_ok %}
+    {# ---------- 步骤 2：初始化数据库 ---------- #}
+    <h2>② 初始化数据库</h2>
+    <div class="okbox">✓ 数据库连接成功</div>
+    <p class="muted">点击「开始初始化」：自动创建数据表、补齐字段，并写入内置定时任务（早报/备份/周报等 10 项）。</p>
+    <div class="msgbox" id="init-msg"></div>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" id="btn-init"><i class="bi bi-rocket-takeoff"></i> 开始初始化</button>
+    </div>
+    {% endif %}
+
+    {% if status.db_ok and status.tables_ok and not status.admin_ok %}
+    {# ---------- 步骤 3：创建管理员 ---------- #}
+    <h2>③ 创建管理员账号</h2>
+    <div class="okbox">✓ 数据库初始化完成，请创建管理员</div>
+    <form id="admin-form" autocomplete="off">
+      <label>用户名</label>
+      <input type="text" name="username" placeholder="admin" required>
+      <label>密码（至少 6 位）</label>
+      <input type="password" name="password" placeholder="设置登录密码" required>
+      <div class="msgbox" id="admin-msg"></div>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary" id="btn-admin"><i class="bi bi-person-check"></i> 创建并登录</button>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if status.db_ok and status.tables_ok and status.admin_ok %}
+    <div class="okbox" style="margin-top:18px">✓ 系统已就绪</div>
+    <div class="actions">
+      <a class="btn btn-primary" href="{{ url_for('auth.login') }}">去登录</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  function showMsg(box, html, ok) {
+    box.style.display = "block";
+    box.className = "msgbox " + (ok ? "okbox" : "errbox");
+    box.innerHTML = html;
+  }
+  function disable(btn, on) {
+    if (!btn) return;
+    btn.disabled = on;
+    btn.style.opacity = on ? 0.6 : 1;
+  }
+  function post(url, data) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data || {})
+    }).then(function (r) { return r.json(); });
+  }
+
+  // ---------- 步骤 1：数据库配置 ----------
+  var dbForm = document.getElementById("db-form");
+  if (dbForm) {
+    var box = document.getElementById("db-msg");
+    var btnTest = document.getElementById("btn-db-test");
+    var btnSave = document.getElementById("btn-db-save");
+    function collect() {
+      return {
+        host: dbForm.host.value.trim() || "127.0.0.1",
+        port: parseInt(dbForm.port.value, 10) || 3306,
+        user: dbForm.user.value.trim(),
+        password: dbForm.password.value,
+        db: dbForm.db.value.trim()
+      };
+    }
+    btnTest.addEventListener("click", function () {
+      disable(btnTest, true);
+      post("/setup/api/db-test", collect()).then(function (r) {
+        showMsg(box, r.ok ? "✓ " + (r.error || "连接成功") : "✗ " + (r.error || "连接失败"), r.ok);
+      }).catch(function (e) { showMsg(box, "请求失败：" + e, false); })
+        .finally(function () { disable(btnTest, false); });
+    });
+    dbForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var d = collect();
+      if (!d.password) { showMsg(box, "请填写数据库密码", false); return; }
+      disable(btnSave, true);
+      post("/setup/api/db-save", d).then(function (r) {
+        if (r.ok) { location.reload(); }
+        else { showMsg(box, "✗ " + (r.error || "保存失败"), false); }
+      }).catch(function (e) { showMsg(box, "请求失败：" + e, false); })
+        .finally(function () { disable(btnSave, false); });
+    });
+  }
+
+  // ---------- 步骤 2：初始化 ----------
+  var btnInit = document.getElementById("btn-init");
+  if (btnInit) {
+    var initBox = document.getElementById("init-msg");
+    btnInit.addEventListener("click", function () {
+      disable(btnInit, true);
+      btnInit.innerHTML = '初始化中…';
+      post("/setup/api/init-db", {}).then(function (r) {
+        if (r.ok) {
+          var list = (r.messages || []).map(function (m) { return "• " + m; }).join("<br>");
+          showMsg(initBox, list, true);
+          setTimeout(function () { location.reload(); }, 1200);
+        } else {
+          showMsg(initBox, "✗ " + (r.error || "初始化失败"), false);
+          disable(btnInit, false);
+          btnInit.innerHTML = '<i class="bi bi-rocket-takeoff"></i> 开始初始化';
+        }
+      }).catch(function (e) {
+        showMsg(initBox, "请求失败：" + e, false);
+        disable(btnInit, false);
+        btnInit.innerHTML = '<i class="bi bi-rocket-takeoff"></i> 开始初始化';
+      });
+    });
+  }
+
+  // ---------- 步骤 3：管理员 ----------
+  var adminForm = document.getElementById("admin-form");
+  if (adminForm) {
+    var adminBox = document.getElementById("admin-msg");
+    var btnAdmin = document.getElementById("btn-admin");
+    adminForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var username = adminForm.username.value.trim();
+      var password = adminForm.password.value;
+      if (username.length < 2) { showMsg(adminBox, "用户名至少 2 个字符", false); return; }
+      if (password.length < 6) { showMsg(adminBox, "密码至少 6 位", false); return; }
+      disable(btnAdmin, true);
+      post("/setup/api/create-admin", { username: username, password: password }).then(function (r) {
+        if (r.ok) {
+          showMsg(adminBox, "✓ " + (r.message || "创建成功"), true);
+          setTimeout(function () { location.href = "{{ url_for('auth.login') }}"; }, 1200);
+        } else {
+          showMsg(adminBox, "✗ " + (r.error || "创建失败"), false);
+          disable(btnAdmin, false);
+        }
+      }).catch(function (e) {
+        showMsg(adminBox, "请求失败：" + e, false);
+        disable(btnAdmin, false);
+      });
+    });
+  }
+})();
+</script>
+{% endblock %}

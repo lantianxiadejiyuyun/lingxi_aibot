@@ -1,0 +1,140 @@
+{% extends 'base.html' %}
+{% block title %}{{ '编辑网页' if page.id else '新建网页' }}{% endblock %}
+{% block page_title %}🌐 {{ '编辑网页' if page.id else '新建网页' }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="form-row" style="align-items:flex-end">
+    <div class="form-group" style="flex:2;margin-bottom:0">
+      <label for="page-title">标题</label>
+      <input class="input" type="text" id="page-title" value="{{ page.title }}" placeholder="页面标题" required>
+    </div>
+    <div class="form-group" style="flex:1;margin-bottom:0">
+      <label for="page-slug">访问地址 slug（可选）</label>
+      <input class="input" type="text" id="page-slug" value="{{ page.slug }}" placeholder="留空自动生成，如 my-home">
+      <p class="cron-hint">2-64 位小写字母/数字/连字符；修改后原地址立即失效。</p>
+    </div>
+  </div>
+  <div class="form-row" style="align-items:flex-end;margin-top:14px">
+    <div class="form-group" style="flex:3;margin-bottom:0">
+      <label for="page-desc">简介（可选）</label>
+      <input class="input" type="text" id="page-desc" value="{{ page.description }}" placeholder="一句话说明这个页面">
+    </div>
+    <div class="form-group" style="margin-bottom:0">
+      <label class="chip"><input type="checkbox" id="page-public" {{ 'checked' if page.is_public }}> 公开访问</label>
+    </div>
+    <div class="form-group" style="margin-bottom:0">
+      <label class="chip"><input type="checkbox" id="page-enabled" {{ 'checked' if page.enabled }}> 前台显示</label>
+    </div>
+  </div>
+</div>
+
+<div class="page-editor">
+  <div class="page-editor-pane">
+    <div class="pane-head">
+      <strong>HTML 源码</strong>
+      <span class="muted">完整 HTML（CSS/JS 内联）· Tab 缩进 · Ctrl+S 保存</span>
+    </div>
+    <textarea id="page-content" spellcheck="false"
+      placeholder="<!DOCTYPE html>&#10;<html>&#10;…">{{ page.content }}</textarea>
+  </div>
+  <div class="page-editor-pane">
+    <div class="pane-head">
+      <strong>实时预览</strong>
+      <span class="muted">修改即刷新</span>
+    </div>
+    <iframe id="page-preview" title="预览" sandbox="allow-scripts allow-same-origin"></iframe>
+  </div>
+</div>
+
+<div class="form-inline" style="margin-top:14px">
+  <button class="btn btn-primary" id="btn-save" type="button"><i class="bi bi-floppy"></i><span id="btn-save-label">保存</span></button>
+  {% if page.id %}
+  <a class="btn btn-ghost" href="{{ page.url }}" target="_blank" rel="noopener">新标签预览</a>
+  <span class="muted">页面 ID：{{ page.id }}（可对 AI 助手说「修改网页 {{ page.id }} 的标题为 …」）</span>
+  {% endif %}
+  <a class="btn btn-ghost" href="{{ url_for('pages.index') }}" style="margin-left:auto"><i class="bi bi-arrow-left"></i> 返回列表</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var contentEl = document.getElementById("page-content");
+  var preview = document.getElementById("page-preview");
+  var pageId = {{ page.id if page.id else 'null' }};
+  var saved = contentEl.value;
+  var timer = null;
+
+  function refreshPreview() {
+    if (preview.srcdoc !== contentEl.value) {
+      preview.srcdoc = contentEl.value;
+    }
+  }
+  refreshPreview();
+
+  contentEl.addEventListener("input", function () {
+    clearTimeout(timer);
+    timer = setTimeout(refreshPreview, 300);
+  });
+
+  /* Tab 键插入两个空格 */
+  contentEl.addEventListener("keydown", function (e) {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      var s = contentEl.selectionStart, t = contentEl.selectionEnd;
+      contentEl.value = contentEl.value.slice(0, s) + "  " + contentEl.value.slice(t);
+      contentEl.selectionStart = contentEl.selectionEnd = s + 2;
+      refreshPreview();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      doSave();
+    }
+  });
+
+  function doSave() {
+    var btn = document.getElementById("btn-save");
+    var label = document.getElementById("btn-save-label");
+    var origin = label.textContent;
+    btn.disabled = true;
+    label.textContent = "保存中…";
+    var payload = {
+      page_id: pageId,
+      title: document.getElementById("page-title").value.trim(),
+      slug: document.getElementById("page-slug").value.trim(),
+      description: document.getElementById("page-desc").value.trim(),
+      is_public: document.getElementById("page-public").checked,
+      enabled: document.getElementById("page-enabled").checked,
+      content: contentEl.value
+    };
+    window.api.post("/pages/api/save", payload).then(function (r) {
+      btn.disabled = false;
+      label.textContent = origin;
+      if (r && r.ok) {
+        pageId = r.data.id;
+        saved = contentEl.value;
+        window.toast("已保存", "success");
+        setTimeout(function () { window.location.href = "{{ url_for('pages.index') }}"; }, 600);
+      } else {
+        window.toast((r && r.error) || "保存失败", "error");
+      }
+    }).catch(function () {
+      btn.disabled = false;
+      label.textContent = origin;
+      window.toast("网络错误，请重试", "error");
+    });
+  }
+
+  document.getElementById("btn-save").addEventListener("click", doSave);
+
+  /* 未保存离开提醒 */
+  window.addEventListener("beforeunload", function (e) {
+    if (contentEl.value !== saved) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+data/
+logs/
+certs/
+instance/
+migrations/
+.idea/
+.vscode/
+*.zip

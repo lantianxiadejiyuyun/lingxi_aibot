@@ -1,0 +1,80 @@
+{% extends 'base.html' %}
+{% block title %}记忆{% endblock %}
+{% block page_title %}🧠 长期记忆{% endblock %}
+{% block content %}
+<div class="filter-row">
+  <p class="muted" style="margin:0">
+    AI 会把这些事实与偏好注入每次对话；定时任务每天凌晨自动「梳理上下文」抽取更新，
+    也可手动立即梳理。手动记录的记忆不会被自动覆盖。
+  </p>
+  <button class="btn btn-primary" type="button" id="btn-consolidate" style="margin-left:auto"><i class="bi bi-arrow-repeat"></i> 立即梳理</button>
+</div>
+
+{% if memories %}
+<table class="table">
+  <thead>
+    <tr><th>内容</th><th>重要度</th><th>过期</th><th>来源</th><th>更新时间</th><th class="actions">操作</th></tr>
+  </thead>
+  <tbody>
+    {% for m in memories %}
+    <tr>
+      <td>{{ m.content }}</td>
+      <td><span class="tag tag-blue">{{ '★' * m.importance }}{{ '☆' * (5 - m.importance) }}</span></td>
+      <td>{% if m.expires %}<span class="tag tag-red">至 {{ m.expires }}</span>{% else %}<span class="muted">长期</span>{% endif %}</td>
+      <td>
+        {% if m.source == '手动' %}<span class="tag tag-blue">手动</span>
+        {% else %}<span class="tag tag-green">自动</span>{% endif %}
+      </td>
+      <td class="muted">{{ m.updated_at }}</td>
+      <td class="actions">
+        <button class="btn btn-sm btn-danger" type="button" data-delete-memory="{{ m.id }}">删除</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">还没有长期记忆。和 AI 多聊几句后点「立即梳理」，或直接说「帮我记住：…」。</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  document.getElementById("btn-consolidate").addEventListener("click", function () {
+    var btn = this;
+    var origin = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "梳理中（约 10-60 秒）…";
+    window.api.post("/memory/api/consolidate", {}).then(function (r) {
+      btn.disabled = false;
+      btn.textContent = origin;
+      if (r && r.ok) {
+        var d = r.data || {};
+        window.toast("梳理完成 🎉 压缩 " + (d.summarized || 0) + " 个会话，抽取 " + (d.memories || 0) + " 条记忆", "success");
+        setTimeout(function () { window.location.reload(); }, 1200);
+      } else {
+        window.toast((r && r.error) || "梳理失败", "error");
+      }
+    }).catch(function () {
+      btn.disabled = false;
+      btn.textContent = origin;
+      window.toast("网络错误，请重试", "error");
+    });
+  });
+
+  document.addEventListener("click", function (e) {
+    var del = e.target.closest("[data-delete-memory]");
+    if (del) {
+      if (!window.confirm("确定删除这条记忆吗？")) return;
+      window.api.post("/memory/api/delete", { memory_id: del.getAttribute("data-delete-memory") })
+        .then(function (r) {
+          if (r && r.ok) { window.toast("已删除", "success"); window.location.reload(); }
+          else window.toast((r && r.error) || "删除失败", "error");
+        }).catch(function () { window.toast("网络错误，请重试", "error"); });
+    }
+  });
+})();
+</script>
+{% endblock %}

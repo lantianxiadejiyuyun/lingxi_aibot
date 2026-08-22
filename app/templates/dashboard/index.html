@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% block title %}仪表盘{% endblock %}
+{% block page_title %}仪表盘{% endblock %}
+{% block content %}
+<div class="stats-row">
+  <div class="stat-card stat-indigo">
+    <div class="stat-icon"><i class="bi bi-calendar3"></i></div>
+    <div class="stat-value">{{ today_events|length }}</div>
+    <div class="stat-label">今日日程</div>
+  </div>
+  <div class="stat-card stat-amber">
+    <div class="stat-icon"><i class="bi bi-list-check"></i></div>
+    <div class="stat-value">{{ tasks_open|length }}</div>
+    <div class="stat-label">待办任务</div>
+  </div>
+  <div class="stat-card stat-rose">
+    <div class="stat-icon"><i class="bi bi-alarm"></i></div>
+    <div class="stat-value">{{ tasks_due_today|length }}</div>
+    <div class="stat-label">今日到期</div>
+  </div>
+  <div class="stat-card stat-emerald">
+    <div class="stat-icon"><i class="bi bi-bullseye"></i></div>
+    <div class="stat-value">{{ done_today }}</div>
+    <div class="stat-label">今日完成</div>
+  </div>
+</div>
+
+<div class="grid grid-3">
+  <section class="card col-span-2">
+    <div class="card-head">
+      <h2><i class="bi bi-calendar3"></i> 今日日程</h2>
+      <a class="btn btn-sm btn-primary" href="{{ url_for('calendar.index') }}">去日历</a>
+    </div>
+    {% if today_events %}
+      <ul class="event-list">
+        {% for ev, occ in today_events %}
+          <li class="event-item">
+            <span class="event-time">{{ occ.strftime('%H:%M') if not ev.all_day else '全天' }}</span>
+            <span class="event-title">{{ ev.title }}</span>
+            {% if ev.location %}<span class="tag tag-gray">📍 {{ ev.location }}</span>{% endif %}
+            {% if ev.rrule %}<span class="tag">重复</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">今天没有日程 🎉</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2><i class="bi bi-list-check"></i> 待办任务</h2>
+      <a class="btn btn-sm btn-primary" href="{{ url_for('tasks.index') }}">去任务</a>
+    </div>
+    {% if tasks_open %}
+      <ul class="task-list">
+        {% for t in tasks_open %}
+          <li class="task-item">
+            <span class="priority-dot p{{ t.priority }}"></span>
+            <span class="task-title {{ 'task-overdue' if t.due_utc and t.due_utc < now_utc }}">{{ t.title }}</span>
+            {% if t.due_utc %}<span class="task-due">{% if t in tasks_due_today %}今天到期{% else %}截止 {{ due_dates[t.id] }}{% endif %}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">没有待办任务 🎉</p>
+    {% endif %}
+  </section>
+
+  <section class="card col-span-3">
+    <div class="card-head"><h2><i class="bi bi-lightning"></i> 快捷操作</h2></div>
+    <div class="quick-actions">
+      <a class="quick-action" href="{{ url_for('calendar.index') }}">
+        <span class="qa-icon"><i class="bi bi-calendar3"></i></span>
+        <span class="qa-text">新建事件<span class="qa-sub">安排日程与提醒</span></span>
+      </a>
+      <a class="quick-action" href="{{ url_for('tasks.index') }}">
+        <span class="qa-icon"><i class="bi bi-list-check"></i></span>
+        <span class="qa-text">新建任务<span class="qa-sub">记录待办事项</span></span>
+      </a>
+      <a class="quick-action" href="{{ url_for('notes.index') }}">
+        <span class="qa-icon"><i class="bi bi-journal-text"></i></span>
+        <span class="qa-text">写笔记<span class="qa-sub">随手记下灵感</span></span>
+      </a>
+      <a class="quick-action" href="{{ url_for('fitness.index') }}">
+        <span class="qa-icon"><i class="bi bi-heart-pulse"></i></span>
+        <span class="qa-text">记训练<span class="qa-sub">健身打卡</span></span>
+      </a>
+      <a class="quick-action" href="{{ url_for('travel.index') }}">
+        <span class="qa-icon"><i class="bi bi-airplane"></i></span>
+        <span class="qa-text">出行计划<span class="qa-sub">行程与交通</span></span>
+      </a>
+      <a class="quick-action" href="{{ url_for('expenses.index') }}">
+        <span class="qa-icon"><i class="bi bi-wallet2"></i></span>
+        <span class="qa-text">记一笔<span class="qa-sub">消费记账</span></span>
+      </a>
+      <a class="quick-action" href="{{ url_for('pages.index') }}">
+        <span class="qa-icon"><i class="bi bi-globe2"></i></span>
+        <span class="qa-text">做网页<span class="qa-sub">AI 生成页面</span></span>
+      </a>
+      <a class="quick-action" href="{{ url_for('chat.index') }}">
+        <span class="qa-icon"><i class="bi bi-robot"></i></span>
+        <span class="qa-text">找 AI 聊聊<span class="qa-sub">自然语言管理一切</span></span>
+      </a>
+    </div>
+  </section>
+
+  <section class="card col-span-3">
+    <div class="card-head"><h2><i class="bi bi-robot"></i> AI 助手</h2></div>
+    <p class="muted">需要帮忙安排日程、记账或规划出行？直接对 AI 说：</p>
+    <div class="prompt-chips" style="margin-top:10px">
+      <a class="chip" href="{{ url_for('chat.index') }}">“帮我看看今天有什么安排”</a>
+      <a class="chip" href="{{ url_for('chat.index') }}">“明天下午 3 点提醒我开会”</a>
+      <a class="chip" href="{{ url_for('chat.index') }}">“午饭 38 块微信支付”</a>
+      <a class="chip" href="{{ url_for('chat.index') }}">“今天跑步 40 分钟”</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

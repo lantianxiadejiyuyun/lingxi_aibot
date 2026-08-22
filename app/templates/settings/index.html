@@ -1,0 +1,1245 @@
+{% extends 'base.html' %}
+{% block title %}设置{% endblock %}
+{% block page_title %}设置{% endblock %}
+{% block content %}
+<div data-tabs-scope>
+  <div class="tabs-wrap">
+    <div class="tabs-group">
+      <span class="tabs-group-label">账户</span>
+      <div class="tabs-group-items">
+        <button class="tab active" type="button" data-tab="account"><i class="bi bi-person"></i> 账号</button>
+        {% if is_admin %}<button class="tab" type="button" data-tab="users"><i class="bi bi-people"></i> 用户</button>{% endif %}
+      </div>
+    </div>
+    <div class="tabs-group">
+      <span class="tabs-group-label">AI</span>
+      <div class="tabs-group-items">
+        <button class="tab" type="button" data-tab="ai"><i class="bi bi-cpu"></i> 模型与人设</button>
+        <button class="tab" type="button" data-tab="voice"><i class="bi bi-mic"></i> 语音</button>
+        <button class="tab" type="button" data-tab="search"><i class="bi bi-search"></i> 联网搜索</button>
+      </div>
+    </div>
+    <div class="tabs-group">
+      <span class="tabs-group-label">通知</span>
+      <div class="tabs-group-items">
+        <button class="tab" type="button" data-tab="channels"><i class="bi bi-broadcast"></i> 渠道</button>
+        <button class="tab" type="button" data-tab="feishu-app"><i class="bi bi-chat-dots"></i> 飞书</button>
+        <button class="tab" type="button" data-tab="briefing"><i class="bi bi-sun"></i> 简报</button>
+      </div>
+    </div>
+    <div class="tabs-group">
+      <span class="tabs-group-label">生成</span>
+      <div class="tabs-group-items">
+        <button class="tab" type="button" data-tab="image"><i class="bi bi-image"></i> 图片</button>
+        <button class="tab" type="button" data-tab="vision"><i class="bi bi-eye"></i> 视觉</button>
+      </div>
+    </div>
+    <div class="tabs-group">
+      <span class="tabs-group-label">系统</span>
+      <div class="tabs-group-items">
+        <button class="tab" type="button" data-tab="backup"><i class="bi bi-database"></i> 备份</button>
+        <button class="tab" type="button" data-tab="pages-domain"><i class="bi bi-globe2"></i> 网页站点</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 账号 ===== -->
+  <div class="tab-panel active" data-panel="account">
+    <div class="card">
+      <div class="card-head"><h2>账号与密码</h2></div>
+      <form method="post" action="{{ url_for('settings_page.account') }}">
+        {{ form.hidden_tag() }}
+        <div class="form-group">
+          <label for="old_password">当前密码</label>
+          {{ form.old_password(class="input", placeholder="请输入当前密码", autocomplete="current-password") }}
+          {% for err in form.old_password.errors %}<div class="field-error">{{ err }}</div>{% endfor %}
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="new_password">新密码</label>
+            {{ form.new_password(class="input", placeholder="至少 6 位", autocomplete="new-password") }}
+            {% for err in form.new_password.errors %}<div class="field-error">{{ err }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label for="confirm">确认新密码</label>
+            {{ form.confirm(class="input", placeholder="再次输入新密码", autocomplete="new-password") }}
+            {% for err in form.confirm.errors %}<div class="field-error">{{ err }}</div>{% endfor %}
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="timezone">时区</label>
+          {{ form.timezone(class="select") }}
+          <p class="cron-hint">日历、任务、通知的时间展示与提醒均按此换算。</p>
+        </div>
+        <button class="btn btn-primary" type="submit">保存账号设置</button>
+      </form>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-head"><h2>App API Token</h2></div>
+      <p class="muted" style="margin-top:0">
+        给手机记账 App 用。请求头带 <code>X-API-Token</code> 或 <code>Authorization: Bearer</code>，
+        数据记在<strong>你的账号</strong>下，和其他用户互不影响。完整 Token 只在生成时显示一次。
+      </p>
+      <p id="api-token-status">
+        {% if api_token_view.configured %}
+        已生成（结尾 <code>{{ api_token_view.tail }}</code>）。旧 Token 可继续用，重新生成后旧的立即失效。
+        {% else %}
+        尚未生成。
+        {% endif %}
+      </p>
+      <div class="form-group" id="api-token-full-wrap" style="display:none">
+        <label>完整 Token（请立刻复制保存）</label>
+        <input class="input" type="text" id="api-token-full" readonly>
+      </div>
+      <div class="form-inline">
+        <button class="btn btn-primary" type="button" data-api-token-gen
+                data-exists="{{ '1' if api_token_view.configured else '0' }}">
+          {{ '重新生成' if api_token_view.configured else '生成 Token' }}
+        </button>
+        {% if api_token_view.configured %}
+        <button class="btn btn-danger" type="button" data-api-token-revoke>撤销</button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== AI 设置 ===== -->
+  <div class="tab-panel" data-panel="ai">
+    <div class="card">
+      <div class="card-head"><h2>AI 模型配置</h2></div>
+      <p class="muted" style="margin-top:0">
+        每位用户使用<strong>自己的 API Key</strong>，互不共享。支持两种接口协议：
+        <strong>OpenAI 兼容</strong>（DeepSeek / 通义 / Kimi / 智谱 / 豆包 / OpenAI / Grok 等）和
+        <strong>Anthropic</strong>（Claude 官方 Messages API）。点下方厂商即可填入官方 Base URL。
+      </p>
+      <form method="post" action="{{ url_for('settings_page.ai') }}" id="llm-config-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label>接口协议</label>
+          <div>
+            <label class="chip">
+              <input type="radio" name="llm_protocol" value="openai" {% if ai.protocol != 'anthropic' %}checked{% endif %}>
+              OpenAI 兼容
+            </label>
+            <label class="chip">
+              <input type="radio" name="llm_protocol" value="anthropic" {% if ai.protocol == 'anthropic' %}checked{% endif %}>
+              Anthropic（Claude）
+            </label>
+          </div>
+          <p class="cron-hint" id="llm-protocol-hint">
+            {% if ai.protocol == 'anthropic' %}
+            Anthropic：走 <code>/v1/messages</code>，工具调用为 <code>tool_use</code>。地址填 <code>https://api.anthropic.com</code> 即可。
+            {% else %}
+            OpenAI 兼容：走 <code>/chat/completions</code> + Function Calling。DeepSeek、官方 OpenAI、国内中转都选这项。
+            {% endif %}
+          </p>
+        </div>
+        <div class="form-group">
+          <label>快捷填入官方地址</label>
+          <p class="cron-hint" style="margin-top:0">只改协议、接口地址和默认模型名，<strong>不会改你的 Key</strong>。模型名可再手改（豆包请改成方舟接入点 ID）。</p>
+          {% for group, presets in ai.preset_groups %}
+          <div class="preset-group">
+            <div class="preset-group-label">{{ group }}</div>
+            <div class="preset-group-chips">
+              {% for p in presets %}
+              <button class="chip" type="button" data-llm-preset
+                      data-protocol="{{ p.protocol }}" data-base="{{ p.base_url }}"
+                      data-model="{{ p.model }}"
+                      title="{{ p.hint }}&#10;{{ p.base_url }}">{{ p.label }}</button>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="llm_base_url">接口地址</label>
+            <input class="input" type="text" id="llm_base_url" name="llm_base_url" value="{{ ai.base_url }}" placeholder="https://api.deepseek.com/v1">
+            <p class="cron-hint">OpenAI 兼容一般带 <code>/v1</code>；Anthropic 官方填 <code>https://api.anthropic.com</code>。</p>
+          </div>
+          <div class="form-group">
+            <label for="llm_model">模型名</label>
+            <input class="input" type="text" id="llm_model" name="llm_model" value="{{ ai.model }}" placeholder="deepseek-chat">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="llm_api_key">API Key（仅保存在你的账号下）</label>
+          {% if ai.api_key_configured %}
+          <div class="form-inline">
+            <input class="input" type="password" id="llm_api_key" name="llm_api_key" value="" placeholder="已配置（结尾 {{ ai.api_key_tail }}），留空表示不修改" autocomplete="off" style="flex:1">
+            <label class="chip"><input type="checkbox" name="clear_api_key" value="1"> 清除 Key</label>
+          </div>
+          <p class="cron-hint">Key 已保存，仅显示结尾 4 位；输入新值将覆盖。其他用户看不到、也不能用你的 Key。</p>
+          {% else %}
+          <input class="input" type="password" id="llm_api_key" name="llm_api_key" value="" placeholder="sk-… 或 Anthropic Key（未配置）" autocomplete="off">
+          <p class="cron-hint">未配置时 AI 对话不可用，早晚简报会降级为纯文本列表。不会使用管理员或 .env 里的 Key。</p>
+          {% endif %}
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存 AI 配置</button>
+          <button class="btn btn-ghost" type="button" data-test-llm>测试连接</button>
+          <span class="muted">保存后立即生效，无需重启。</span>
+        </div>
+      </form>
+    </div>
+
+    <div class="card" id="persona" style="margin-top:16px">
+      <div class="card-head"><h2>对话人设</h2></div>
+      <p class="muted" style="margin-top:0">
+        决定 AI 怎么自称、用什么语气说话。工具调用规则不会被改掉。保存后下一轮对话生效。
+      </p>
+      <form method="post" action="{{ url_for('settings_page.persona') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="ai_persona_name">名字</label>
+            <input class="input" type="text" id="ai_persona_name" name="ai_persona_name"
+                   value="{{ persona.name }}" maxlength="32" placeholder="灵犀">
+            <p class="cron-hint">AI 会用这个名字自称。</p>
+          </div>
+          <div class="form-group">
+            <label for="ai_persona_address">怎么称呼你</label>
+            <input class="input" type="text" id="ai_persona_address" name="ai_persona_address"
+                   value="{{ persona.address }}" maxlength="16" placeholder="可空，如：老板 / 小王">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>性格预设</label>
+          <div>
+            {% for key, meta in persona_presets.items() %}
+            <label class="chip">
+              <input type="radio" name="ai_persona_preset" value="{{ key }}"
+                     {% if persona.preset == key %}checked{% endif %}>
+              {{ meta.label }}
+            </label>
+            {% endfor %}
+          </div>
+          <p class="cron-hint">
+            {% for key, meta in persona_presets.items() %}
+            <span data-persona-blurb="{{ key }}" {% if persona.preset != key %}style="display:none"{% endif %}>{{ meta.blurb }}</span>
+            {% endfor %}
+          </p>
+        </div>
+        <div class="form-group">
+          <label>回复详细度</label>
+          <div>
+            <label class="chip"><input type="radio" name="ai_persona_verbosity" value="concise" {% if persona.verbosity == 'concise' %}checked{% endif %}> 简短</label>
+            <label class="chip"><input type="radio" name="ai_persona_verbosity" value="normal" {% if persona.verbosity == 'normal' %}checked{% endif %}> 适中</label>
+            <label class="chip"><input type="radio" name="ai_persona_verbosity" value="detailed" {% if persona.verbosity == 'detailed' %}checked{% endif %}> 详细</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="ai_persona_extra">补充说明</label>
+          <textarea class="textarea" id="ai_persona_extra" name="ai_persona_extra" rows="5"
+                    maxlength="2000" placeholder="例如：用口语、少用表情、先给结论；提到工作默认按北京时间。选择「自定义」时必填。">{{ persona.extra }}</textarea>
+          <p class="cron-hint">最多 2000 字。会写进系统提示词，但不能覆盖查日程/记账等工具规则。</p>
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存人设</button>
+          <button class="btn btn-ghost" type="submit" name="reset_persona" value="1"
+                  onclick="return confirm('恢复默认人设（灵犀 / 默认助理）？')">恢复默认</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 通知渠道 ===== -->
+  <div class="tab-panel" data-panel="channels">
+    <div class="card">
+      <div class="card-head"><h2>通知渠道</h2></div>
+      <form method="post" action="{{ url_for('settings_page.channels') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label for="sc_key">Server酱 SendKey</label>
+          <div class="form-inline">
+            <input class="input" type="text" id="sc_key" name="sc_key" value="{{ channels.sc_key }}" placeholder="sctp 开头的 SendKey" style="flex:1">
+            <button class="btn btn-ghost btn-sm" type="button" data-test-channel="serverchan">发送测试</button>
+          </div>
+          <p class="cron-hint">前往 <a href="https://sct.ftqq.com" target="_blank" rel="noopener">Server酱</a> 获取 SendKey，用于推送消息到微信。</p>
+        </div>
+        <div class="form-group">
+          <label for="feishu_webhook_url">飞书自定义机器人 Webhook</label>
+          <div class="form-inline">
+            <input class="input" type="text" id="feishu_webhook_url" name="feishu_webhook_url" value="{{ channels.feishu_webhook_url }}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" style="flex:1">
+            <button class="btn btn-ghost btn-sm" type="button" data-test-channel="feishu">发送测试</button>
+          </div>
+          <p class="cron-hint">在飞书群中添加「自定义机器人」获取 Webhook 地址。</p>
+        </div>
+        <div class="form-group">
+          <label for="feishu_secret">飞书加签密钥（可选）</label>
+          <input class="input" type="password" id="feishu_secret" name="feishu_secret" value="{{ channels.feishu_secret }}" placeholder="机器人安全设置中的加签密钥，留空则不加签" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label>默认推送渠道</label>
+          <div class="form-row">
+            {% for value, label in all_channel_options %}
+            <label class="chip"><input type="checkbox" name="default_channels" value="{{ value }}" {{ 'checked' if value in channels.default_channels }}> {{ label }}</label>
+            {% endfor %}
+          </div>
+          <p class="cron-hint">AI 助手与定时任务发送通知时使用的默认渠道；至少勾选一项。可勾选下方自定义的「通知组」实现多渠道同步推送。</p>
+        </div>
+        <div class="form-group">
+          <div class="form-inline">
+            <button class="btn btn-ghost btn-sm" type="button" data-test-channel="inapp">站内通知测试</button>
+            <span class="muted">站内通知无需配置，直接记录在通知中心。</span>
+          </div>
+        </div>
+
+        <div class="card-head" style="margin-top:8px"><h2>各场景推送渠道（统一配置）</h2></div>
+        <p class="muted" style="margin-top:0">
+          所有功能的通知渠道在这里统一配置；「定时任务」页每个任务仍可单独覆盖。留空则跟随上方全局默认渠道。
+        </p>
+        <div class="form-row">
+          {% set scene_labels = {
+            'briefing': '定时简报（早安/午间/晚间）',
+            'report': '周报 / 月报',
+            'backup': '备份完成',
+            'cleanup': '每周整理',
+            'reminder': '事件 / 任务到期提醒'
+          } %}
+          {% for scene in scene_labels %}
+          <div class="form-group" style="flex:1;min-width:170px">
+            <label for="scene-{{ scene }}">{{ scene_labels[scene] }}</label>
+            <select class="select" id="scene-{{ scene }}" name="scene_{{ scene }}">
+              <option value="">跟随全局默认</option>
+              {% for value, label in all_channel_options %}
+              <option value="{{ value }}" {{ 'selected' if scene_cfg.get(scene) == value }}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endfor %}
+        </div>
+
+        <button class="btn btn-primary" type="submit">保存通知渠道</button>
+      </form>
+
+      <div class="card-head" style="margin-top:8px"><h2>自定义通知组</h2></div>
+      <p class="muted" style="margin-top:0">
+        把多个渠道打包成一个「通知组」；在默认渠道、各场景、AI 助手、定时任务里选中该组，即同步推送到组内全部渠道。
+      </p>
+      {% set ch_labels = {'inapp': '站内', 'serverchan': 'Server酱', 'feishu': '飞书', 'feishu_app': '飞书机器人(应用)'} %}
+      {% if notify_groups %}
+        {% for gname, gchans in notify_groups.items() %}
+        <div class="form-inline" style="padding:6px 0; border-top:1px solid #e5e7eb;">
+          <span class="tag tag-blue">组：{{ gname }}</span>
+          <span class="muted" style="flex:1">{% for c in gchans %}{{ ch_labels.get(c, c) }}{% if not loop.last %}、{% endif %}{% endfor %}</span>
+          <form method="post" action="{{ url_for('settings_page.delete_group') }}" data-confirm="确定删除通知组「{{ gname }}」吗？引用它的场景/默认渠道将回退为跟随默认。" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="delete_group" value="{{ gname }}">
+            <button class="btn btn-danger btn-sm" type="submit">删除</button>
+          </form>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="empty">还没有自定义通知组</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('settings_page.add_group') }}" style="margin-top:12px">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row" style="align-items:flex-end">
+          <div class="form-group">
+            <label for="new_group_name">组名</label>
+            <input class="input" type="text" id="new_group_name" name="new_group_name" maxlength="50" placeholder="如：重要通知">
+          </div>
+          <div class="form-group" style="flex:1">
+            <label>组内渠道（可多选）</label>
+            <div class="form-row">
+              {% for value, label in channel_options %}
+              <label class="chip"><input type="checkbox" name="new_group_channels" value="{{ value }}"> {{ label }}</label>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-primary" type="submit">添加通知组</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 飞书机器人（应用，双向） ===== -->
+  <div class="tab-panel" data-panel="feishu-app">
+    <div class="card">
+      <div class="card-head"><h2>飞书应用机器人（可接收消息 + AI 回复）</h2></div>
+      <form method="post" action="{{ url_for('settings_page.feishu_app') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="feishu_app_id">App ID</label>
+            <input class="input" type="text" id="feishu_app_id" name="feishu_app_id" value="{{ feishu_app.app_id }}" placeholder="cli_xxxxxxxx" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="feishu_app_secret">App Secret</label>
+            <input class="input" type="password" id="feishu_app_secret" name="feishu_app_secret" value="{{ feishu_app.app_secret }}" placeholder="应用凭证（勿外泄）" autocomplete="off">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="feishu_event_token">事件订阅 验证令牌（Verification Token）</label>
+            <input class="input" type="text" id="feishu_event_token" name="feishu_event_token" value="{{ feishu_app.event_token }}" placeholder="可选，用于 URL 验证握手" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="feishu_event_encrypt_key">事件订阅 加密密钥（Encrypt Key）</label>
+            <input class="input" type="text" id="feishu_event_encrypt_key" name="feishu_event_encrypt_key" value="{{ feishu_app.encrypt_key }}" placeholder="可选，勾选加密后填写" autocomplete="off">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="feishu_app_target">主动发送默认目标（chat_id / open_id）</label>
+            <input class="input" type="text" id="feishu_app_target" name="feishu_app_target" value="{{ feishu_app.target }}" placeholder="通知推送发往哪个群/人">
+          </div>
+          <div class="form-group">
+            <label for="feishu_app_target_type">目标类型</label>
+            <select class="select" id="feishu_app_target_type" name="feishu_app_target_type">
+              <option value="chat_id" {{ 'selected' if feishu_app.target_type == 'chat_id' }}>群/会话 chat_id</option>
+              <option value="open_id" {{ 'selected' if feishu_app.target_type == 'open_id' }}>用户 open_id</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>接入方式（收消息）</label>
+          <div>
+            <label class="chip">
+              <input type="radio" name="feishu_receive_mode" value="callback"
+                     {% if feishu_app.receive_mode != 'sdk' %}checked{% endif %}>
+              HTTP 回调
+            </label>
+            <label class="chip">
+              <input type="radio" name="feishu_receive_mode" value="sdk"
+                     {% if feishu_app.receive_mode == 'sdk' %}checked{% endif %}>
+              官方 SDK 长连接
+            </label>
+          </div>
+          <p class="cron-hint">
+            <strong>HTTP 回调</strong>：开放平台把事件 POST 到下面的地址，需要公网 HTTPS。<br>
+            <strong>官方 SDK 长连接</strong>：进程用 <code>lark-oapi</code> 主动连飞书，无需公网回调、适合本地/内网；开放平台事件订阅请选「使用长连接接收事件」。两种方式共用同一套 AI 回复逻辑，不要同时开，以免重复回复。
+          </p>
+        </div>
+        <div class="form-group" id="feishu-callback-hint">
+          <label>事件回调地址（HTTP 回调模式：在飞书开放平台「事件订阅」中填写）</label>
+          <code style="display:block;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px 12px;word-break:break-all">{{ feishu_app.callback_url }}</code>
+          <p class="cron-hint">
+            ① 开放平台创建自建应用 → 应用能力开启「机器人」→ 权限管理添加 <code>im:message</code> 相关权限并发布版本<br>
+            ② 事件订阅 → 添加事件 <code>im.message.receive_v1</code>，订阅方式选「将事件发送至开发者服务器」，填写上方回调地址与验证令牌/加密密钥<br>
+            ③ 回调地址必须公网 HTTPS 可达（国内服务器需 ICP 备案域名）
+          </p>
+        </div>
+        <div class="form-group" id="feishu-sdk-hint">
+          {% set net = feishu_app.net or {} %}
+          {% if net.pages_openable %}
+          <div class="alert alert-success" style="margin-top:0">
+            网页域名已解析到公网 IPv4，飞书里可以打开 AI 构建的网页。
+            {% if net.page_host %}<span class="tag tag-green">{{ net.page_host }}</span>{% endif %}
+          </div>
+          {% else %}
+          <div class="alert alert-warning" style="margin-top:0">
+            <strong>无法打开构建的网页：</strong>
+            官方 SDK 长连接不需要入站公网端口，但飞书里点开 AI 生成的网页仍要<strong>公网 IPv4</strong>。
+            本机未连公网、没有公网 IPv4，或未把网页域名解析到公网 A 记录时，飞书里<strong>无法显示构建的网页</strong>。
+            请在「设置 → 网页站点」填端口（必要时映射到公网 IPv4）。
+            {% if net %}
+            <br>
+            {% if not net.outbound_ipv4 %}
+            <span class="tag tag-red">未检测到 IPv4 公网出口</span>
+            {% elif not net.local_ipv4_public %}
+            <span class="tag tag-yellow">本机 IPv4 为内网（{{ net.local_ipv4 }}）</span>
+            {% else %}
+            <span class="tag tag-green">本机出口 {{ net.local_ipv4 }}（公网）</span>
+            {% endif %}
+            {% if net.page_host %}
+              <span class="tag tag-red">网页域名 {{ net.page_host }} 无公网 IPv4</span>
+            {% else %}
+              <span class="tag tag-red">未配置网页/后台域名</span>
+            {% endif %}
+            {% endif %}
+          </div>
+          {% endif %}
+          <label>官方 SDK 长连接状态</label>
+          <p id="feishu-ws-status">
+            {% if feishu_app.ws.running or feishu_app.ws.alive %}
+            <span class="tag tag-green">长连接运行中</span>
+            {% elif feishu_app.receive_mode == 'sdk' %}
+            <span class="tag tag-yellow">未连接</span>
+            {% else %}
+            <span class="tag tag-gray">未启用</span>
+            {% endif %}
+            {% if feishu_app.ws.error %}
+            <span class="muted">{{ feishu_app.ws.error }}</span>
+            {% endif %}
+            {% if not feishu_app.ws.sdk_installed %}
+            <span class="muted">未安装 <code>lark-oapi</code>，请 <code>pip install lark-oapi</code> 后重启。</span>
+            {% endif %}
+          </p>
+          <p class="cron-hint">
+            ① 同样创建自建应用、开启机器人、添加 <code>im:message</code> 权限并发布<br>
+            ② 事件订阅 → 添加 <code>im.message.receive_v1</code>，订阅方式选<strong>「使用长连接接收事件」</strong>（保存前请先在本页选 SDK 并保存，让进程连上）<br>
+            ③ 长连接只需<strong>出站</strong>访问公网（IPv4）。切换回回调后若长连接未立刻断开，重启一次应用即可。<br>
+            ④ 构建的网页要给飞书用户打开，仍需公网 IPv4 + 网页域名；没有公网 IPv4 时飞书里打不开这些页面。
+          </p>
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存飞书机器人配置</button>
+          <button class="btn btn-ghost" type="button" data-test-feishu-app>发送测试消息</button>
+          {% if feishu_app.configured %}
+            <span class="tag tag-green">应用已配置 ✓</span>
+          {% else %}
+            <span class="tag tag-red">未配置 ✗</span>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 备份设置 ===== -->
+  <div class="tab-panel" data-panel="backup">
+    <div class="card">
+      <div class="card-head"><h2>数据库备份</h2></div>
+      <form method="post" action="{{ url_for('settings_page.backup') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>启用自动备份</label>
+            <label class="toggle">
+              <input type="checkbox" name="backup_enabled" value="1" {{ 'checked' if backup.enabled }}>
+              <span class="slider"></span>
+            </label>
+            <p class="cron-hint">关闭后不再自动备份（可随时手动备份）。</p>
+          </div>
+          <div class="form-group">
+            <label for="backup_time">每日执行时间</label>
+            <input class="input" type="time" id="backup_time" name="backup_time" value="{{ backup.time }}">
+          </div>
+          <div class="form-group">
+            <label for="backup_keep">保留份数（1-30）</label>
+            <input class="input" type="number" id="backup_keep" name="backup_keep" min="1" max="30" value="{{ backup.keep }}">
+          </div>
+          <div class="form-group">
+            <label for="backup_channel">完成通知渠道</label>
+            <select class="select" id="backup_channel" name="backup_channel">
+              {% for value, label in channel_options %}
+              <option value="{{ value }}" {{ 'selected' if backup.channel == value }}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存备份配置</button>
+          <button class="btn btn-ghost" type="button" data-backup-now>立即备份</button>
+          <span class="muted">备份内容：全部数据表流式导出为 JSON（gzip 压缩）文件，保存于服务器 data/backups/，大数据量下内存占用恒定</span>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>最近备份</h2></div>
+      {% if backup.files %}
+      <table class="table">
+        <thead><tr><th>文件名</th><th>大小</th><th>时间</th><th class="actions">操作</th></tr></thead>
+        <tbody>
+          {% for f in backup.files %}
+          <tr>
+            <td><code>{{ f.name }}</code></td>
+            <td>{{ '{:.1f} KB'.format(f.size / 1024) }}</td>
+            <td>{{ f.mtime_text }}</td>
+            <td class="actions">
+              <a class="btn btn-sm btn-ghost" href="{{ url_for('settings_page.backup_download', name=f.name) }}">下载</a>
+              <form method="post" action="{{ url_for('settings_page.backup_delete', name=f.name) }}" style="display:inline" data-confirm="确定删除备份 {{ f.name }}？">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-danger" type="submit">删除</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">暂无备份文件，点击「立即备份」生成第一份。</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>数据下载</h2></div>
+      <p class="muted">把当前全部数据（日程、任务、笔记、对话、图片、网页、技能、长期记忆、通知等）流式打包成一份 JSON（gzip 压缩，解压即标准 JSON）下载到本地，可用于备份或迁移。</p>
+      <div class="form-inline" style="margin-top:12px">
+        <form method="post" action="{{ url_for('settings_page.export_data') }}" style="display:inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-primary" type="submit"><i class="bi bi-download"></i> 导出并下载数据</button>
+        </form>
+        <span class="muted">导出后也会在「最近备份」中保留一份。</span>
+      </div>
+    </div>
+
+    <div class="card" style="border-color:#fecaca">
+      <div class="card-head"><h2 style="color:var(--danger)">重置数据（危险操作）</h2></div>
+      <p class="muted" style="margin-bottom:12px">
+        清空全部业务数据（日程、任务、笔记、对话、图片、网页、技能、长期记忆、通知、自定义定时提醒等），
+        并删除服务器上已生成的图片。<strong>保留</strong>你的登录账号与系统配置（AI 模型、通知渠道、备份设置等）。
+        重置前会自动生成一份备份。
+      </p>
+      <form method="post" action="{{ url_for('settings_page.reset_data') }}" data-confirm="确定要清空全部业务数据吗？此操作不可恢复（重置前会自动备份）。">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="reset_password">当前密码</label>
+            <input class="input" type="password" id="reset_password" name="password" placeholder="输入当前登录密码" autocomplete="current-password" required>
+          </div>
+          <div class="form-group">
+            <label for="reset_confirm_word">确认文字</label>
+            <input class="input" type="text" id="reset_confirm_word" name="confirm_word" placeholder="输入「重置」两个字" required>
+          </div>
+        </div>
+        <button class="btn btn-danger" type="submit"><i class="bi bi-exclamation-triangle"></i> 立即重置数据</button>
+      </form>
+    </div>
+
+    <div class="card" style="border-color:#fde68a">
+      <div class="card-head"><h2 style="color:#b45309">恢复数据（导入备份）</h2></div>
+      <p class="muted" style="margin-bottom:12px">
+        用备份文件覆盖当前全部数据（含账号与设置，ID 保持不变）。恢复前会自动生成一份当前数据的安全备份；
+        恢复后账号密码与配置会回退到备份时点的状态。
+      </p>
+      <form method="post" action="{{ url_for('settings_page.restore_backup') }}" enctype="multipart/form-data" data-confirm="确定恢复该备份吗？当前全部数据将被覆盖（恢复前会自动备份当前数据）。">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="restore_backup_name">选择服务器上的备份</label>
+            <select class="select" id="restore_backup_name" name="backup_name">
+              <option value="">— 不选，改用下方上传 —</option>
+              {% for f in backup.files %}
+              <option value="{{ f.name }}">{{ f.name }}（{{ '{:.1f} KB'.format(f.size / 1024) }}）</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="restore_file">或上传备份文件（.json / .json.gz）</label>
+            <input class="input" type="file" id="restore_file" name="file" accept=".json,.json.gz,.gz">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="restore_password">当前密码</label>
+            <input class="input" type="password" id="restore_password" name="password" placeholder="输入当前登录密码" autocomplete="current-password" required>
+          </div>
+          <div class="form-group">
+            <label for="restore_confirm_word">确认文字</label>
+            <input class="input" type="text" id="restore_confirm_word" name="confirm_word" placeholder="输入「恢复」两个字" required>
+          </div>
+        </div>
+        <button class="btn btn-danger" type="submit"><i class="bi bi-arrow-counterclockwise"></i> 恢复数据</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 简报设置 ===== -->
+  <div class="tab-panel" data-panel="briefing">
+    <div class="card">
+      <div class="card-head"><h2>简报设置</h2></div>
+      <form method="post" action="{{ url_for('settings_page.briefing') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="briefing_time_morning">早安简报时间</label>
+            <input class="input" type="time" id="briefing_time_morning" name="briefing_time_morning" value="{{ briefing.morning }}">
+          </div>
+          <div class="form-group">
+            <label for="briefing_time_noon">午间简报时间</label>
+            <input class="input" type="time" id="briefing_time_noon" name="briefing_time_noon" value="{{ briefing.noon }}">
+          </div>
+          <div class="form-group">
+            <label for="briefing_time_evening">晚间复盘时间</label>
+            <input class="input" type="time" id="briefing_time_evening" name="briefing_time_evening" value="{{ briefing.evening }}">
+          </div>
+        </div>
+        <p class="cron-hint">保存后同步更新「早安简报 / 午间简报 / 晚间复盘」定时任务的执行时间。</p>
+        <button class="btn btn-primary" type="submit">保存简报设置</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 网页站点（端口，无需 HTTPS） ===== -->
+  <div class="tab-panel" data-panel="pages-domain">
+    <div class="card">
+      <div class="card-head"><h2>网页站点</h2></div>
+      <p class="muted" style="margin-top:0">
+        AI 生成的公开网页走<strong>独立 HTTP 端口</strong>，不必配证书、也不必配域名。
+        填端口并保存后即可：<code>http://局域网IP:端口/页面slug</code>。
+      </p>
+      <form method="post" action="{{ url_for('settings_page.pages_domain') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="page_port">网页端口</label>
+            <input class="input" type="number" id="page_port" name="page_port" min="1" max="65535"
+                   value="{{ site_pages.page_port }}" placeholder="如 8080，留空则不另开端口">
+            <p class="cron-hint">与后台端口（默认 5000 / 生产 8000）不要相同。保存后立即监听。</p>
+          </div>
+          <div class="form-group">
+            <label for="page_host">链接里的主机（可选）</label>
+            <input class="input" type="text" id="page_host" name="page_host" value="{{ site_pages.page_host }}"
+                   placeholder="留空则自动用本机局域网 IPv4">
+            <p class="cron-hint">例如 <code>192.168.1.8</code> 或内网主机名。不要填 http://。</p>
+          </div>
+        </div>
+        {% if site_pages.page_base_url %}
+        <p>
+          当前公开页地址：<code>{{ site_pages.page_base_url }}/&lt;slug&gt;</code>
+          {% if site_pages.page_site.running %}
+          <span class="tag tag-green">端口已监听</span>
+          {% elif site_pages.page_site.error %}
+          <span class="tag tag-red">{{ site_pages.page_site.error }}</span>
+          {% else %}
+          <span class="tag tag-yellow">未监听</span>
+          {% endif %}
+        </p>
+        {% endif %}
+        <p class="cron-hint">
+          防火墙/路由器只需放行该 TCP 端口。飞书等外网要打开页面时，主机需是公网 IPv4（或把该端口映射出去）。
+        </p>
+        <details style="margin:14px 0">
+          <summary class="muted" style="cursor:pointer">高级：域名与后台入口（可选，不配 HTTPS 也可不用）</summary>
+          <div class="form-row" style="margin-top:12px">
+            <div class="form-group">
+              <label for="admin_domain">后台域名</label>
+              <input class="input" type="text" id="admin_domain" name="admin_domain" value="{{ site_pages.admin_domain }}" placeholder="如 admin.eugenstudio.cn">
+            </div>
+            <div class="form-group">
+              <label for="page_domain">网页域名</label>
+              <input class="input" type="text" id="page_domain" name="page_domain" value="{{ site_pages.page_domain }}" placeholder="如 web.eugenstudio.cn">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="admin_entry">后台安全入口</label>
+            <div class="form-inline">
+              <input class="input" type="text" id="admin_entry" name="admin_entry" value="{{ site_pages.admin_entry }}" placeholder="如 abc123（留空则不启用）" style="flex:1">
+              <button class="btn btn-ghost" type="button" id="btn-gen-admin-entry">随机生成</button>
+            </div>
+            <p class="cron-hint">仅在你已经用 Nginx/Caddy 反代 HTTPS 时才需要域名。只开端口时请留空。</p>
+          </div>
+        </details>
+        <button class="btn btn-primary" type="submit">保存网页站点</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 图片生成 ===== -->
+  <div class="tab-panel" data-panel="image">
+    <div class="card">
+      <div class="card-head"><h2>图片生成（OpenAI 兼容 images 接口）</h2></div>
+      <form method="post" action="{{ url_for('settings_page.image') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="image_base_url">IMAGE_BASE_URL（接口地址）</label>
+            <input class="input" type="text" id="image_base_url" name="image_base_url" value="{{ image.base_url }}" placeholder="如 https://api.siliconflow.cn/v1">
+            <p class="cron-hint">OpenAI 兼容图片接口：硅基流动 / 各类中转站 / OpenAI 等均可。</p>
+          </div>
+          <div class="form-group">
+            <label for="image_model">IMAGE_MODEL（模型名）</label>
+            <input class="input" type="text" id="image_model" name="image_model" value="{{ image.model }}" placeholder="如 black-forest-labs/FLUX.1-schnell 或 gpt-image-1">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="image_api_key">API Key</label>
+            {% if image.api_key_configured %}
+            <div class="form-inline">
+              <input class="input" type="password" id="image_api_key" name="image_api_key" value="" placeholder="已配置（结尾 {{ image.api_key_tail }}），留空表示不修改" autocomplete="off" style="flex:1">
+              <label class="chip"><input type="checkbox" name="clear_image_key" value="1"> 清除 Key</label>
+            </div>
+            {% else %}
+            <input class="input" type="password" id="image_api_key" name="image_api_key" value="" placeholder="sk-…（未配置）" autocomplete="off">
+            {% endif %}
+          </div>
+          <div class="form-group">
+            <label for="image_size">默认尺寸</label>
+            <input class="input" type="text" id="image_size" name="image_size" value="{{ image.size }}" placeholder="1024x1024">
+            <p class="cron-hint">常用：1024x1024 / 720x1280（竖屏）/ 1280x720（横屏）。</p>
+          </div>
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存图片配置</button>
+          <button class="btn btn-ghost" type="button" data-test-image>测试生成</button>
+          <span class="muted">保存后立即生效；AI 助手可直接说「帮我画一张 …」。</span>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 视觉模型（多模态识图） ===== -->
+  <div class="tab-panel" data-panel="vision">
+    <div class="card">
+      <div class="card-head"><h2>视觉模型（多模态识图）</h2></div>
+      <form method="post" action="{{ url_for('settings_page.vision') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <p class="muted" style="margin-top:0">独立的多模态模型，用于识别图片内容（如飞书里给机器人发图后自动描述）。与「沟通模型」「图片生成模型」互不影响。</p>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="vision_base_url">VISION_BASE_URL（接口地址）</label>
+            <input class="input" type="text" id="vision_base_url" name="vision_base_url" value="{{ vision.base_url }}" placeholder="如 https://api.openai.com/v1">
+          </div>
+          <div class="form-group">
+            <label for="vision_model">VISION_MODEL（模型名）</label>
+            <input class="input" type="text" id="vision_model" name="vision_model" value="{{ vision.model }}" placeholder="如 gpt-4o / qwen-vl-max">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="vision_api_key">API Key</label>
+          {% if vision.api_key_configured %}
+          <div class="form-inline">
+            <input class="input" type="password" id="vision_api_key" name="vision_api_key" value="" placeholder="已配置（结尾 {{ vision.api_key_tail }}），留空表示不修改" autocomplete="off" style="flex:1">
+            <label class="chip"><input type="checkbox" name="clear_vision_key" value="1"> 清除 Key</label>
+          </div>
+          {% else %}
+          <input class="input" type="password" id="vision_api_key" name="vision_api_key" value="" placeholder="sk-…（未配置，收到图片仅保存不识别）" autocomplete="off">
+          {% endif %}
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存视觉模型配置</button>
+          <span class="muted">保存后立即生效；飞书收图将自动调用该模型识别。</span>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 语音 ===== -->
+  <div class="tab-panel" data-panel="voice">
+    <div class="card">
+      <div class="card-head"><h2>语音（TTS 朗读 + 语音输入）</h2></div>
+      <form method="post" action="{{ url_for('settings_page.voice') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <p class="muted" style="margin-top:0">
+          不配置时也可用：浏览器自带语音输入（🎤）与朗读（🔊）。配置 OpenAI 兼容 TTS
+          接口（如 OpenAI / 硅基流动 / 各类中转站）可获得更好的音色。
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tts_base_url">TTS_BASE_URL（接口地址）</label>
+            <input class="input" type="text" id="tts_base_url" name="tts_base_url" value="{{ voice.base_url }}" placeholder="如 https://api.openai.com/v1">
+          </div>
+          <div class="form-group">
+            <label for="tts_model">TTS_MODEL（模型名）</label>
+            <input class="input" type="text" id="tts_model" name="tts_model" value="{{ voice.model }}" placeholder="如 tts-1 / gpt-4o-mini-tts">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tts_api_key">API Key</label>
+            {% if voice.api_key_configured %}
+            <div class="form-inline">
+              <input class="input" type="password" id="tts_api_key" name="tts_api_key" value="" placeholder="已配置（结尾 {{ voice.api_key_tail }}），留空表示不修改" autocomplete="off" style="flex:1">
+              <label class="chip"><input type="checkbox" name="clear_tts_key" value="1"> 清除 Key</label>
+            </div>
+            {% else %}
+            <input class="input" type="password" id="tts_api_key" name="tts_api_key" value="" placeholder="sk-…（未配置）" autocomplete="off">
+            {% endif %}
+          </div>
+          <div class="form-group">
+            <label for="tts_voice">音色（voice）</label>
+            <input class="input" type="text" id="tts_voice" name="tts_voice" value="{{ voice.voice }}" placeholder="alloy">
+            <p class="cron-hint">OpenAI：alloy / echo / fable / onyx / nova / shimmer。</p>
+          </div>
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存语音配置</button>
+          <button class="btn btn-ghost" type="button" data-test-tts>测试合成</button>
+          <span class="muted">保存后立即生效；未配置时 AI 对话仍可用浏览器朗读。</span>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 联网搜索 ===== -->
+  <div class="tab-panel" data-panel="search">
+    <div class="card">
+      <div class="card-head"><h2>联网搜索（AI 调查能力）</h2></div>
+      <form method="post" action="{{ url_for('settings_page.search') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label for="search_provider">搜索提供方</label>
+          <select class="select" id="search_provider" name="search_provider">
+            <option value="bing" {{ 'selected' if search_cfg.provider == 'bing' }}>Bing（免 key，国内可用，推荐）</option>
+            <option value="duckduckgo" {{ 'selected' if search_cfg.provider == 'duckduckgo' }}>DuckDuckGo（免 key，部分网络不可达）</option>
+            <option value="searxng" {{ 'selected' if search_cfg.provider == 'searxng' }}>SearXNG（自托管）</option>
+            <option value="serper" {{ 'selected' if search_cfg.provider == 'serper' }}>Serper（Google SERP API）</option>
+            <option value="tavily" {{ 'selected' if search_cfg.provider == 'tavily' }}>Tavily（AI 调研 API）</option>
+          </select>
+          <p class="cron-hint">默认 Bing 无需任何配置且国内网络可用；也可自托管 SearXNG 或带 Key 的 API。</p>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="searxng_base_url">SearXNG 实例地址（可选）</label>
+            <input class="input" type="text" id="searxng_base_url" name="searxng_base_url" value="{{ search_cfg.searxng_base_url }}" placeholder="如 https://searx.example.com">
+          </div>
+          <div class="form-group">
+            <label for="serper_api_key">Serper API Key（可选）</label>
+            <input class="input" type="password" id="serper_api_key" name="serper_api_key" value="{{ search_cfg.serper_key }}" placeholder="sk-…" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="tavily_api_key">Tavily API Key（可选）</label>
+            <input class="input" type="password" id="tavily_api_key" name="tavily_api_key" value="{{ search_cfg.tavily_key }}" placeholder="tvly-…" autocomplete="off">
+          </div>
+        </div>
+        <div class="form-inline">
+          <button class="btn btn-primary" type="submit">保存搜索配置</button>
+          <button class="btn btn-ghost" type="button" data-test-search>测试搜索</button>
+          <span class="muted">保存后立即生效；AI 对话可直接说「帮我搜一下…」，结果带可点击的网页链接。</span>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if is_admin %}
+  <!-- ===== 用户管理 ===== -->
+  <div class="tab-panel" data-panel="users">
+    <div class="card">
+      <div class="card-head"><h2>用户管理</h2></div>
+      <form method="post" action="{{ url_for('settings_page.users') }}" class="form-inline" style="margin-bottom:16px">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input class="input" type="text" name="username" placeholder="用户名（至少 2 位）" required>
+        <input class="input" type="password" name="password" placeholder="密码（至少 6 位）" required>
+        <input class="input" type="text" name="timezone" value="Asia/Shanghai" placeholder="时区">
+        <button class="btn btn-primary" type="submit">创建用户</button>
+      </form>
+      <div class="card-head" style="margin-top:8px"><h2>飞书身份绑定</h2></div>
+      <p class="muted" style="margin-top:0">
+        让机器人在飞书里识别「是谁发的消息」：把每个用户的飞书 <code>open_id</code>（形如 <code>ou_xxxx</code>）填到对应用户名下保存。
+        未绑定的发送者发消息时，机器人会把 TA 的 open_id 回给他，复制过来即可。
+      </p>
+      {% if users %}
+      <table class="table">
+        <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>时区</th><th>创建时间</th><th>飞书 open_id</th></tr></thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td>{{ u.id }}</td>
+            <td>{{ u.username }}</td>
+            <td>{{ '管理员' if u.is_admin else '普通用户' }}</td>
+            <td>{{ u.timezone }}</td>
+            <td>{{ u.created_at }}</td>
+            <td>
+              <form method="post" action="{{ url_for('settings_page.users_bind') }}" class="form-inline" style="gap:6px">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="user_id" value="{{ u.id }}">
+                <input class="input input-sm" type="text" name="feishu_open_id" value="{{ u.feishu_open_id }}" placeholder="ou_xxxx" style="width:180px">
+                <button class="btn btn-sm btn-ghost" type="submit">保存</button>
+                {% if u.feishu_open_id %}
+                <button class="btn btn-sm btn-danger" type="submit" name="clear" value="1">解绑</button>
+                {% endif %}
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">还没有用户</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  /* 支持 ?tab=xxx 深链（安装配置中心跳转用） */
+  (function () {
+    var m = location.search.match(/[?&]tab=([a-z0-9-]+)/i);
+    if (m) {
+      var key = m[1];
+      var tab = document.querySelector('.tab[data-tab="' + key + '"]');
+      if (tab) tab.click();
+    }
+  })();
+
+  function syncFeishuModeHints() {
+    var sdk = document.querySelector('input[name="feishu_receive_mode"][value="sdk"]');
+    var isSdk = sdk && sdk.checked;
+    var cb = document.getElementById("feishu-callback-hint");
+    var sh = document.getElementById("feishu-sdk-hint");
+    if (cb) cb.style.display = isSdk ? "none" : "";
+    if (sh) sh.style.display = isSdk ? "" : "none";
+  }
+  document.querySelectorAll('input[name="feishu_receive_mode"]').forEach(function (el) {
+    el.addEventListener("change", syncFeishuModeHints);
+  });
+  syncFeishuModeHints();
+  (function pollFeishuWs() {
+    var box = document.getElementById("feishu-ws-status");
+    var sdk = document.querySelector('input[name="feishu_receive_mode"][value="sdk"]');
+    if (!box || !sdk || !sdk.checked) return;
+    fetch("/settings/api/feishu-ws-status").then(function (r) { return r.json(); }).then(function (r) {
+      if (!r || !r.ok || !r.data) return;
+      var d = r.data;
+      var html = "";
+      if (d.running || d.alive) html = '<span class="tag tag-green">长连接运行中</span>';
+      else html = '<span class="tag tag-yellow">未连接</span>';
+      if (d.error) html += ' <span class="muted">' + d.error + "</span>";
+      if (!d.sdk_installed) html += ' <span class="muted">未安装 lark-oapi</span>';
+      box.innerHTML = html;
+    }).catch(function () {});
+  })();
+  setInterval(function () {
+    var sdk = document.querySelector('input[name="feishu_receive_mode"][value="sdk"]');
+    if (sdk && sdk.checked) {
+      fetch("/settings/api/feishu-ws-status").then(function (r) { return r.json(); }).then(function (r) {
+        var box = document.getElementById("feishu-ws-status");
+        if (!box || !r || !r.ok || !r.data) return;
+        var d = r.data;
+        var html = "";
+        if (d.running || d.alive) html = '<span class="tag tag-green">长连接运行中</span>';
+        else html = '<span class="tag tag-yellow">未连接</span>';
+        if (d.error) html += ' <span class="muted">' + d.error + "</span>";
+        if (!d.sdk_installed) html += ' <span class="muted">未安装 lark-oapi</span>';
+        box.innerHTML = html;
+      }).catch(function () {});
+    }
+  }, 8000);
+
+  document.querySelectorAll('input[name="ai_persona_preset"]').forEach(function (el) {
+    el.addEventListener("change", function () {
+      document.querySelectorAll("[data-persona-blurb]").forEach(function (n) {
+        n.style.display = n.getAttribute("data-persona-blurb") === el.value ? "" : "none";
+      });
+    });
+  });
+
+  document.addEventListener("click", function (e) {
+    var gen = e.target.closest("[data-api-token-gen]");
+    if (gen) {
+      if (gen.getAttribute("data-exists") === "1" &&
+          !window.confirm("重新生成后，旧 Token 立即失效，已配置的 App 需要改成新 Token。继续？")) {
+        return;
+      }
+      window.api.post("/settings/api/api-token", { action: "generate" }).then(function (r) {
+        if (!r || !r.ok) { window.toast((r && r.error) || "生成失败", "error"); return; }
+        var wrap = document.getElementById("api-token-full-wrap");
+        var input = document.getElementById("api-token-full");
+        var status = document.getElementById("api-token-status");
+        if (wrap) wrap.style.display = "";
+        if (input) { input.value = r.data.token; input.select(); }
+        if (status) status.innerHTML = "已生成（结尾 <code>" + r.data.tail + "</code>）。请复制完整 Token，离开页面后无法再看到明文。";
+        gen.setAttribute("data-exists", "1");
+        gen.textContent = "重新生成";
+        window.toast("Token 已生成，请立即复制", "success");
+      }).catch(function (err) { window.toast(err.message || "生成失败", "error"); });
+      return;
+    }
+    var rev = e.target.closest("[data-api-token-revoke]");
+    if (rev) {
+      if (!window.confirm("撤销后 App 将无法再调用接口，直到重新生成。确定？")) return;
+      window.api.post("/settings/api/api-token", { action: "revoke" }).then(function (r) {
+        if (!r || !r.ok) { window.toast((r && r.error) || "撤销失败", "error"); return; }
+        window.toast("已撤销", "success");
+        location.reload();
+      }).catch(function (err) { window.toast(err.message || "撤销失败", "error"); });
+    }
+  });
+
+  /* 后台安全入口：随机生成 */
+  function randomEntry(len) {
+    var chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    var arr = new Uint8Array(len || 10);
+    if (window.crypto && window.crypto.getRandomValues) {
+      window.crypto.getRandomValues(arr);
+    } else {
+      for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+    }
+    var s = "";
+    for (var j = 0; j < arr.length; j++) s += chars[arr[j] % chars.length];
+    return s;
+  }
+  var genEntryBtn = document.getElementById("btn-gen-admin-entry");
+  if (genEntryBtn) {
+    genEntryBtn.addEventListener("click", function () {
+      var input = document.getElementById("admin_entry");
+      if (input) input.value = randomEntry(10);
+    });
+  }
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-test-channel]");
+    if (btn) {
+      var channel = btn.getAttribute("data-test-channel");
+      var origin = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "发送中…";
+      window.api.post("/settings/api/test-channel", { channel: channel }).then(function (r) {
+        btn.disabled = false;
+        btn.textContent = origin;
+        if (r && r.ok) {
+          var d = r.data || {};
+          if (d.status === "sent") {
+            window.toast("测试通知发送成功 🎉", "success");
+          } else {
+            window.toast("发送失败：" + (d.error || "未知错误"), "error");
+          }
+        } else {
+          window.toast((r && r.error) || "发送失败", "error");
+        }
+      }).catch(function () {
+        btn.disabled = false;
+        btn.textContent = origin;
+        window.toast("网络错误，请重试", "error");
+      });
+      return;
+    }
+    var presetBtn = e.target.closest("[data-llm-preset]");
+    if (presetBtn) {
+      var proto = presetBtn.getAttribute("data-protocol") || "openai";
+      var radios = document.querySelectorAll("input[name=llm_protocol]");
+      radios.forEach(function (r) { r.checked = r.value === proto; });
+      var url = document.getElementById("llm_base_url");
+      var model = document.getElementById("llm_model");
+      if (url) url.value = presetBtn.getAttribute("data-base") || "";
+      if (model) model.value = presetBtn.getAttribute("data-model") || "";
+      var hint = document.getElementById("llm-protocol-hint");
+      if (hint) {
+        hint.innerHTML = proto === "anthropic"
+          ? "Anthropic：走 <code>/v1/messages</code>，工具调用为 <code>tool_use</code>。地址填 <code>https://api.anthropic.com</code> 即可。"
+          : "OpenAI 兼容：走 <code>/chat/completions</code> + Function Calling。DeepSeek、官方 OpenAI、国内中转都选这项。";
+      }
+      if (url) {
+        url.focus();
+        url.classList.add("input-flash");
+        setTimeout(function () { url.classList.remove("input-flash"); }, 900);
+      }
+      var name = (presetBtn.textContent || "").trim();
+      var filled = presetBtn.getAttribute("data-base") || "";
+      window.toast("已填入 " + name + "：" + filled + "。请确认模型名并粘贴 Key 后保存", "success");
+      return;
+    }
+    var llmBtn = e.target.closest("[data-test-llm]");
+    if (llmBtn) {
+      var origin2 = llmBtn.textContent;
+      llmBtn.disabled = true;
+      llmBtn.textContent = "连接中…";
+      window.api.post("/settings/api/test-llm", {}).then(function (r) {
+        llmBtn.disabled = false;
+        llmBtn.textContent = origin2;
+        if (r && r.ok) {
+          window.toast("连接成功 🎉 " + ((r.data && r.data.reply) || ""), "success");
+        } else {
+          window.toast("连接失败：" + ((r && r.error) || "未知错误"), "error");
+        }
+      }).catch(function () {
+        llmBtn.disabled = false;
+        llmBtn.textContent = origin2;
+        window.toast("网络错误，请重试", "error");
+      });
+      return;
+    }
+    var fsBtn = e.target.closest("[data-test-feishu-app]");
+    if (fsBtn) {
+      var origin3 = fsBtn.textContent;
+      fsBtn.disabled = true;
+      fsBtn.textContent = "发送中…";
+      window.api.post("/settings/api/test-feishu-app", {}).then(function (r) {
+        fsBtn.disabled = false;
+        fsBtn.textContent = origin3;
+        if (r && r.ok) {
+          window.toast("飞书测试消息发送成功 🎉", "success");
+        } else {
+          window.toast("发送失败：" + ((r && r.error) || "未知错误"), "error");
+        }
+      }).catch(function () {
+        fsBtn.disabled = false;
+        fsBtn.textContent = origin3;
+        window.toast("网络错误，请重试", "error");
+      });
+      return;
+    }
+    var bkBtn = e.target.closest("[data-backup-now]");
+    if (bkBtn) {
+      var origin4 = bkBtn.textContent;
+      bkBtn.disabled = true;
+      bkBtn.textContent = "备份中…";
+      window.api.post("/settings/api/backup-now", {}).then(function (r) {
+        bkBtn.disabled = false;
+        bkBtn.textContent = origin4;
+        if (r && r.ok) {
+          var d = r.data || {};
+          window.toast("备份完成 🎉 " + d.file + "（" + Math.round((d.size || 0) / 1024) + " KB）", "success");
+          setTimeout(function () { location.reload(); }, 1200);
+        } else {
+          window.toast("备份失败：" + ((r && r.error) || "未知错误"), "error");
+        }
+      }).catch(function () {
+        bkBtn.disabled = false;
+        bkBtn.textContent = origin4;
+        window.toast("网络错误，请重试", "error");
+      });
+      return;
+    }
+    var imgBtn = e.target.closest("[data-test-image]");
+    if (imgBtn) {
+      var origin5 = imgBtn.textContent;
+      imgBtn.disabled = true;
+      imgBtn.textContent = "生成中（约 10-60 秒）…";
+      window.api.post("/settings/api/test-image", {}).then(function (r) {
+        imgBtn.disabled = false;
+        imgBtn.textContent = origin5;
+        if (r && r.ok) {
+          window.toast("测试图生成成功 🎉 已存入图片库", "success");
+        } else {
+          window.toast("生成失败：" + ((r && r.error) || "未知错误"), "error");
+        }
+      }).catch(function () {
+        imgBtn.disabled = false;
+        imgBtn.textContent = origin5;
+        window.toast("网络错误，请重试", "error");
+      });
+      return;
+    }
+    var ttsBtn = e.target.closest("[data-test-tts]");
+    if (ttsBtn) {
+      var origin6 = ttsBtn.textContent;
+      ttsBtn.disabled = true;
+      ttsBtn.textContent = "合成中…";
+      window.api.post("/settings/api/test-tts", {}).then(function (r) {
+        ttsBtn.disabled = false;
+        ttsBtn.textContent = origin6;
+        if (r && r.ok) {
+          window.toast("TTS 合成成功 🎉（" + ((r.data && r.data.bytes) || 0) + " 字节）", "success");
+        } else {
+          window.toast("合成失败：" + ((r && r.error) || "未知错误"), "error");
+        }
+      }).catch(function () {
+        ttsBtn.disabled = false;
+        ttsBtn.textContent = origin6;
+        window.toast("网络错误，请重试", "error");
+      });
+      return;
+    }
+    var schBtn = e.target.closest("[data-test-search]");
+    if (schBtn) {
+      var origin7 = schBtn.textContent;
+      schBtn.disabled = true;
+      schBtn.textContent = "搜索中…";
+      window.api.post("/settings/api/test-search", {}).then(function (r) {
+        schBtn.disabled = false;
+        schBtn.textContent = origin7;
+        if (r && r.ok) {
+          var d = r.data || {};
+          var first = (d.first && d.first.title) || "";
+          window.toast("搜索成功 🎉 共 " + (d.count || 0) + " 条，首条：" + first.slice(0, 30), "success");
+        } else {
+          window.toast("搜索失败：" + ((r && r.error) || "未知错误"), "error");
+        }
+      }).catch(function () {
+        schBtn.disabled = false;
+        schBtn.textContent = origin7;
+        window.toast("网络错误，请重试", "error");
+      });
+    }
+  });
+  document.querySelectorAll("input[name=llm_protocol]").forEach(function (r) {
+    r.addEventListener("change", function () {
+      var hint = document.getElementById("llm-protocol-hint");
+      if (!hint) return;
+      hint.innerHTML = r.value === "anthropic"
+        ? "Anthropic：走 <code>/v1/messages</code>，工具调用为 <code>tool_use</code>。地址填 <code>https://api.anthropic.com</code> 即可。"
+        : "OpenAI 兼容：走 <code>/chat/completions</code> + Function Calling。DeepSeek、官方 OpenAI、国内中转都选这项。";
+    });
+  });
+})();
+</script>
+{% endblock %}

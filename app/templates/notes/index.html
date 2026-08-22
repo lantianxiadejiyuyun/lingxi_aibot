@@ -1,0 +1,142 @@
+{% extends 'base.html' %}
+{% block title %}笔记{% endblock %}
+{% block page_title %}笔记{% endblock %}
+{% block content %}
+<div class="filter-row">
+  <form class="form-inline" method="get" action="{{ url_for('notes.index') }}" style="align-items:center">
+    <input class="input" type="text" name="q" value="{{ q }}" placeholder="搜索标题 / 内容 / 标签…" style="min-width:260px">
+    <button class="btn btn-primary" type="submit">搜索</button>
+    {% if q %}<a class="btn btn-ghost" href="{{ url_for('notes.index') }}">清除</a>{% endif %}
+  </form>
+  <button class="btn btn-primary" type="button" data-modal-open="#note-modal" id="btn-new-note" style="margin-left:auto"><i class="bi bi-plus-lg"></i> 新建笔记</button>
+</div>
+
+{% if notes %}
+<div class="notes-grid">
+  {% for n in notes %}
+  <div class="note-card" data-modal-open="#note-modal"
+       data-id="{{ n.id }}" data-title="{{ n.title }}"
+       data-content="{{ n.content }}" data-tags="{{ n.tags|join(',') }}">
+    <h3>{{ n.title }}</h3>
+    {% if n.content %}<div class="note-preview">{{ (n.content or '')[:120] }}</div>{% endif %}
+    <div class="note-meta">
+      {% if n.tags %}{% for t in n.tags %}<span class="tag">{{ t }}</span>{% endfor %}{% endif %}
+      <span style="margin-left:6px">更新于 {{ n.updated_at }}</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">{% if q %}没有找到与「{{ q }}」相关的笔记{% else %}还没有笔记，点击右上角「新建笔记」开始记录 📝{% endif %}</p>
+{% endif %}
+
+<!-- 新建 / 编辑弹窗 -->
+<div class="modal-mask" id="note-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="note-modal-title">新建笔记</h3>
+      <button class="modal-close" data-modal-close>×</button>
+    </div>
+    <form id="note-form">
+      <input type="hidden" name="note_id" id="note-id" value="">
+      <div class="form-group">
+        <label for="note-title">标题</label>
+        <input class="input" type="text" id="note-title" name="title" placeholder="笔记标题" required>
+      </div>
+      <div class="form-group">
+        <label for="note-content">内容</label>
+        <textarea class="textarea" id="note-content" name="content" rows="8" style="min-height:200px" placeholder="写下你的想法…"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="note-tags">标签（逗号分隔）</label>
+        <input class="input" type="text" id="note-tags" name="tags" placeholder="如：工作, 灵感">
+      </div>
+      <div class="form-row">
+        <button class="btn btn-primary" type="submit" id="note-save">保存</button>
+        <button class="btn btn-danger" type="button" id="note-delete" style="display:none">删除</button>
+        <button class="btn btn-ghost" type="button" data-modal-close>取消</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var idInput = document.getElementById("note-id");
+  var titleInput = document.getElementById("note-title");
+  var contentInput = document.getElementById("note-content");
+  var tagsInput = document.getElementById("note-tags");
+  var modalTitle = document.getElementById("note-modal-title");
+  var delBtn = document.getElementById("note-delete");
+  var form = document.getElementById("note-form");
+
+  function resetForm() {
+    form.reset();
+    idInput.value = "";
+    modalTitle.textContent = "新建笔记";
+    delBtn.style.display = "none";
+  }
+
+  /* 点击笔记卡片：填充表单（弹窗打开由 app.js 的 data-modal-open 处理） */
+  document.addEventListener("click", function (e) {
+    var card = e.target.closest(".note-card");
+    if (card) {
+      idInput.value = card.getAttribute("data-id") || "";
+      titleInput.value = card.getAttribute("data-title") || "";
+      contentInput.value = card.getAttribute("data-content") || "";
+      tagsInput.value = card.getAttribute("data-tags") || "";
+      modalTitle.textContent = "编辑笔记";
+      delBtn.style.display = "";
+      return;
+    }
+    if (e.target.closest("#btn-new-note")) {
+      resetForm();
+    }
+  });
+
+  /* 保存：新建或更新 */
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var id = idInput.value.trim();
+    var payload = {
+      title: titleInput.value.trim(),
+      content: contentInput.value,
+      tags: tagsInput.value.trim()
+    };
+    var req = id
+      ? window.api.post("/notes/api/update", Object.assign({ note_id: id }, payload))
+      : window.api.post("/notes/api/create", payload);
+    req.then(function (r) {
+      if (r && r.ok) {
+        window.toast(id ? "笔记已更新" : "笔记已创建", "success");
+        window.location.reload();
+      } else {
+        window.toast((r && r.error) || "保存失败", "error");
+      }
+    }).catch(function () {
+      window.toast("网络错误，请重试", "error");
+    });
+  });
+
+  /* 删除：软删除 */
+  delBtn.addEventListener("click", function () {
+    var id = idInput.value.trim();
+    if (!id) return;
+    if (!window.confirm("确定删除这篇笔记吗？删除后不可恢复。")) return;
+    window.api.post("/notes/api/delete", { note_id: id }).then(function (r) {
+      if (r && r.ok) {
+        window.toast("笔记已删除", "success");
+        window.location.reload();
+      } else {
+        window.toast((r && r.error) || "删除失败", "error");
+      }
+    }).catch(function () {
+      window.toast("网络错误，请重试", "error");
+    });
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,94 @@
+# ============================================================
+# 灵犀 AiBot — Docker 一键部署（方式二，可选）
+#
+# 使用：
+#   cp .env.example .env    # 修改 MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD / LLM_API_KEY / SECRET_KEY / 域名
+#   docker compose up -d --build
+#   # 首次启动会自动执行数据库初始化（init 服务）
+#   # 然后访问 http://admin.eugenstudio.cn/setup 创建管理员
+#
+# 三种用法：
+#   A. 完整自包含（本文件默认）：app + mysql + nginx 三个容器，适合干净服务器
+#   B. 只跑 app 容器，接宝塔/宿主的 MySQL 与 Nginx：
+#      - 注释掉 db / web 服务
+#      - app 的 environment 里 MYSQL_HOST 改为宿主机 IP（容器访问宿主用 172.17.0.1）
+#      - 给 app 加 ports: ["8000:8000"]，宝塔 Nginx 反代 127.0.0.1:8000（配置见 nginx/）
+#   C. 宝塔「Docker 管理器」导入本 compose 文件，用法同 A
+#
+# 详细说明见 README-Docker.md
+# ============================================================
+
+services:
+  # ---- MySQL 8（自包含方案才需要；宝塔方案注释掉本服务）----
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DB:-ai_bot}
+      MYSQL_USER: ${MYSQL_USER:-ai_bot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 设置 MYSQL_PASSWORD}
+      TZ: ${APP_TIMEZONE:-Asia/Shanghai}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    # 不映射端口到宿主（避免与宝塔 MySQL 3306 冲突）；需要外部调试时取消下行注释
+    # ports: ["3307:3306"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ---- 一次性数据库初始化（幂等，可重复执行；首次自动运行）----
+  init:
+    build: .
+    image: aibot:latest
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+    command: ["python", "-m", "flask", "init-db"]
+    volumes:
+      - ./data:/app/data
+
+  # ---- 应用（waitress 单进程多线程，监听容器内 8000，不对外暴露）----
+  app:
+    build: .
+    image: aibot:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: "3306"
+    volumes:
+      - ./data:/app/data
+    # 方式 B（接宝塔 Nginx）时取消下行注释：
+    # ports: ["8000:8000"]
+
+  # ---- Nginx 反代（自包含方案；SSL 证书放 ./certs/ 后启用 443）----
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "${WEB_HTTP_PORT:-80}:80"
+      - "${WEB_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/docker.conf:/etc/nginx/conf.d/aibot.conf:ro
+      # 证书目录：放 fullchain.pem + privkey.pem，并启用 docker.conf 中的 443 server 块
+      - ./certs:/etc/nginx/certs:ro
+
+volumes:
+  mysql_data:

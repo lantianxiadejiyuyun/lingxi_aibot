@@ -1,0 +1,80 @@
+# 灵犀 Docker 编排
+# 用法见 docs/部署.md
+#
+#   接已有 MySQL、只要应用：  docker compose up -d --build app
+#   自带 MySQL 8：           docker compose --profile mysql up -d --build app db
+#   有域名 + Caddy HTTPS：   先改 docker/Caddyfile，再 docker compose up -d --build
+#                           （会同时启动 app 与 caddy；无域名请只启动 app）
+#
+# .env 必须存在（cp .env.example .env）。容器内连库：
+#   宿主机 MySQL → MYSQL_HOST=host.docker.internal
+#   本文件 db 服务 → MYSQL_HOST=db   （不要写 127.0.0.1）
+
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      FLASK_APP: wsgi:app
+      TZ: Asia/Shanghai
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    # 独立网页 HTTP 端口，须与 .env 的 PAGE_PORT 一致；不用可注释掉
+    ports:
+      - "${PAGE_PORT:-8080}:${PAGE_PORT:-8080}"
+      # 不用 Caddy、直接 IP 访问后台时取消下一行注释
+      # - "8000:8000"
+    restart: unless-stopped
+    networks: [aibot]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [aibot]
+
+  db:
+    image: mysql:8.0
+    profiles: ["mysql"]
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DB:-ai_bot}
+      MYSQL_USER: ${MYSQL_USER:-ai_bot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 设置 MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    networks: [aibot]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+networks:
+  aibot:
+
+volumes:
+  caddy_data:
+  caddy_config:
+  mysql_data:

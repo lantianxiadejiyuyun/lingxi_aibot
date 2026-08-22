@@ -1,0 +1,329 @@
+{% extends 'base.html' %}
+{% block title %}安装引导{% endblock %}
+
+{% block fullpage %}
+<style>
+  .setup-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px 18px; }
+  .setup-card { max-width: 640px; width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 28px 32px; }
+  .setup-card .logo { font-size: 38px; text-align: center; }
+  .setup-card h1 { text-align: center; font-size: 21px; margin: 6px 0 4px; }
+  .setup-card .sub { text-align: center; color: var(--text-2); font-size: 13.5px; margin-bottom: 18px; }
+  .setup-card h2 { font-size: 15.5px; margin: 16px 0 12px; }
+  .setup-card .warn { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin: 12px 0; }
+  .setup-card .okbox { background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin: 12px 0; }
+  .setup-card .errbox { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin: 12px 0; color: #b91c1c; white-space: pre-wrap; }
+  .setup-card .msgbox { display: none; }
+  .setup-card .actions { margin-top: 16px; }
+  .setup-card label { display: block; font-size: 13px; color: var(--text-2); margin: 10px 0 4px; }
+  .setup-card input[type=text], .setup-card input[type=password], .setup-card input[type=number] { width: 100%; }
+  .setup-card .row2 { display: flex; gap: 12px; }
+  .setup-card .row2 > div { flex: 1; }
+  .setup-card .hint { font-size: 12.5px; color: var(--text-3); margin-top: 4px; }
+  .setup-card .done { text-align: center; color: #047857; font-size: 14px; padding: 8px 0; }
+  .muted { color: var(--text-2); font-size: 12.5px; }
+  /* 步骤条 */
+  .steps { display: flex; gap: 6px; margin: 14px 0 6px; }
+  .steps .step { flex: 1; text-align: center; font-size: 12.5px; padding: 7px 4px; border-radius: 8px; background: var(--bg-2); color: var(--text-3); border: 1px solid var(--border); }
+  .steps .step.cur { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .steps .step.done { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
+</style>
+
+<div class="setup-page">
+  <div class="setup-card">
+    <div class="logo">🤖</div>
+    <h1>灵犀 安装引导</h1>
+    <p class="sub">AI 个人工作生活管理基座 · 系统尚未初始化，请按步骤完成安装</p>
+
+    <div class="warn" style="display:flex; flex-direction:column; gap:8px; text-align:left;">
+      <label style="margin:0">🔑 安装令牌（安全校验，必填）</label>
+      <input type="text" id="setup-token" placeholder="粘贴安装令牌" autocomplete="off">
+      <span class="muted" style="margin:0">请读取服务器上的文件 <code>{{ setup_token_hint }}</code> 的内容粘贴到上方；
+      未携带正确令牌时，所有安装操作都会被拒绝（防止安装窗口期被他人抢注管理员）。</span>
+    </div>
+
+    <div class="steps">
+      <div class="step {% if status.db_ok %}done{% else %}cur{% endif %}">① 数据库</div>
+      <div class="step {% if status.tables_ok %}done{% elif status.db_ok %}cur{% endif %}">② 初始化</div>
+      <div class="step {% if status.admin_ok %}done{% elif status.tables_ok %}cur{% endif %}">③ 管理员</div>
+      <div class="step {% if status.admin_ok %}cur{% endif %}">④ 基础配置</div>
+    </div>
+
+    {% if not status.db_ok %}
+    {# ---------- 步骤 1：数据库配置 ---------- #}
+    <h2>① 配置数据库连接</h2>
+    <p class="muted">填写 MySQL 连接信息，保存后写入项目 <code>.env</code> 并立即生效（无需手动编辑、无需重启）。</p>
+    <form id="db-form" autocomplete="off">
+      <div class="row2">
+        <div>
+          <label>主机（Host）</label>
+          <input type="text" name="host" value="{{ dbcfg.host }}" placeholder="127.0.0.1">
+        </div>
+        <div>
+          <label>端口（Port）</label>
+          <input type="number" name="port" value="{{ dbcfg.port }}" placeholder="3306">
+        </div>
+      </div>
+      <label>用户名（User）</label>
+      <input type="text" name="user" value="{{ dbcfg.user }}" placeholder="ai_bot">
+      <label>密码（Password）</label>
+      <input type="password" name="password" placeholder="数据库密码" data-pw>
+      <label>数据库名（Database）</label>
+      <input type="text" name="db" value="{{ dbcfg.db }}" placeholder="ai_bot">
+      <div class="warn">数据库需要先创建好（宝塔「数据库」页新建，字符集 utf8mb4），本页不负责建库。</div>
+      <div class="msgbox" id="db-msg"></div>
+      <div class="actions" style="display:flex; gap:10px;">
+        <button type="button" class="btn btn-ghost" id="btn-db-test" style="flex:1"><i class="bi bi-plug"></i> 测试连接</button>
+        <button type="submit" class="btn btn-primary" id="btn-db-save" style="flex:1"><i class="bi bi-save"></i> 保存配置</button>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if status.db_ok and not status.tables_ok %}
+    {# ---------- 步骤 2：初始化数据库 ---------- #}
+    <h2>② 初始化数据库</h2>
+    <div class="okbox">✓ 数据库连接成功</div>
+    <p class="muted">点击「开始初始化」：自动创建数据表、补齐字段，并写入内置定时任务（早报/备份/周报等 10 项）。</p>
+    <div class="msgbox" id="init-msg"></div>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" id="btn-init"><i class="bi bi-rocket-takeoff"></i> 开始初始化</button>
+    </div>
+    {% endif %}
+
+    {% if status.db_ok and status.tables_ok and not status.admin_ok %}
+    {# ---------- 步骤 3：创建管理员 ---------- #}
+    <h2>③ 创建管理员账号</h2>
+    <div class="okbox">✓ 数据库初始化完成，请创建管理员</div>
+    <form id="admin-form" autocomplete="off">
+      <label>用户名</label>
+      <input type="text" name="username" placeholder="admin" required>
+      <label>密码（至少 6 位）</label>
+      <input type="password" name="password" placeholder="设置登录密码" required>
+      <div class="msgbox" id="admin-msg"></div>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary" id="btn-admin"><i class="bi bi-person-check"></i> 创建并登录</button>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if status.db_ok and status.tables_ok and status.admin_ok %}
+    {# ---------- 步骤 4：基础配置（可选，可跳过） ---------- #}
+    <h2>④ 基础配置（可选）</h2>
+    <div class="okbox">✓ 系统已就绪。以下配置可现在填写（自动写入 <code>.env</code>），也可跳过、装完后在「设置」页配置。</div>
+    <form id="extra-form" autocomplete="off">
+      <h2 style="font-size:14px">🤖 AI 模型</h2>
+      <div class="row2">
+        <div>
+          <label>API 地址（BaseURL）</label>
+          <input type="text" name="llm_base_url" value="{{ extracfg.llm_base_url }}" placeholder="https://api.deepseek.com/v1">
+        </div>
+        <div>
+          <label>模型名</label>
+          <input type="text" name="llm_model" value="{{ extracfg.llm_model }}" placeholder="deepseek-chat">
+        </div>
+      </div>
+      <label>API Key</label>
+      <input type="password" name="llm_api_key" placeholder="sk-…（留空则不修改）">
+
+      <h2 style="font-size:14px">🌐 域名与后台安全入口（可选）</h2>
+      <div class="row2">
+        <div>
+          <label>后台域名</label>
+          <input type="text" name="admin_domain" value="{{ extracfg.admin_domain }}" placeholder="admin.example.com">
+        </div>
+        <div>
+          <label>网页/主域名</label>
+          <input type="text" name="page_domain" value="{{ extracfg.page_domain }}" placeholder="eugenstudio.cn">
+        </div>
+      </div>
+      <label>后台安全入口（可选，单域名模式）</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" name="admin_entry" id="setup-admin-entry" value="{{ extracfg.admin_entry }}" placeholder="如 abc123（留空则不启用）" style="flex:1">
+        <button type="button" class="btn btn-ghost" id="btn-gen-setup-entry">🎲 随机生成</button>
+      </div>
+      <div class="hint">设置后，后台需通过 <code>/&lt;入口&gt;</code> 访问（如 <code>https://你的域名/abc123/login</code>），不带入口访问后台路径一律 404；公开网页仍在 <code>/&lt;slug&gt;</code>。</div>
+
+      <h2 style="font-size:14px">🔔 通知渠道（可选）</h2>
+      <label>Server酱 SendKey</label>
+      <input type="password" name="sc_key" placeholder="留空则不配置">
+      <label>飞书群机器人 Webhook</label>
+      <input type="text" name="feishu_webhook_url" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…">
+      <label>飞书加签密钥（可选）</label>
+      <input type="password" name="feishu_secret" placeholder="留空则不加签">
+      <label>默认推送渠道（逗号分隔）</label>
+      <input type="text" name="default_channels" value="{{ extracfg.default_channels }}" placeholder="inapp,serverchan,feishu">
+      <div class="hint">配置保存后需重启应用才全部生效；之后随时可在「设置」页修改。</div>
+      <div class="msgbox" id="extra-msg"></div>
+      <div class="actions" style="display:flex; gap:10px;">
+        <button type="button" class="btn btn-ghost" id="btn-extra-skip" style="flex:1">跳过，直接登录</button>
+        <button type="submit" class="btn btn-primary" id="btn-extra-save" style="flex:1"><i class="bi bi-save"></i> 保存并登录</button>
+      </div>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  function showMsg(box, html, ok) {
+    box.style.display = "block";
+    box.className = "msgbox " + (ok ? "okbox" : "errbox");
+    box.innerHTML = html;
+  }
+  function disable(btn, on) {
+    if (!btn) return;
+    btn.disabled = on;
+    btn.style.opacity = on ? 0.6 : 1;
+  }
+  /* 后台安全入口：随机生成 */
+  function randomEntry(len) {
+    var chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    var arr = new Uint8Array(len || 10);
+    if (window.crypto && window.crypto.getRandomValues) {
+      window.crypto.getRandomValues(arr);
+    } else {
+      for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+    }
+    var s = "";
+    for (var j = 0; j < arr.length; j++) s += chars[arr[j] % chars.length];
+    return s;
+  }
+  var genEntryBtn = document.getElementById("btn-gen-setup-entry");
+  if (genEntryBtn) {
+    genEntryBtn.addEventListener("click", function () {
+      var input = document.getElementById("setup-admin-entry");
+      if (input) input.value = randomEntry(10);
+    });
+  }
+  var tokenInput = document.getElementById("setup-token");
+  function post(url, data) {
+    data = data || {};
+    if (tokenInput) { data.setup_token = tokenInput.value.trim(); }
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data || {})
+    }).then(function (r) { return r.json(); });
+  }
+
+  // ---------- 步骤 1：数据库配置 ----------
+  var dbForm = document.getElementById("db-form");
+  if (dbForm) {
+    var box = document.getElementById("db-msg");
+    var btnTest = document.getElementById("btn-db-test");
+    var btnSave = document.getElementById("btn-db-save");
+    function collect() {
+      return {
+        host: dbForm.host.value.trim() || "127.0.0.1",
+        port: parseInt(dbForm.port.value, 10) || 3306,
+        user: dbForm.user.value.trim(),
+        password: dbForm.password.value,
+        db: dbForm.db.value.trim()
+      };
+    }
+    btnTest.addEventListener("click", function () {
+      disable(btnTest, true);
+      post("/setup/api/db-test", collect()).then(function (r) {
+        showMsg(box, r.ok ? "✓ " + (r.error || "连接成功") : "✗ " + (r.error || "连接失败"), r.ok);
+      }).catch(function (e) { showMsg(box, "请求失败：" + e, false); })
+        .finally(function () { disable(btnTest, false); });
+    });
+    dbForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var d = collect();
+      if (!d.password) { showMsg(box, "请填写数据库密码", false); return; }
+      disable(btnSave, true);
+      post("/setup/api/db-save", d).then(function (r) {
+        if (r.ok) { location.reload(); }
+        else { showMsg(box, "✗ " + (r.error || "保存失败"), false); }
+      }).catch(function (e) { showMsg(box, "请求失败：" + e, false); })
+        .finally(function () { disable(btnSave, false); });
+    });
+  }
+
+  // ---------- 步骤 2：初始化 ----------
+  var btnInit = document.getElementById("btn-init");
+  if (btnInit) {
+    var initBox = document.getElementById("init-msg");
+    btnInit.addEventListener("click", function () {
+      disable(btnInit, true);
+      btnInit.innerHTML = '初始化中…';
+      post("/setup/api/init-db", {}).then(function (r) {
+        if (r.ok) {
+          var list = (r.messages || []).map(function (m) { return "• " + m; }).join("<br>");
+          showMsg(initBox, list, true);
+          setTimeout(function () { location.reload(); }, 1200);
+        } else {
+          showMsg(initBox, "✗ " + (r.error || "初始化失败"), false);
+          disable(btnInit, false);
+          btnInit.innerHTML = '<i class="bi bi-rocket-takeoff"></i> 开始初始化';
+        }
+      }).catch(function (e) {
+        showMsg(initBox, "请求失败：" + e, false);
+        disable(btnInit, false);
+        btnInit.innerHTML = '<i class="bi bi-rocket-takeoff"></i> 开始初始化';
+      });
+    });
+  }
+
+  // ---------- 步骤 3：管理员 ----------  var adminForm = document.getElementById("admin-form");
+  if (adminForm) {
+    var adminBox = document.getElementById("admin-msg");
+    var btnAdmin = document.getElementById("btn-admin");
+    adminForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var username = adminForm.username.value.trim();
+      var password = adminForm.password.value;
+      if (username.length < 2) { showMsg(adminBox, "用户名至少 2 个字符", false); return; }
+      if (password.length < 6) { showMsg(adminBox, "密码至少 6 位", false); return; }
+      disable(btnAdmin, true);
+      post("/setup/api/create-admin", { username: username, password: password }).then(function (r) {
+        if (r.ok) {
+          showMsg(adminBox, "✓ " + (r.message || "创建成功"), true);
+          setTimeout(function () { location.href = "{{ url_for('auth.login') }}"; }, 1200);
+        } else {
+          showMsg(adminBox, "✗ " + (r.error || "创建失败"), false);
+          disable(btnAdmin, false);
+        }
+      }).catch(function (e) {
+        showMsg(adminBox, "请求失败：" + e, false);
+        disable(btnAdmin, false);
+      });
+    });
+  }
+
+  // ---------- 步骤 4：基础配置（可选） ----------
+  var extraForm = document.getElementById("extra-form");
+  if (extraForm) {
+    var extraBox = document.getElementById("extra-msg");
+    var btnExtra = document.getElementById("btn-extra-save");
+    var btnSkip = document.getElementById("btn-extra-skip");
+    btnSkip.addEventListener("click", function () { location.href = "{{ url_for('auth.login') }}"; });
+    extraForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      disable(btnExtra, true);
+      var data = {};
+      ["llm_base_url", "llm_api_key", "llm_model", "admin_domain", "page_domain",
+       "admin_entry", "sc_key", "feishu_webhook_url", "feishu_secret",
+       "default_channels"].forEach(function (n) {
+        data[n] = extraForm[n].value.trim();
+      });
+      post("/setup/api/extra-save", data).then(function (r) {
+        if (r.ok) {
+          showMsg(extraBox, "✓ " + (r.message || "已保存"), true);
+          setTimeout(function () { location.href = "{{ url_for('auth.login') }}"; }, 1500);
+        } else {
+          showMsg(extraBox, "✗ " + (r.error || "保存失败"), false);
+          disable(btnExtra, false);
+        }
+      }).catch(function (e) {
+        showMsg(extraBox, "请求失败：" + e, false);
+        disable(btnExtra, false);
+      });
+    });
+  }
+})();
+</script>
+{% endblock %}
