@@ -15,6 +15,7 @@ r = s.post(BASE + "/login", data={"csrf_token": token, "username": "admin", "pas
            allow_redirects=False)
 if r.status_code != 302:
     print("登录失败"); sys.exit(1)
+s.headers["X-CSRFToken"] = token
 
 # 让 AI 生成网页
 prompt = ("帮我创建一个网页：标题是「AI 测试网页」，内容是一个简单的个人主页 HTML"

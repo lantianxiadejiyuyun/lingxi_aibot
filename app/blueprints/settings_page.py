@@ -9,7 +9,7 @@ from flask_wtf import FlaskForm
 from wtforms import PasswordField, SelectField
 from wtforms.validators import DataRequired, EqualTo, Length
 
-from app.extensions import csrf, db
+from app.extensions import db
 from app.models.scheduled_job import (
     ACTION_EVENING_REVIEW, ACTION_MORNING_BRIEFING, ACTION_NOON_BRIEFING, ScheduledJob,
 )
@@ -22,9 +22,33 @@ from app.ai.prompts import (
     DEFAULT_PERSONA_NAME, DEFAULT_PERSONA_PRESET, DEFAULT_PERSONA_VERBOSITY,
     PERSONA_PRESETS, load_persona,
 )
-from app.services.settings_service import get_setting_from, set_setting
+from app.services.settings_service import get_setting, get_setting_from, get_own_setting, set_setting
 
 bp = Blueprint("settings_page", __name__, url_prefix="/settings")
+
+
+def _is_admin() -> bool:
+    return bool(getattr(current_user, "is_admin", False))
+
+
+def _admin_denied():
+    flash("仅管理员可执行该操作", "error")
+    return redirect(url_for("settings_page.index"))
+
+
+def _secret_view(key: str, env_key: str | None = None) -> dict:
+    """敏感配置回显视图（防跨用户密钥泄露）。
+
+    只回显当前用户自己配置的明文；自己未配置时回显空串，
+    全局（user_id=0）/.env 的值不再下发到页面。
+    using_global 供模板提示「正在使用系统全局配置（值已隐藏）」。
+    """
+    own = str(get_own_setting(key, "") or "").strip()
+    using_global = False
+    if not own:
+        env_default = current_app.config.get(env_key, "") if env_key else ""
+        using_global = bool(str(get_setting(key, env_default, user_id=0) or "").strip())
+    return {"value": own, "using_global": using_global}
 
 _TIMEZONE_CHOICES = [
     ("Asia/Shanghai", "上海 Asia/Shanghai"),
@@ -109,9 +133,9 @@ def index():
 
     ai = _ai_view()
     channels = {
-        "sc_key": get_setting_from("sc_key", "SC_KEY", ""),
-        "feishu_webhook_url": get_setting_from("feishu_webhook_url", "FEISHU_WEBHOOK_URL", ""),
-        "feishu_secret": get_setting_from("feishu_secret", "FEISHU_SECRET", ""),
+        "sc_key": _secret_view("sc_key", "SC_KEY"),
+        "feishu_webhook_url": _secret_view("feishu_webhook_url", "FEISHU_WEBHOOK_URL"),
+        "feishu_secret": _secret_view("feishu_secret", "FEISHU_SECRET"),
         "default_channels": default_channels(),
     }
     scene_cfg = {}
@@ -134,9 +158,9 @@ def index():
 
     feishu_app = {
         "app_id": get_setting_from("feishu_app_id", "FEISHU_APP_ID", ""),
-        "app_secret": get_setting_from("feishu_app_secret", "FEISHU_APP_SECRET", ""),
-        "event_token": get_setting_from("feishu_event_token", "FEISHU_EVENT_TOKEN", ""),
-        "encrypt_key": get_setting_from("feishu_event_encrypt_key", "FEISHU_EVENT_ENCRYPT_KEY", ""),
+        "app_secret": _secret_view("feishu_app_secret", "FEISHU_APP_SECRET"),
+        "event_token": _secret_view("feishu_event_token", "FEISHU_EVENT_TOKEN"),
+        "encrypt_key": _secret_view("feishu_event_encrypt_key", "FEISHU_EVENT_ENCRYPT_KEY"),
         "target": get_setting_from("feishu_app_target", "", ""),
         "target_type": get_setting_from("feishu_app_target_type", "", "chat_id"),
         "callback_url": _feishu_callback_url(),
@@ -180,7 +204,7 @@ def index():
         "page_base_url": page_site_base_url(),
         "page_site": page_site_status(),
     }
-    tts_key = str(get_setting_from("tts_api_key", "TTS_API_KEY", "") or "")
+    tts_key = str(get_own_setting("tts_api_key", "") or "").strip()
     voice = {
         "base_url": str(get_setting_from("tts_base_url", "TTS_BASE_URL", "") or ""),
         "model": str(get_setting_from("tts_model", "TTS_MODEL", "") or ""),
@@ -191,10 +215,10 @@ def index():
     search_cfg = {
         "provider": str(get_setting_from("search_provider", "SEARCH_PROVIDER", "bing") or "bing"),
         "searxng_base_url": str(get_setting_from("searxng_base_url", "SEARXNG_BASE_URL", "") or ""),
-        "serper_key": str(get_setting_from("serper_api_key", "SERPER_API_KEY", "") or ""),
-        "tavily_key": str(get_setting_from("tavily_api_key", "TAVILY_API_KEY", "") or ""),
+        "serper_key": _secret_view("serper_api_key", "SERPER_API_KEY"),
+        "tavily_key": _secret_view("tavily_api_key", "TAVILY_API_KEY"),
     }
-    img_key = str(get_setting_from("image_api_key", "IMAGE_API_KEY", "") or "")
+    img_key = str(get_own_setting("image_api_key", "") or "").strip()
     image = {
         "base_url": str(get_setting_from("image_base_url", "IMAGE_BASE_URL", "") or ""),
         "model": str(get_setting_from("image_model", "IMAGE_MODEL", "") or ""),
@@ -202,7 +226,7 @@ def index():
         "api_key_configured": bool(img_key),
         "api_key_tail": img_key[-4:] if len(img_key) >= 4 else (img_key or "****"),
     }
-    vision_key = str(get_setting_from("vision_api_key", "VISION_API_KEY", "") or "")
+    vision_key = str(get_own_setting("vision_api_key", "") or "").strip()
     vision = {
         "base_url": str(get_setting_from("vision_base_url", "VISION_BASE_URL", "") or ""),
         "model": str(get_setting_from("vision_model", "VISION_MODEL", "") or ""),
@@ -473,7 +497,9 @@ def feishu_app():
     if mode not in ("callback", "sdk"):
         mode = "callback"
     set_setting("feishu_receive_mode", mode)
-    set_setting("feishu_receive_mode", mode, user_id=0)
+    # 全局接收模式影响飞书长连接的启停，仅管理员可写
+    if _is_admin():
+        set_setting("feishu_receive_mode", mode, user_id=0)
     try:
         from app.services.feishu_ws import restart as restart_feishu_ws
 
@@ -507,10 +533,11 @@ def backup():
     set_setting("backup_keep", keep)
     set_setting("backup_channel", channel)
 
-    # 同步内置任务：cron = '分 时 * * *'，开关同步
+    # 同步内置任务：cron = '分 时 * * *'，开关同步（仅本人任务）
     from app.models.scheduled_job import ACTION_DATA_BACKUP, ScheduledJob
 
-    job = ScheduledJob.query.filter_by(job_key=ACTION_DATA_BACKUP).first()
+    job = ScheduledJob.query.filter_by(
+        job_key=ACTION_DATA_BACKUP, user_id=current_user.id).first()
     if job is not None:
         hour, minute = time_str.split(":")
         job.cron = f"{int(minute)} {int(hour)} * * *"
@@ -525,11 +552,13 @@ def backup():
 @bp.route("/backups/download/<path:name>")
 @login_required
 def backup_download(name):
-    """下载备份文件（校验文件名，仅限备份目录内 backup-*.json）。"""
+    """下载备份文件（仅管理员；校验文件名，仅限备份目录内 backup-*.json）。"""
     from pathlib import Path
 
     from flask import send_file
 
+    if not _is_admin():
+        return _admin_denied()
     backup_dir = Path(current_app.config["BACKUP_DIR"])
     p = (backup_dir / name).resolve()
     if (p.parent != backup_dir.resolve()
@@ -544,9 +573,11 @@ def backup_download(name):
 @bp.route("/backups/delete/<path:name>", methods=["POST"])
 @login_required
 def backup_delete(name):
-    """删除一个备份文件（POST + CSRF）。"""
+    """删除一个备份文件（仅管理员；POST + CSRF）。"""
     from app.services.backup_service import delete_backup
 
+    if not _is_admin():
+        return _admin_denied()
     try:
         delete_backup(name)
         flash(f"已删除备份：{name}", "success")
@@ -558,13 +589,15 @@ def backup_delete(name):
 @bp.route("/export", methods=["POST"])
 @login_required
 def export_data():
-    """一键导出：生成最新备份 JSON 并直接下载到本地（POST：避免刷新/爬虫重复备份）。"""
+    """一键导出（仅管理员）：生成最新备份 JSON 并直接下载到本地。"""
     from pathlib import Path
 
     from flask import send_file
 
     from app.services.backup_service import backup_to_json
 
+    if not _is_admin():
+        return _admin_denied()
     try:
         path = backup_to_json()
     except Exception:  # noqa: BLE001
@@ -577,10 +610,12 @@ def export_data():
 @bp.route("/reset", methods=["POST"])
 @login_required
 def reset_data():
-    """一键重置：清空业务数据（保留账号与系统配置），重置前自动备份。"""
+    """一键重置（仅管理员）：清空业务数据（保留账号与系统配置），重置前自动备份。"""
     from app.services.backup_service import backup_to_json
     from app.services.data_service import reset_all_data
 
+    if not _is_admin():
+        return _admin_denied()
     password = request.form.get("password") or ""
     confirm = (request.form.get("confirm_word") or "").strip()
 
@@ -611,13 +646,15 @@ def reset_data():
 @bp.route("/restore", methods=["POST"])
 @login_required
 def restore_backup():
-    """从备份恢复数据：可上传备份文件，或选择服务器已有备份。"""
+    """从备份恢复数据（仅管理员）：可上传备份文件，或选择服务器已有备份。"""
     import os
     import tempfile
     from pathlib import Path
 
     from app.services.backup_service import backup_to_json, restore_from_json
 
+    if not _is_admin():
+        return _admin_denied()
     password = request.form.get("password") or ""
     confirm = (request.form.get("confirm_word") or "").strip()
     if confirm != "恢复" or not current_user.check_password(password):
@@ -690,7 +727,7 @@ def _apply_briefing_job(action: str, t: str) -> None:
         return
     hour, minute = t.split(":")  # "HH:MM" → 前为时、后为分
     cron = f"{int(minute)} {int(hour)} * * *"
-    job = ScheduledJob.query.filter_by(job_key=action).first()
+    job = ScheduledJob.query.filter_by(job_key=action, user_id=current_user.id).first()
     if job is not None:
         job.cron = cron
         db.session.commit()
@@ -721,9 +758,11 @@ def briefing():
 @bp.route("/pages-domain", methods=["POST"])
 @login_required
 def pages_domain():
-    """保存网页站点（端口优先）+ 可选域名/安全入口。"""
+    """保存网页站点（端口优先）+ 可选域名/安全入口（仅管理员：影响全局部署配置与 .env）。"""
     import re
 
+    if not _is_admin():
+        return _admin_denied()
     admin = (request.form.get("admin_domain") or "").strip().lower()
     page = (request.form.get("page_domain") or "").strip().lower()
     entry = (request.form.get("admin_entry") or "").strip().strip("/")

@@ -1,6 +1,6 @@
 """笔记：列表 / 搜索 / 新建 / 编辑 / 删除（软删除）。
 
-页面视图 GET /notes/；写操作均为 fetch JSON 接口（@csrf.exempt），
+页面视图 GET /notes/；写操作均为 fetch JSON 接口，
 返回 {"ok": true, "data": ...} 或 {"ok": false, "error": "..."}（HTTP 400）。
 """
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
-from app.extensions import csrf, db
+from app.extensions import db
 from app.models.note import Note
 from app.services import note_service
 from app.utils.timeutil import fmt_dt, user_tz
@@ -61,7 +61,6 @@ def index():
 
 
 @bp.route("/api/create", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_create():
     """新建笔记：title 必填，content / tags（逗号分隔）可选。"""
@@ -82,7 +81,6 @@ def api_create():
 
 
 @bp.route("/api/update", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_update():
     """更新笔记：note_id 必填，title / content / tags 传了才改（None 不改）。"""
@@ -97,7 +95,6 @@ def api_update():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     """软删除笔记。"""

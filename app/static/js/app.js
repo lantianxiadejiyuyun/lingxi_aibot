@@ -61,12 +61,21 @@
     });
   });
 
+  /* ---------- CSRF ---------- */
+  window.csrfHeaders = function (extra) {
+    var h = extra ? Object.assign({}, extra) : {};
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    var t = meta && meta.getAttribute("content");
+    if (t) h["X-CSRFToken"] = t;
+    return h;
+  };
+
   /* ---------- JSON API ---------- */
   window.api = {
     post: function (url, data) {
       return fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: window.csrfHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(data || {}),
       }).then(function (r) {
         return r.json().catch(function () {
@@ -75,7 +84,7 @@
       });
     },
     get: function (url) {
-      return fetch(url).then(function (r) {
+      return fetch(url, { headers: window.csrfHeaders() }).then(function (r) {
         return r.json().catch(function () {
           throw new Error("HTTP " + r.status + (r.status === 401 ? "（登录已失效，请重新登录）" : ""));
         });
@@ -88,7 +97,7 @@
     handlers = handlers || {};
     return fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: window.csrfHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body || {}),
     }).then(function (resp) {
       if (!resp.ok) {

@@ -127,9 +127,19 @@ def _parse_item(resp: requests.Response) -> dict:
     return items[0]
 
 
+def _safe_base(cfg: dict) -> str:
+    from app.utils.urlsafety import UrlSafetyError, check_provider_url
+
+    try:
+        return check_provider_url(cfg["base_url"])
+    except UrlSafetyError as e:
+        raise ImageError(f"图片接口地址不安全：{e}") from e
+
+
 def _generate_bytes(prompt: str, size: str, model: str) -> bytes:
     """调用 generations 接口生成图片字节。优先 b64_json，兼容仅 url 端点。"""
     cfg = _read_config()
+    cfg["base_url"] = _safe_base(cfg)
     payload = {"model": model, "prompt": prompt, "size": size, "n": 1,
                "response_format": "b64_json"}
     resp = requests.post(f"{cfg['base_url']}/images/generations",
@@ -199,6 +209,7 @@ def edit(asset: ImageAsset, instruction: str) -> ImageAsset:
 def _try_edit(asset: ImageAsset, instruction: str) -> Optional[ImageAsset]:
     """调用 /images/edits（multipart）。端点不存在/不支持时返回 None（触发降级）。"""
     cfg = _read_config()
+    cfg["base_url"] = _safe_base(cfg)
     path = _image_dir() / asset.file_path
     if not path.exists():
         return None

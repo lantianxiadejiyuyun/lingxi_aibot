@@ -6,14 +6,13 @@ from flask import Blueprint, jsonify, request
 from flask_login import current_user, login_required
 
 from app.blueprints.settings_page import _CHANNEL_OPTIONS
-from app.extensions import csrf, db
+from app.extensions import db
 from app.services.notify_service import notify
 
 api_bp = Blueprint("settings_api", __name__, url_prefix="/settings/api")
 
 
 @api_bp.route("/test-llm", methods=["POST"])
-@csrf.exempt
 @login_required
 def test_llm():
     """测试 LLM 连接：用当前配置发起一次最小对话（JSON 接口）。"""
@@ -43,7 +42,6 @@ def feishu_ws_status():
 
 
 @api_bp.route("/test-feishu-app", methods=["POST"])
-@csrf.exempt
 @login_required
 def test_feishu_app():
     """通过应用机器人 API 发送一条测试消息（JSON 接口）。"""
@@ -60,12 +58,13 @@ def test_feishu_app():
 
 
 @api_bp.route("/backup-now", methods=["POST"])
-@csrf.exempt
 @login_required
 def backup_now():
-    """立即执行一次数据库备份（JSON 接口）。"""
+    """立即执行一次数据库备份（仅管理员，JSON 接口）。"""
     from app.services.backup_service import backup_to_json
 
+    if not getattr(current_user, "is_admin", False):
+        return jsonify({"ok": False, "error": "仅管理员可执行备份"}), 403
     try:
         path = backup_to_json()
         size = path.stat().st_size
@@ -75,7 +74,6 @@ def backup_now():
 
 
 @api_bp.route("/test-image", methods=["POST"])
-@csrf.exempt
 @login_required
 def test_image():
     """测试图片生成：用当前配置生成一张小图（消耗一次配额，JSON 接口）。"""
@@ -92,7 +90,6 @@ def test_image():
 
 
 @api_bp.route("/test-tts", methods=["POST"])
-@csrf.exempt
 @login_required
 def test_tts():
     """测试 TTS：合成一段短音频（JSON 接口返回字节数）。"""
@@ -103,6 +100,12 @@ def test_tts():
     model = str(get_setting_from("tts_model", "TTS_MODEL", "") or "").strip()
     if not (base and key and model):
         return jsonify({"ok": False, "error": "尚未配置 TTS（BaseURL / API Key / 模型）"}), 400
+    from app.utils.urlsafety import UrlSafetyError, check_provider_url
+
+    try:
+        base = check_provider_url(base)
+    except UrlSafetyError as e:
+        return jsonify({"ok": False, "error": f"TTS 接口地址不安全：{e}"}), 400
     voice = str(get_setting_from("tts_voice", "TTS_VOICE", "alloy") or "alloy").strip()
     try:
         resp = requests.post(
@@ -119,7 +122,6 @@ def test_tts():
 
 
 @api_bp.route("/test-search", methods=["POST"])
-@csrf.exempt
 @login_required
 def test_search():
     """测试联网搜索：用当前配置搜索一次（JSON 接口）。"""
@@ -138,7 +140,6 @@ def test_search():
 
 
 @api_bp.route("/test-channel", methods=["POST"])
-@csrf.exempt
 @login_required
 def test_channel():
     """发送测试通知（JSON 接口，前端 toast 展示结果）。支持真实渠道与自定义通知组（group:组名）。"""
@@ -164,7 +165,6 @@ def test_channel():
 
 
 @api_bp.route("/api-token", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_token():
     """生成或撤销当前用户的 App API Token（JSON）。生成时返回完整明文，只此一次。"""
@@ -188,7 +188,6 @@ def api_token():
 
 
 @api_bp.route("/theme", methods=["POST"])
-@csrf.exempt
 @login_required
 def save_theme():
     """保存当前用户界面主题（light / dark / system），写入 users.prefs。"""

@@ -1,6 +1,6 @@
 """出行：列表 / 新建 / 编辑 / 删除 / AI 生成行程（含多段交通与备选方案）。
 
-页面视图 GET /travel/；写操作均为 fetch JSON 接口（@csrf.exempt），
+页面视图 GET /travel/；写操作均为 fetch JSON 接口，
 返回 {"ok": true, "data": ...} 或 {"ok": false, "error": "..."}（HTTP 400）。
 """
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
-from app.extensions import csrf, db
+from app.extensions import db
 from app.services import travel_service
 
 bp = Blueprint("travel", __name__, url_prefix="/travel")
@@ -53,7 +53,6 @@ def index():
 
 
 @bp.route("/api/create", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_create():
     data = request.get_json(silent=True) or {}
@@ -76,7 +75,6 @@ def api_create():
 
 
 @bp.route("/api/update", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_update():
     data = request.get_json(silent=True) or {}
@@ -93,7 +91,6 @@ def api_update():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     data = request.get_json(silent=True) or {}
@@ -106,7 +103,6 @@ def api_delete():
 
 
 @bp.route("/api/generate-itinerary", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_generate_itinerary():
     """AI 生成行程并保存到计划。"""

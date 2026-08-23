@@ -9,11 +9,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from urllib.parse import quote
 
 import pymysql
-from dotenv import set_key
+from dotenv import dotenv_values, set_key
 
 from app.extensions import db
 
@@ -73,6 +74,64 @@ def save_db_config(host: str, port, user: str, password: str, db_name: str) -> s
     for key, value in values.items():
         set_key(ENV_PATH, key, value, quote_mode="always")
     return f"已保存到项目 {ENV_PATH.name}"
+
+
+def apply_runtime_db_config(host: str, port, user: str, password: str, db_name: str) -> None:
+    """把 MySQL 配置写入当前进程（app.config + os.environ）并热重建引擎。
+
+    只写 .env 不够：Flask 启动时已经把 MYSQL_* 读进内存，保存后若不更新，
+    下一请求仍按旧连接串探测，安装向导会刷新回第①步。
+    """
+    from flask import current_app
+
+    host = (host or "127.0.0.1").strip()
+    port = int(port or 3306)
+    user = (user or "").strip()
+    password = password or ""
+    db_name = (db_name or "").strip()
+    app = current_app._get_current_object()
+    app.config["MYSQL_HOST"] = host
+    app.config["MYSQL_PORT"] = port
+    app.config["MYSQL_USER"] = user
+    app.config["MYSQL_PASSWORD"] = password
+    app.config["MYSQL_DB"] = db_name
+    os.environ["MYSQL_HOST"] = host
+    os.environ["MYSQL_PORT"] = str(port)
+    os.environ["MYSQL_USER"] = user
+    os.environ["MYSQL_PASSWORD"] = password
+    os.environ["MYSQL_DB"] = db_name
+    rebuild_engine(host, port, user, password, db_name)
+
+
+def reload_db_config_from_env() -> bool:
+    """若 .env 里的 MYSQL_* 与内存不一致，热加载并重建引擎。有变更返回 True。"""
+    from flask import current_app
+
+    if not ENV_PATH.exists():
+        return False
+    vals = dotenv_values(ENV_PATH) or {}
+    host = (vals.get("MYSQL_HOST") or "127.0.0.1").strip()
+    user = (vals.get("MYSQL_USER") or "").strip()
+    password = vals.get("MYSQL_PASSWORD") or ""
+    db_name = (vals.get("MYSQL_DB") or "").strip()
+    try:
+        port = int(vals.get("MYSQL_PORT") or 3306)
+    except (TypeError, ValueError):
+        port = 3306
+    if not user and not db_name:
+        return False
+    app = current_app._get_current_object()
+    current = (
+        str(app.config.get("MYSQL_HOST") or ""),
+        int(app.config.get("MYSQL_PORT") or 0),
+        str(app.config.get("MYSQL_USER") or ""),
+        str(app.config.get("MYSQL_PASSWORD") or ""),
+        str(app.config.get("MYSQL_DB") or ""),
+    )
+    if current == (host, port, user, password, db_name):
+        return False
+    apply_runtime_db_config(host, port, user, password, db_name)
+    return True
 
 
 # 安装向导第④步可写入的配置项（键名 → .env 变量）；只收字符串，空值跳过不覆盖
@@ -351,8 +410,12 @@ def seed_builtin_jobs_for_user(user) -> list[str]:
     return created
 
 
-def initialize_database(app) -> list[str]:
-    """建表 + 补列 + 初始化管理员/内置定时任务（幂等）。返回过程消息列表。"""
+def initialize_database(app, *, create_admin: bool = True) -> list[str]:
+    """建表 + 补列 + 初始化管理员/内置定时任务（幂等）。返回过程消息列表。
+
+    create_admin=False：网页向导第②步只用建表，管理员留给第③步，避免刷新后
+    被当成「已初始化」直接踢去登录页。
+    """
     messages: list[str] = []
     with app.app_context():
         db.create_all()
@@ -363,12 +426,26 @@ def initialize_database(app) -> list[str]:
 
         cfg = app.config
         if User.query.count() == 0:
-            admin = User(username=cfg["ADMIN_USERNAME"], timezone=cfg["APP_TIMEZONE"], is_admin=True)
-            admin.set_password(cfg["ADMIN_PASSWORD"])
-            db.session.add(admin)
-            db.session.commit()
-            messages.append(f"✓ 已创建管理员：{cfg['ADMIN_USERNAME']}"
-                            "（请登录后立即修改密码）")
+            if create_admin:
+                import secrets
+
+                admin = User(username=cfg["ADMIN_USERNAME"], timezone=cfg["APP_TIMEZONE"],
+                             is_admin=True)
+                password = str(cfg.get("ADMIN_PASSWORD") or "").strip()
+                if password:
+                    admin.set_password(password)
+                    messages.append(f"✓ 已创建管理员：{cfg['ADMIN_USERNAME']}"
+                                    "（请登录后立即修改密码）")
+                else:
+                    # 未显式配置密码：生成随机密码并打印一次，避免弱默认口令被利用
+                    password = secrets.token_urlsafe(12)
+                    admin.set_password(password)
+                    messages.append(f"✓ 已创建管理员：{cfg['ADMIN_USERNAME']}"
+                                    f"（随机初始密码：{password}，请立即登录修改）")
+                db.session.add(admin)
+                db.session.commit()
+            else:
+                messages.append("✓ 数据表已就绪，请继续创建管理员")
         else:
             # 兼容旧数据：首个用户设为管理员
             first = User.query.order_by(User.id.asc()).first()
@@ -383,9 +460,10 @@ def initialize_database(app) -> list[str]:
             for name in created:
                 messages.append(f"✓ 已为用户 {user.username} 创建内置任务：{name}")
 
-        migrated = seed_first_admin_llm_from_env()
-        if migrated:
-            messages.extend(migrated)
+        if User.query.count() > 0:
+            migrated = seed_first_admin_llm_from_env()
+            if migrated:
+                messages.extend(migrated)
         messages.append("初始化完成 ✔")
     return messages
 

@@ -1,7 +1,7 @@
 """日历蓝图：月视图 / 当日明细 / JSON API（创建、更新、软删除、取事件）。
 
 - 页面路由均 @login_required，主页面函数名 index。
-- JSON 接口 @csrf.exempt + @login_required，返回 {"ok": ...}。
+- JSON 接口 @login_required，返回 {"ok": ...}（CSRF 由 X-CSRFToken 头校验）。
 - 时间：表单/JSON 收到的为用户时区字符串 → parse_local 转 naive UTC；
   JSON 返回用 fmt_dt 转好的用户时区字符串。
 """
@@ -12,7 +12,6 @@ from datetime import date, datetime, time, timedelta
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
-from app.extensions import csrf
 from app.models.event import Event
 from app.services import calendar_service
 from app.utils.timeutil import (
@@ -231,7 +230,6 @@ def index():
 # ---------------------------------------------------------------- JSON API
 
 @bp.route("/api/create", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_create():
     payload = request.get_json(silent=True) or {}
@@ -289,7 +287,6 @@ def api_create():
 
 
 @bp.route("/api/update", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_update():
     payload = request.get_json(silent=True) or {}
@@ -369,7 +366,6 @@ def api_update():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     payload = request.get_json(silent=True) or {}
@@ -381,7 +377,6 @@ def api_delete():
 
 
 @bp.route("/api/events", methods=["GET"])
-@csrf.exempt
 @login_required
 def api_events():
     tz = user_tz(current_user)

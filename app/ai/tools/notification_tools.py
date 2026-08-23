@@ -88,7 +88,8 @@ def send_notification(title: str, body: str = "", channels: str | list | None = 
             raise ValueError(f"图片 {image_id} 的文件不存在")
         image_bytes = p.read_bytes()
 
-    records = notify(title, str(body or ""), chan_list, image_bytes=image_bytes)
+    records = notify(title, str(body or ""), chan_list, image_bytes=image_bytes,
+                     user_id=current_user.id)
     ok = [r for r in records if r.status == "sent"]
     fail = [r for r in records if r.status == "failed"]
     return {
@@ -121,7 +122,8 @@ def list_notifications(limit: int = 20):
         raise ValueError("limit 必须是数字") from None
     limit = max(1, min(limit, 50))
     tz = _tz()
-    rows = Notification.query.order_by(Notification.created_at.desc()).limit(limit).all()
+    rows = Notification.query.filter(Notification.user_id == current_user.id) \
+        .order_by(Notification.created_at.desc()).limit(limit).all()
     return [
         {
             "id": n.id,

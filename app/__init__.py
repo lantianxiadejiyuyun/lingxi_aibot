@@ -52,6 +52,9 @@ def create_app(config_class=Config) -> Flask:
         # 飞书事件回调是外部 webhook，免安全入口（自身有 token/加密鉴权）
         if path == "/feishu" or path.startswith("/feishu/"):
             return _entry_inner(environ, start_response)
+        # 探活端点：未登录、不依赖安全入口
+        if path == "/healthz":
+            return _entry_inner(environ, start_response)
 
         prefix = "/" + entry
         if path == prefix:
@@ -198,11 +201,19 @@ def create_app(config_class=Config) -> Flask:
             except Exception:  # noqa: BLE001
                 app.logger.exception("网页站点端口启动失败")
 
+    @app.route("/healthz")
+    def healthz():
+        """探活：未登录、无数据库依赖，始终 200。供 Docker healthcheck / 负载均衡使用。"""
+        return ("ok", 200, {"Content-Type": "text/plain; charset=utf-8"})
+
     # ---- 静态资源缓存：第三方库/字体（含版本号、内容不可变）长期缓存，避免每次导航都重新校验导致图标闪烁 ----
     @app.after_request
     def set_static_cache_headers(response):
         if request.path.startswith("/static/vendor/"):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         return response
 
     # ---- 首次安装引导：系统未初始化（无 .env / 数据库未配置 / 未建表 / 无管理员）时，
@@ -210,6 +221,8 @@ def create_app(config_class=Config) -> Flask:
     @app.before_request
     def _redirect_to_setup_when_uninitialized():
         if request.method != "GET" or request.path.startswith("/static/"):
+            return None
+        if request.path.rstrip("/") == "/healthz":
             return None
         if request.endpoint == "setup.index" or (
             request.endpoint and request.endpoint.startswith("setup.")

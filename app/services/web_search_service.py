@@ -112,6 +112,12 @@ def _search_searxng(query: str, limit: int) -> list[dict]:
     c = _cfg()
     if not c["searxng_base_url"]:
         raise SearchError("未配置 SearXNG 实例地址（SEARXNG_BASE_URL）")
+    from app.utils.urlsafety import UrlSafetyError, check_provider_url
+
+    try:
+        c["searxng_base_url"] = check_provider_url(c["searxng_base_url"])
+    except UrlSafetyError as e:
+        raise SearchError(f"SearXNG 地址不安全：{e}") from e
     resp = requests.get(f"{c['searxng_base_url']}/search",
                         params={"q": query, "format": "json"}, timeout=TIMEOUT)
     if resp.status_code != 200:

@@ -66,10 +66,15 @@ with app.app_context():
                     sess["_user_id"] = str(user.id)
                     sess["_fresh"] = True
 
-                bad = client.post("/settings/api/theme", json={"theme": "neon"})
+                dash = client.get("/")
+                import re as _re
+                _m = _re.search(r'name="csrf-token"[^>]*content="([^"]+)"', dash.get_data(as_text=True))
+                csrf_h = {"X-CSRFToken": _m.group(1)} if _m else {}
+
+                bad = client.post("/settings/api/theme", json={"theme": "neon"}, headers=csrf_h)
                 check("非法主题 400", bad.status_code == 400, str(bad.status_code))
 
-                ok = client.post("/settings/api/theme", json={"theme": "dark"})
+                ok = client.post("/settings/api/theme", json={"theme": "dark"}, headers=csrf_h)
                 body = ok.get_json(silent=True) or {}
                 check("保存 dark 200", ok.status_code == 200, str(ok.status_code))
                 check("API 返回 ok", body.get("ok") is True, str(body))

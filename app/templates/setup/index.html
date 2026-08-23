@@ -26,6 +26,7 @@
   .steps .step { flex: 1; text-align: center; font-size: 12.5px; padding: 7px 4px; border-radius: 8px; background: var(--bg-2); color: var(--text-3); border: 1px solid var(--border); }
   .steps .step.cur { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .steps .step.done { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
+  .setup-card .setup-panel { display: none; }
 </style>
 
 <div class="setup-page">
@@ -42,14 +43,14 @@
     </div>
 
     <div class="steps">
-      <div class="step {% if status.db_ok %}done{% else %}cur{% endif %}">① 数据库</div>
-      <div class="step {% if status.tables_ok %}done{% elif status.db_ok %}cur{% endif %}">② 初始化</div>
-      <div class="step {% if status.admin_ok %}done{% elif status.tables_ok %}cur{% endif %}">③ 管理员</div>
-      <div class="step {% if status.admin_ok %}cur{% endif %}">④ 基础配置</div>
+      <div class="step" data-step="1">① 数据库</div>
+      <div class="step" data-step="2">② 初始化</div>
+      <div class="step" data-step="3">③ 管理员</div>
+      <div class="step" data-step="4">④ 基础配置</div>
     </div>
 
-    {% if not status.db_ok %}
-    {# ---------- 步骤 1：数据库配置 ---------- #}
+    {# 四个步骤都渲染在页面里，由 JS 按状态切换，避免保存后整页刷新丢掉令牌和进度 #}
+    <section class="setup-panel" data-panel="1">
     <h2>① 配置数据库连接</h2>
     <p class="muted">填写 MySQL 连接信息，保存后写入项目 <code>.env</code> 并立即生效（无需手动编辑、无需重启）。</p>
     <form id="db-form" autocomplete="off">
@@ -76,21 +77,19 @@
         <button type="submit" class="btn btn-primary" id="btn-db-save" style="flex:1"><i class="bi bi-save"></i> 保存配置</button>
       </div>
     </form>
-    {% endif %}
+    </section>
 
-    {% if status.db_ok and not status.tables_ok %}
-    {# ---------- 步骤 2：初始化数据库 ---------- #}
+    <section class="setup-panel" data-panel="2">
     <h2>② 初始化数据库</h2>
     <div class="okbox">✓ 数据库连接成功</div>
-    <p class="muted">点击「开始初始化」：自动创建数据表、补齐字段，并写入内置定时任务（早报/备份/周报等 10 项）。</p>
+    <p class="muted">点击「开始初始化」：自动创建数据表、补齐字段。内置定时任务会在创建管理员时写入。</p>
     <div class="msgbox" id="init-msg"></div>
     <div class="actions">
       <button type="button" class="btn btn-primary" id="btn-init"><i class="bi bi-rocket-takeoff"></i> 开始初始化</button>
     </div>
-    {% endif %}
+    </section>
 
-    {% if status.db_ok and status.tables_ok and not status.admin_ok %}
-    {# ---------- 步骤 3：创建管理员 ---------- #}
+    <section class="setup-panel" data-panel="3">
     <h2>③ 创建管理员账号</h2>
     <div class="okbox">✓ 数据库初始化完成，请创建管理员</div>
     <form id="admin-form" autocomplete="off">
@@ -100,13 +99,12 @@
       <input type="password" name="password" placeholder="设置登录密码" required>
       <div class="msgbox" id="admin-msg"></div>
       <div class="actions">
-        <button type="submit" class="btn btn-primary" id="btn-admin"><i class="bi bi-person-check"></i> 创建并登录</button>
+        <button type="submit" class="btn btn-primary" id="btn-admin"><i class="bi bi-person-check"></i> 创建管理员</button>
       </div>
     </form>
-    {% endif %}
+    </section>
 
-    {% if status.db_ok and status.tables_ok and status.admin_ok %}
-    {# ---------- 步骤 4：基础配置（可选，可跳过） ---------- #}
+    <section class="setup-panel" data-panel="4">
     <h2>④ 基础配置（可选）</h2>
     <div class="okbox">✓ 系统已就绪。以下配置可现在填写（自动写入 <code>.env</code>），也可跳过、装完后在「设置」页配置。</div>
     <form id="extra-form" autocomplete="off">
@@ -158,7 +156,7 @@
         <button type="submit" class="btn btn-primary" id="btn-extra-save" style="flex:1"><i class="bi bi-save"></i> 保存并登录</button>
       </div>
     </form>
-    {% endif %}
+    </section>
   </div>
 </div>
 {% endblock %}
@@ -167,16 +165,45 @@
 <script>
 (function () {
   "use strict";
-  function showMsg(box, html, ok) {
+  var LOGIN_URL = "{{ url_for('auth.login') }}";
+  var TOKEN_KEY = "lingxi-setup-token";
+  var status = {{ status | tojson }};
+
+  function showMsg(box, text, ok) {
     box.style.display = "block";
     box.className = "msgbox " + (ok ? "okbox" : "errbox");
-    box.innerHTML = html;
+    box.style.whiteSpace = "pre-wrap";
+    box.textContent = text == null ? "" : String(text);
   }
   function disable(btn, on) {
     if (!btn) return;
     btn.disabled = on;
     btn.style.opacity = on ? 0.6 : 1;
   }
+  function currentStep(st) {
+    if (!st || !st.db_ok) return 1;
+    if (!st.tables_ok) return 2;
+    if (!st.admin_ok) return 3;
+    return 4;
+  }
+  function applyStatus(st) {
+    status = st || status;
+    var step = currentStep(status);
+    document.querySelectorAll(".setup-panel").forEach(function (p) {
+      p.style.display = String(p.getAttribute("data-panel")) === String(step) ? "" : "none";
+    });
+    document.querySelectorAll(".steps .step").forEach(function (el) {
+      var n = parseInt(el.getAttribute("data-step"), 10);
+      el.classList.remove("cur", "done");
+      if (n < step) el.classList.add("done");
+      else if (n === step) el.classList.add("cur");
+    });
+  }
+  function goLogin() {
+    try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    location.href = LOGIN_URL;
+  }
+
   /* 后台安全入口：随机生成 */
   function randomEntry(len) {
     var chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -197,7 +224,19 @@
       if (input) input.value = randomEntry(10);
     });
   }
+
   var tokenInput = document.getElementById("setup-token");
+  if (tokenInput) {
+    try {
+      if (!tokenInput.value) tokenInput.value = sessionStorage.getItem(TOKEN_KEY) || "";
+    } catch (e) {}
+    tokenInput.addEventListener("input", function () {
+      try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch (e) {}
+    });
+    if (tokenInput.value) {
+      try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch (e) {}
+    }
+  }
   function post(url, data) {
     data = data || {};
     if (tokenInput) { data.setup_token = tokenInput.value.trim(); }
@@ -207,6 +246,8 @@
       body: JSON.stringify(data || {})
     }).then(function (r) { return r.json(); });
   }
+
+  applyStatus(status);
 
   // ---------- 步骤 1：数据库配置 ----------
   var dbForm = document.getElementById("db-form");
@@ -236,8 +277,16 @@
       if (!d.password) { showMsg(box, "请填写数据库密码", false); return; }
       disable(btnSave, true);
       post("/setup/api/db-save", d).then(function (r) {
-        if (r.ok) { location.reload(); }
-        else { showMsg(box, "✗ " + (r.error || "保存失败"), false); }
+        if (r.ok) {
+          showMsg(box, "✓ 已保存，数据库连接成功", true);
+          applyStatus({
+            db_ok: true,
+            tables_ok: !!r.tables_ok,
+            admin_ok: !!r.admin_ok
+          });
+        } else {
+          showMsg(box, "✗ " + (r.error || "保存失败"), false);
+        }
       }).catch(function (e) { showMsg(box, "请求失败：" + e, false); })
         .finally(function () { disable(btnSave, false); });
     });
@@ -249,12 +298,18 @@
     var initBox = document.getElementById("init-msg");
     btnInit.addEventListener("click", function () {
       disable(btnInit, true);
-      btnInit.innerHTML = '初始化中…';
+      btnInit.innerHTML = "初始化中…";
       post("/setup/api/init-db", {}).then(function (r) {
         if (r.ok) {
-          var list = (r.messages || []).map(function (m) { return "• " + m; }).join("<br>");
+          var list = (r.messages || []).map(function (m) { return "• " + m; }).join("\n");
           showMsg(initBox, list, true);
-          setTimeout(function () { location.reload(); }, 1200);
+          setTimeout(function () {
+            applyStatus({
+              db_ok: r.db_ok !== false,
+              tables_ok: r.tables_ok !== false,
+              admin_ok: !!r.admin_ok
+            });
+          }, 600);
         } else {
           showMsg(initBox, "✗ " + (r.error || "初始化失败"), false);
           disable(btnInit, false);
@@ -268,7 +323,8 @@
     });
   }
 
-  // ---------- 步骤 3：管理员 ----------  var adminForm = document.getElementById("admin-form");
+  // ---------- 步骤 3：管理员 ----------
+  var adminForm = document.getElementById("admin-form");
   if (adminForm) {
     var adminBox = document.getElementById("admin-msg");
     var btnAdmin = document.getElementById("btn-admin");
@@ -282,7 +338,13 @@
       post("/setup/api/create-admin", { username: username, password: password }).then(function (r) {
         if (r.ok) {
           showMsg(adminBox, "✓ " + (r.message || "创建成功"), true);
-          setTimeout(function () { location.href = "{{ url_for('auth.login') }}"; }, 1200);
+          setTimeout(function () {
+            applyStatus({
+              db_ok: r.db_ok !== false,
+              tables_ok: r.tables_ok !== false,
+              admin_ok: true
+            });
+          }, 600);
         } else {
           showMsg(adminBox, "✗ " + (r.error || "创建失败"), false);
           disable(btnAdmin, false);
@@ -300,7 +362,11 @@
     var extraBox = document.getElementById("extra-msg");
     var btnExtra = document.getElementById("btn-extra-save");
     var btnSkip = document.getElementById("btn-extra-skip");
-    btnSkip.addEventListener("click", function () { location.href = "{{ url_for('auth.login') }}"; });
+    btnSkip.addEventListener("click", function () {
+      disable(btnSkip, true);
+      post("/setup/api/finish", {}).then(function () { goLogin(); })
+        .catch(function () { goLogin(); });
+    });
     extraForm.addEventListener("submit", function (e) {
       e.preventDefault();
       disable(btnExtra, true);
@@ -313,7 +379,7 @@
       post("/setup/api/extra-save", data).then(function (r) {
         if (r.ok) {
           showMsg(extraBox, "✓ " + (r.message || "已保存"), true);
-          setTimeout(function () { location.href = "{{ url_for('auth.login') }}"; }, 1500);
+          setTimeout(goLogin, 1500);
         } else {
           showMsg(extraBox, "✗ " + (r.error || "保存失败"), false);
           disable(btnExtra, false);

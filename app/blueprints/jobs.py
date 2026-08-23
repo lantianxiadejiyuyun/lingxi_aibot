@@ -94,7 +94,7 @@ def update(job_id: int):
         flash("任务不存在", "error")
         return redirect(url_for("jobs.index"))
 
-    kwargs = {"enabled": request.form.get("enabled") == "1"}
+    kwargs = {"enabled": "enabled" in request.form}
 
     if job.is_builtin:
         # 内置任务：interval 型编辑分钟数，cron 型编辑 分/时；可指定推送渠道（空=默认渠道）

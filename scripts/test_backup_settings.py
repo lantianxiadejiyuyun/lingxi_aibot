@@ -51,6 +51,7 @@ for _ in range(30):
 r = s.get(BASE + "/login")
 token = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', r.text).group(1)
 s.post(BASE + "/login", data={"csrf_token": token, "username": "admin", "password": "admin123"})
+s.headers["X-CSRFToken"] = token
 
 # 1. 设置页含备份设置 Tab 与表单
 r = s.get(BASE + "/settings")

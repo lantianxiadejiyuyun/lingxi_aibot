@@ -6,7 +6,6 @@ import calendar
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
-from app.extensions import csrf
 from app.services import expense_service
 
 bp = Blueprint("expenses", __name__, url_prefix="/expenses")
@@ -60,7 +59,6 @@ def index():
 
 
 @bp.route("/api/create", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_create():
     data = request.get_json(silent=True) or {}
@@ -79,7 +77,6 @@ def api_create():
 
 
 @bp.route("/api/update", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_update():
     data = request.get_json(silent=True) or {}
@@ -94,7 +91,6 @@ def api_update():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     data = request.get_json(silent=True) or {}

@@ -1,7 +1,7 @@
 """图片库：管理页 / 生成 / 改图 / 公开开关 / 删除 + /img/ 文件访问。
 
 - 文件访问 /img/<filename>：文件名 uuid 化不可枚举；公开图片任何人可访问
-  （供生成的网页嵌入），私有图片仅登录用户可见（未登录 404，不泄露存在性）
+  （供生成的网页嵌入），私有图片仅属主或管理员可见（否则 404，不泄露存在性）
 - 生成/改图耗时较长（10-60s+），接口为同步 JSON，前端需给 loading 提示
 """
 from __future__ import annotations
@@ -13,7 +13,6 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
-from app.extensions import csrf
 from app.services import image_service
 from app.utils.timeutil import fmt_dt, user_tz
 
@@ -36,8 +35,11 @@ def file_view(filename):
     asset = image_service.get_by_filename(filename)
     if asset is None:
         abort(404)
-    if not asset.is_public and not current_user.is_authenticated:
-        abort(404)
+    if not asset.is_public:
+        if not current_user.is_authenticated:
+            abort(404)
+        if asset.user_id != current_user.id and not getattr(current_user, "is_admin", False):
+            abort(404)
     path = current_app.config["IMAGE_DIR"] / filename
     if not path.exists():
         abort(404)
@@ -84,7 +86,6 @@ def index():
 
 
 @bp.route("/api/generate", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_generate():
     """生成图片（同步，耗时较长）。"""
@@ -98,7 +99,6 @@ def api_generate():
 
 
 @bp.route("/api/edit", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_edit():
     """AI 改图：编辑接口或降级重生成，产出新图。"""
@@ -114,7 +114,6 @@ def api_edit():
 
 
 @bp.route("/api/toggle-public", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_toggle_public():
     """公开/私有开关。"""
@@ -127,7 +126,6 @@ def api_toggle_public():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     """软删除图片。"""

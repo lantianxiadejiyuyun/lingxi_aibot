@@ -30,6 +30,7 @@ try:
                allow_redirects=False)
     if r.status_code != 302:
         print(f"登录失败 status={r.status_code}"); sys.exit(1)
+    s.headers["X-CSRFToken"] = token
 
     # 1) 配置域名
     s.post(BASE + "/settings/pages-domain",

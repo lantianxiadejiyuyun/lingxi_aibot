@@ -117,7 +117,7 @@ def get_skill(skill_id: int):
     description=(
         "修改已有技能。skill_id 必填；其余参数只改传入的字段。"
         "code 为函数体、parameters 为 JSON Schema、description 为用途描述。"
-        "若技能已启用，更新后立即重新加载生效。"
+        "若修改 code 或 parameters，已启用的技能会自动停用，需管理员在「🧩 技能」页审核后重新启用。"
     ),
     parameters={
         "type": "object",
@@ -134,11 +134,16 @@ def get_skill(skill_id: int):
 def update_skill(skill_id: int, description: str | None = None,
                  parameters: dict | None = None, code: str | None = None):
     skill = _find(skill_id)
+    was_enabled = bool(skill.enabled)
+    changing_impl = code is not None or parameters is not None
     try:
         skill_service.update_skill(skill, description=description,
                                    parameters=parameters, code=code)
     except skill_service.SkillError as e:
         raise ValueError(str(e)) from e
+    if was_enabled and changing_impl:
+        return (f"已更新技能 [id={skill.id}]「{skill.name}」。"
+                f"出于安全，已自动停用，请提醒用户到「🧩 技能」页审核代码后重新启用。")
     return f"已更新技能 [id={skill.id}]「{skill.name}」（{'已启用' if skill.enabled else '已禁用'}）"
 
 

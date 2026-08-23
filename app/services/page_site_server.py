@@ -1,7 +1,8 @@
 """独立 HTTP 网页站点：只提供公开网页和公开图片，不配 HTTPS / 域名。
 
-设置页填写「网页端口」后，在本进程再开一个监听（默认 0.0.0.0），
-访问 http://<主机>:<端口>/<slug>。改端口保存后热启停。
+设置页填写「网页端口」后，在本进程再开一个监听（默认 127.0.0.1，
+可用 PAGE_BIND / page_bind 指定内网接口），访问 http://<主机>:<端口>/<slug>。
+改端口保存后热启停。
 """
 from __future__ import annotations
 
@@ -34,6 +35,13 @@ def create_page_site_app(main_app: Flask) -> Flask:
     site = Flask("aibot-pages")
     site.config["IMAGE_DIR"] = main_app.config.get("IMAGE_DIR")
 
+    @site.after_request
+    def _security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        return response
+
     @site.get("/")
     def index():
         return Response(
@@ -54,7 +62,9 @@ def create_page_site_app(main_app: Flask) -> Flask:
             page = page_service.visible_by_slug(slug)
             if page is None or not page.is_public:
                 abort(404)
-            return Response(page.content or "", mimetype="text/html; charset=utf-8")
+            resp = Response(page.content or "", mimetype="text/html; charset=utf-8")
+            resp.headers["X-Content-Type-Options"] = "nosniff"
+            return resp
 
     @site.get("/img/<path:filename>")
     def serve_image(filename: str):
@@ -122,19 +132,28 @@ def start_if_needed(main_app: Flask) -> None:
 
     stop()
     site = create_page_site_app(main_app)
+    bind = str(main_app.config.get("PAGE_BIND") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        from app.services.settings_service import get_setting
+
+        override = str(get_setting("page_bind", "") or "").strip()
+        if override:
+            bind = override
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from werkzeug.serving import make_server
 
-        httpd = make_server("0.0.0.0", port, site, threaded=True)
+        httpd = make_server(bind, port, site, threaded=True)
     except OSError as e:
-        _status["error"] = f"端口 {port} 无法监听：{e}"
-        logger.exception("网页站点监听失败 port=%s", port)
+        _status["error"] = f"端口 {port} 无法监听（{bind}）：{e}"
+        logger.exception("网页站点监听失败 bind=%s port=%s", bind, port)
         return
 
     def _run():
         global _status
         try:
-            logger.info("网页站点 HTTP 已监听 0.0.0.0:%s", port)
+            logger.info("网页站点 HTTP 已监听 %s:%s", bind, port)
             httpd.serve_forever()
         except Exception:  # noqa: BLE001
             logger.exception("网页站点线程退出")

@@ -11,7 +11,7 @@ from flask_login import current_user, login_required
 
 from app.ai.executor import run_chat
 from app.ai.llm import LLMClient
-from app.extensions import csrf, db
+from app.extensions import db
 from app.models.conversation import Conversation
 from app.utils.timeutil import fmt_dt, user_tz
 
@@ -55,7 +55,6 @@ def index():
 
 
 @bp.route("/api/conversations", methods=["GET"])
-@csrf.exempt
 @login_required
 def api_conversations():
     tz = user_tz(current_user)
@@ -69,7 +68,6 @@ def api_conversations():
 
 
 @bp.route("/api/messages/<int:conv_id>", methods=["GET"])
-@csrf.exempt
 @login_required
 def api_messages(conv_id):
     conv = _owned_conversation(conv_id)
@@ -90,7 +88,6 @@ def api_messages(conv_id):
 
 
 @bp.route("/api/send", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_send():
     data = request.get_json(silent=True) or {}
@@ -163,7 +160,6 @@ def api_send():
 
 
 @bp.route("/api/tts", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_tts():
     """文本转语音（OpenAI 兼容 /audio/speech），返回 mp3；未配置时前端降级浏览器朗读。"""
@@ -197,7 +193,6 @@ def api_tts():
 
 
 @bp.route("/api/new", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_new():
     conv = Conversation(title="新对话", user_id=current_user.id)
@@ -207,7 +202,6 @@ def api_new():
 
 
 @bp.route("/api/delete/<int:conv_id>", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete(conv_id):
     conv = _owned_conversation(conv_id)
@@ -219,7 +213,6 @@ def api_delete(conv_id):
 
 
 @bp.route("/api/clear-all", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_clear_all():
     """清空当前用户所有会话与消息（含简报/报告等系统会话），数据库级 CASCADE 删除 messages。"""

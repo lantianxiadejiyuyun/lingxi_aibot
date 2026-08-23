@@ -10,6 +10,8 @@ import re
 import uuid
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
+
 from app.extensions import db
 from app.models.webpage import WebPage
 from app.services.settings_service import get_setting_from
@@ -140,7 +142,11 @@ def create_page(user_id: int, title: str, content: str = "", slug: Optional[str]
         enabled=bool(enabled),
     )
     db.session.add(page)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        raise ValueError(f"slug 已被占用：{slug}") from None
     _rag_index(page)
     return page
 
@@ -179,7 +185,11 @@ def update_page(page: WebPage, title: Optional[str] = None, content: Optional[st
         page.is_public = bool(is_public)
     if enabled is not None:
         page.enabled = bool(enabled)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        raise ValueError(f"slug 已被占用：{page.slug}") from None
     _rag_index(page)
     return page
 

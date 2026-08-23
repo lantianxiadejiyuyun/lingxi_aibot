@@ -70,6 +70,9 @@ def resolve_api_user():
     if user is not None:
         return user
     env_token = (current_app.config.get("API_TOKEN") or "").strip()
+    min_len = int(current_app.config.get("API_TOKEN_MIN_LEN") or 16)
+    if env_token and len(env_token) < min_len:
+        env_token = ""
     if _token_eq(provided, env_token):
         return (User.query.filter_by(is_admin=True).order_by(User.id).first()
                 or User.query.order_by(User.id).first())
@@ -78,7 +81,8 @@ def resolve_api_user():
 
 def _has_any_token() -> bool:
     env_token = (current_app.config.get("API_TOKEN") or "").strip()
-    if env_token:
+    min_len = int(current_app.config.get("API_TOKEN_MIN_LEN") or 16)
+    if env_token and len(env_token) >= min_len:
         return True
     from app.models.user import User
     from sqlalchemy import and_

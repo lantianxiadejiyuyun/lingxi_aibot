@@ -57,7 +57,7 @@ copy .env.example .env
 #    （也可命令行初始化：.\.venv\Scripts\python -m flask init-db）
 ```
 
-默认管理员：`admin / admin123`（**登录后请立即在「设置 → 账号」修改密码**）。
+管理员账号在首次安装向导（`/setup`）中创建，或由 `flask init-db` 生成随机密码并打印一次（不再使用弱默认口令）。请妥善保存该密码，登录后可在「设置 → 账号」修改。
 
 ## 配置说明（.env）
 

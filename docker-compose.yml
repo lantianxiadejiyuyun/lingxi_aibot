@@ -13,7 +13,6 @@
 services:
   app:
     build: .
-    env_file: .env
     environment:
       FLASK_APP: wsgi:app
       TZ: Asia/Shanghai
@@ -21,20 +20,28 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
+      # 只挂载 .env，由应用 load_dotenv 读取。不要再用 env_file：
+      # 容器环境变量会遮蔽文件内 SECRET_KEY（override=False），占位符会变成临时密钥。
       - ./.env:/app/.env
-    # 独立网页 HTTP 端口，须与 .env 的 PAGE_PORT 一致；不用可注释掉
-    ports:
-      - "${PAGE_PORT:-8080}:${PAGE_PORT:-8080}"
-      # 不用 Caddy、直接 IP 访问后台时取消下一行注释
-      # - "8000:8000"
+    # gunicorn 监听 8000；Caddy 走内部网络，一般不必映射。
+    # 不用 Caddy、直接 IP 访问后台时：
+    #   ports: ["8000:8000"]
+    # 独立网页端口须与 .env 的 PAGE_PORT 一致（不要用 8080 兜底）：
+    #   ports: ["${PAGE_PORT}:${PAGE_PORT}"]
     restart: unless-stopped
     networks: [aibot]
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
+    # 镜像内以 uid 1000（aibot）运行；bind mount 的 data 需属主匹配：
+    #   chown -R 1000:1000 data
 
   caddy:
     image: caddy:2
@@ -58,7 +65,7 @@ services:
       MYSQL_DATABASE: ${MYSQL_DB:-ai_bot}
       MYSQL_USER: ${MYSQL_USER:-ai_bot}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 设置 MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 设置 MYSQL_ROOT_PASSWORD}
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql

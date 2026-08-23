@@ -136,6 +136,7 @@ r = s.get(BASE + "/login")
 import re
 token = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', r.text).group(1)
 s.post(BASE + "/login", data={"csrf_token": token, "username": "admin", "password": "admin123"})
+s.headers["X-CSRFToken"] = token
 r = s.post(BASE + "/settings/api/test-channel", json={"channel": "feishu_app"})
 d = r.json()
 check("feishu_app 未配置返回失败", d.get("ok") is True and d.get("data", {}).get("status") == "failed",

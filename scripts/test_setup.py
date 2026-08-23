@@ -81,6 +81,60 @@ with app.app_context():
     r = c.get("/setup")
     text = r.get_data(as_text=True)
     check("已建表显示管理员步骤", "创建管理员账号" in text and "btn-admin" in text)
+    check("向导一次渲染全部步骤（避免保存后刷新丢状态）",
+          'data-panel="1"' in text and 'data-panel="4"' in text
+          and "lingxi-setup-token" in text and "location.reload()" not in text)
+
+    # 已初始化但向导未结束：必须留在 /setup 第④步，不能踢去登录
+    setup_mod.install_status = lambda: {"db_ok": True, "tables_ok": True, "admin_ok": True}
+    c2 = app.test_client()
+    r = c2.get("/setup", follow_redirects=False)
+    check("已初始化且无 wizard 会话仍跳转", r.status_code == 302,
+          f"status={r.status_code} loc={r.headers.get('Location')}")
+    with c2.session_transaction() as sess:
+        sess["setup_wizard"] = True
+    r = c2.get("/setup", follow_redirects=False)
+    text = r.get_data(as_text=True)
+    check("向导中已有管理员仍留在安装页",
+          r.status_code == 200 and "基础配置" in text and "btn-extra-save" in text,
+          f"status={r.status_code}")
+
+    with c2.session_transaction() as sess:
+        sess["setup_wizard"] = True
+    r = c2.post("/setup/api/finish", json={})
+    body = r.get_json() or {}
+    check("finish 结束向导", r.status_code == 200 and body.get("ok") is True)
+    r = c2.get("/setup", follow_redirects=False)
+    check("结束向导后再访 /setup 跳转", r.status_code == 302,
+          f"status={r.status_code}")
+
+# ---- 热加载数据库配置：保存后内存 MYSQL_* 必须立刻更新 ----
+import os
+from app.services.install_service import apply_runtime_db_config, rebuild_engine
+
+with app.app_context():
+    cfg = app.config
+    keys = ("MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DB",
+            "SQLALCHEMY_DATABASE_URI")
+    orig = {k: cfg.get(k) for k in keys}
+    orig_env = {k: os.environ.get(k) for k in
+                ("MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DB")}
+    try:
+        apply_runtime_db_config("127.0.0.1", 3307, "wizard_user", "wizard_pass", "wizard_db")
+        check("热加载写入 MYSQL_USER", cfg.get("MYSQL_USER") == "wizard_user")
+        check("热加载写入 MYSQL_DB", cfg.get("MYSQL_DB") == "wizard_db")
+        check("热加载更新连接串", "wizard_user" in (cfg.get("SQLALCHEMY_DATABASE_URI") or "")
+              and "wizard_db" in (cfg.get("SQLALCHEMY_DATABASE_URI") or ""))
+    finally:
+        for k, v in orig.items():
+            cfg[k] = v
+        for k, v in orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        rebuild_engine(orig["MYSQL_HOST"], orig["MYSQL_PORT"], orig["MYSQL_USER"],
+                       orig["MYSQL_PASSWORD"] or "", orig["MYSQL_DB"])
 
 print(f"\n结果：通过 {len(PASSED)} 项，失败 {len(FAILED)} 项")
 if FAILED:

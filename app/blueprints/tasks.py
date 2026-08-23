@@ -6,7 +6,6 @@ from datetime import datetime
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
-from app.extensions import csrf
 from app.models.task import STATUS_DONE, STATUS_OPEN, TASK_PRIORITIES, Task
 from app.services import task_service
 from app.utils.timeutil import humanize_relative, parse_local, to_user, user_tz, utcnow
@@ -92,7 +91,6 @@ def index():
 
 
 @bp.route("/api/create", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_create():
     data = request.get_json(silent=True) or {}
@@ -129,7 +127,6 @@ def api_create():
 
 
 @bp.route("/api/update", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_update():
     data = request.get_json(silent=True) or {}
@@ -178,7 +175,6 @@ def api_update():
 
 
 @bp.route("/api/toggle", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_toggle():
     data = request.get_json(silent=True) or {}
@@ -192,7 +188,6 @@ def api_toggle():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     data = request.get_json(silent=True) or {}

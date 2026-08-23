@@ -16,6 +16,7 @@ r = s.post(BASE + "/login", data={"csrf_token": token, "username": "admin", "pas
            allow_redirects=False)
 if r.status_code != 302:
     print("登录失败"); sys.exit(1)
+s.headers["X-CSRFToken"] = token
 
 
 def extract_tools(text):

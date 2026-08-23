@@ -176,7 +176,7 @@
     if (!text || !String(text).trim()) return;
     fetch("/chat/api/tts", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: (window.csrfHeaders ? window.csrfHeaders({ "Content-Type": "application/json" }) : { "Content-Type": "application/json" }),
       body: JSON.stringify({ text: String(text).trim() })
     }).then(function (resp) {
       if (!resp.ok) { speakBrowser(text); return; }

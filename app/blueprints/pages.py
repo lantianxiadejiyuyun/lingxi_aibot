@@ -22,7 +22,6 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
-from app.extensions import csrf
 from app.services import page_service
 from app.utils.timeutil import fmt_dt, user_tz
 
@@ -44,7 +43,19 @@ def _host() -> str:
 
 def _render_page(page) -> Response:
     """把页面 content 作为 HTML 渲染输出。"""
-    return Response(page.content or "", mimetype="text/html; charset=utf-8")
+    resp = Response(page.content or "", mimetype="text/html; charset=utf-8")
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+def _public_page_isolation_missing() -> Response:
+    """未配置 PAGE_DOMAIN / PAGE_PORT 时，后台域拒绝输出公开页（防同源 XSS）。"""
+    return Response(
+        "公开网页未配置独立域名或端口，无法在此后台域名访问。"
+        "请在设置中配置 PAGE_DOMAIN 或 PAGE_PORT。",
+        status=404,
+        mimetype="text/plain; charset=utf-8",
+    )
 
 
 def _admin_entry() -> str:
@@ -65,22 +76,15 @@ def _single_domain_routing():
         return None
     if request.environ.get("aibot.admin_entry_passed") == "1":
         return None
+    path = request.path.strip("/")
+    # 静态资源 / 图片 / 飞书 webhook / 探活：必须在 method 检查之前放行
+    # （否则 POST /feishu/event 会被 404 拦死）
+    if path == "healthz" or path.startswith(("static/", "img/", "feishu/")):
+        return None
     if request.method not in ("GET", "HEAD"):
         abort(404)
-    path = request.path.strip("/")
-    if path.startswith(("static/", "img/", "feishu/")):
-        return None
-    slug = ""
-    if path.startswith("p/"):
-        slug = path[2:]
-    elif path and "/" not in path:
-        slug = path
-    if not slug:
-        abort(404)
-    page = page_service.visible_by_slug(slug)
-    if page is None or not page.is_public:
-        abort(404)
-    return _render_page(page)
+    # 公开页禁止在后台同源输出任意 HTML（存储型 XSS）；未配隔离则 404 提示
+    abort(_public_page_isolation_missing())
 
 
 # ---------- 域名守卫 ----------
@@ -148,9 +152,21 @@ def _page_host_routing():
 
 @site_bp.route("/p/<slug>")
 def public_view(slug):
-    """路径模式公开访问：/p/<slug>（私有页面需登录）。"""
+    """后台域 /p/<slug>：只服务私有页（属主或管理员）；公开页强制走独立端口/域名。"""
     page = page_service.visible_by_slug(slug)
-    if page is None or (not page.is_public and not current_user.is_authenticated):
+    if page is None:
+        abort(404)
+    if page.is_public:
+        port_base = page_service.page_site_base_url()
+        if port_base:
+            return redirect(f"{port_base}/{page.slug}", code=302)
+        page_domain = page_service.page_domain_configured()
+        if page_domain:
+            return redirect(f"https://{page_domain}/{page.slug}", code=302)
+        abort(_public_page_isolation_missing())
+    if not current_user.is_authenticated:
+        abort(404)
+    if page.user_id != current_user.id and not getattr(current_user, "is_admin", False):
         abort(404)
     return _render_page(page)
 
@@ -209,7 +225,6 @@ def edit(page_id):
 
 
 @bp.route("/api/save", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_save():
     """新建或更新页面（JSON）：page_id 为空新建，否则更新。"""
@@ -246,7 +261,6 @@ def api_save():
 
 
 @bp.route("/api/toggle", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_toggle():
     """显示/隐藏开关：enabled=false 时前台 404（后台仍可编辑）。"""
@@ -259,7 +273,6 @@ def api_toggle():
 
 
 @bp.route("/api/duplicate", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_duplicate():
     """复制页面为新页面。"""
@@ -272,7 +285,6 @@ def api_duplicate():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     """软删除页面（slug 同步释放）。"""

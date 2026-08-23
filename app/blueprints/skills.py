@@ -4,11 +4,19 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
-from app.extensions import csrf
 from app.services import skill_service
 from app.utils.timeutil import fmt_dt, user_tz
 
 bp = Blueprint("skills", __name__, url_prefix="/skills")
+
+
+def _is_admin() -> bool:
+    """当前登录用户是否为管理员（与 settings_page 中的判断方式一致）。"""
+    return bool(getattr(current_user, "is_admin", False))
+
+
+def _admin_denied():
+    return jsonify({"ok": False, "error": "仅管理员可操作技能"}), 403
 
 
 def _view(skill) -> dict:
@@ -33,10 +41,11 @@ def index():
 
 
 @bp.route("/api/toggle", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_toggle():
-    """启用/停用（启用即编译并注册执行）。"""
+    """启用/停用（启用即编译并注册执行）。仅管理员可操作：启用技能 = 在沙箱注册执行。"""
+    if not _is_admin():
+        return _admin_denied()
     data = request.get_json(silent=True) or {}
     skill = skill_service.get_skill(data.get("skill_id"))
     if skill is None:
@@ -49,10 +58,11 @@ def api_toggle():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
-    """软删除技能。"""
+    """软删除技能。仅管理员可操作。"""
+    if not _is_admin():
+        return _admin_denied()
     data = request.get_json(silent=True) or {}
     skill = skill_service.get_skill(data.get("skill_id"))
     if skill is None:

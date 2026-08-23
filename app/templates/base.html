@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <script>
     (function () {
       var KEY = "lingxi-theme";
@@ -27,7 +28,7 @@
   <title>{% block title %}灵犀{% endblock %} · 灵犀 个人 AI 助理</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='20260823c') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css', v='1.11.3') }}">
-  <script src="{{ url_for('static', filename='js/app.js', v='20260823c') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/app.js', v='20260823d') }}" defer></script>
   {% block head %}{% endblock %}
 </head>
 <body data-auth="{{ '1' if current_user.is_authenticated else '0' }}">

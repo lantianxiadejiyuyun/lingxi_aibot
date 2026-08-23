@@ -272,22 +272,25 @@
         <div class="form-group">
           <label for="sc_key">Server酱 SendKey</label>
           <div class="form-inline">
-            <input class="input" type="text" id="sc_key" name="sc_key" value="{{ channels.sc_key }}" placeholder="sctp 开头的 SendKey" style="flex:1">
+            <input class="input" type="text" id="sc_key" name="sc_key" value="{{ channels.sc_key.value }}" placeholder="sctp 开头的 SendKey" style="flex:1">
             <button class="btn btn-ghost btn-sm" type="button" data-test-channel="serverchan">发送测试</button>
           </div>
+          {% if channels.sc_key.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）；在此填写可覆盖为你自己的 SendKey。</p>{% endif %}
           <p class="cron-hint">前往 <a href="https://sct.ftqq.com" target="_blank" rel="noopener">Server酱</a> 获取 SendKey，用于推送消息到微信。</p>
         </div>
         <div class="form-group">
           <label for="feishu_webhook_url">飞书自定义机器人 Webhook</label>
           <div class="form-inline">
-            <input class="input" type="text" id="feishu_webhook_url" name="feishu_webhook_url" value="{{ channels.feishu_webhook_url }}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" style="flex:1">
+            <input class="input" type="text" id="feishu_webhook_url" name="feishu_webhook_url" value="{{ channels.feishu_webhook_url.value }}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" style="flex:1">
             <button class="btn btn-ghost btn-sm" type="button" data-test-channel="feishu">发送测试</button>
           </div>
+          {% if channels.feishu_webhook_url.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）；在此填写可覆盖为你自己的 Webhook。</p>{% endif %}
           <p class="cron-hint">在飞书群中添加「自定义机器人」获取 Webhook 地址。</p>
         </div>
         <div class="form-group">
           <label for="feishu_secret">飞书加签密钥（可选）</label>
-          <input class="input" type="password" id="feishu_secret" name="feishu_secret" value="{{ channels.feishu_secret }}" placeholder="机器人安全设置中的加签密钥，留空则不加签" autocomplete="off">
+          <input class="input" type="password" id="feishu_secret" name="feishu_secret" value="{{ channels.feishu_secret.value }}" placeholder="机器人安全设置中的加签密钥，留空则不加签" autocomplete="off">
+          {% if channels.feishu_secret.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）；在此填写可覆盖为你自己的加签密钥。</p>{% endif %}
         </div>
         <div class="form-group">
           <label>默认推送渠道</label>
@@ -387,17 +390,20 @@
           </div>
           <div class="form-group">
             <label for="feishu_app_secret">App Secret</label>
-            <input class="input" type="password" id="feishu_app_secret" name="feishu_app_secret" value="{{ feishu_app.app_secret }}" placeholder="应用凭证（勿外泄）" autocomplete="off">
+            <input class="input" type="password" id="feishu_app_secret" name="feishu_app_secret" value="{{ feishu_app.app_secret.value }}" placeholder="应用凭证（勿外泄）" autocomplete="off">
+            {% if feishu_app.app_secret.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）。</p>{% endif %}
           </div>
         </div>
         <div class="form-row">
           <div class="form-group">
             <label for="feishu_event_token">事件订阅 验证令牌（Verification Token）</label>
-            <input class="input" type="text" id="feishu_event_token" name="feishu_event_token" value="{{ feishu_app.event_token }}" placeholder="可选，用于 URL 验证握手" autocomplete="off">
+            <input class="input" type="text" id="feishu_event_token" name="feishu_event_token" value="{{ feishu_app.event_token.value }}" placeholder="可选，用于 URL 验证握手" autocomplete="off">
+            {% if feishu_app.event_token.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）。</p>{% endif %}
           </div>
           <div class="form-group">
             <label for="feishu_event_encrypt_key">事件订阅 加密密钥（Encrypt Key）</label>
-            <input class="input" type="text" id="feishu_event_encrypt_key" name="feishu_event_encrypt_key" value="{{ feishu_app.encrypt_key }}" placeholder="可选，勾选加密后填写" autocomplete="off">
+            <input class="input" type="text" id="feishu_event_encrypt_key" name="feishu_event_encrypt_key" value="{{ feishu_app.encrypt_key.value }}" placeholder="可选，勾选加密后填写" autocomplete="off">
+            {% if feishu_app.encrypt_key.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）。</p>{% endif %}
           </div>
         </div>
         <div class="form-row">
@@ -889,11 +895,13 @@
           </div>
           <div class="form-group">
             <label for="serper_api_key">Serper API Key（可选）</label>
-            <input class="input" type="password" id="serper_api_key" name="serper_api_key" value="{{ search_cfg.serper_key }}" placeholder="sk-…" autocomplete="off">
+            <input class="input" type="password" id="serper_api_key" name="serper_api_key" value="{{ search_cfg.serper_key.value }}" placeholder="sk-…" autocomplete="off">
+            {% if search_cfg.serper_key.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）。</p>{% endif %}
           </div>
           <div class="form-group">
             <label for="tavily_api_key">Tavily API Key（可选）</label>
-            <input class="input" type="password" id="tavily_api_key" name="tavily_api_key" value="{{ search_cfg.tavily_key }}" placeholder="tvly-…" autocomplete="off">
+            <input class="input" type="password" id="tavily_api_key" name="tavily_api_key" value="{{ search_cfg.tavily_key.value }}" placeholder="tvly-…" autocomplete="off">
+            {% if search_cfg.tavily_key.using_global %}<p class="cron-hint">正在使用系统全局配置（值已隐藏）。</p>{% endif %}
           </div>
         </div>
         <div class="form-inline">
@@ -993,7 +1001,7 @@
       var html = "";
       if (d.running || d.alive) html = '<span class="tag tag-green">长连接运行中</span>';
       else html = '<span class="tag tag-yellow">未连接</span>';
-      if (d.error) html += ' <span class="muted">' + d.error + "</span>";
+      if (d.error) html += ' <span class="muted">' + window.escapeHtml(d.error) + "</span>";
       if (!d.sdk_installed) html += ' <span class="muted">未安装 lark-oapi</span>';
       box.innerHTML = html;
     }).catch(function () {});
@@ -1008,7 +1016,7 @@
         var html = "";
         if (d.running || d.alive) html = '<span class="tag tag-green">长连接运行中</span>';
         else html = '<span class="tag tag-yellow">未连接</span>';
-        if (d.error) html += ' <span class="muted">' + d.error + "</span>";
+        if (d.error) html += ' <span class="muted">' + window.escapeHtml(d.error) + "</span>";
         if (!d.sdk_installed) html += ' <span class="muted">未安装 lark-oapi</span>';
         box.innerHTML = html;
       }).catch(function () {});

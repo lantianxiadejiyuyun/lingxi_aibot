@@ -1,0 +1,16 @@
+# 构建上下文排除项（防止 .env 密钥等进入镜像）
+.env
+.env.*
+!.env.example
+data/
+venv/
+.venv/
+__pycache__/
+*.pyc
+logs/
+certs/
+.git/
+.gitignore
+*.zip
+instance/
+migrations/

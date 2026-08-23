@@ -21,13 +21,14 @@ def _tz():
     return get_tz(name)
 
 
-def _find_task(task_id) -> Task:
-    """按 id 取未删除任务，非法或不存在抛 ValueError（信息回给模型自纠）。"""
+def _find_task(task_id, user_id) -> Task:
+    """按 id 取当前用户的未删除任务；非法、不存在或不属于该用户抛 ValueError（信息回给模型自纠）。"""
     try:
         tid = int(task_id)
     except (TypeError, ValueError):
         raise ValueError("task_id 必须是数字") from None
-    task = Task.query.filter(Task.id == tid, Task.deleted_at.is_(None)).first()
+    task = Task.query.filter(Task.id == tid, Task.user_id == user_id,
+                             Task.deleted_at.is_(None)).first()
     if task is None:
         raise ValueError(f"任务 {tid} 不存在或已删除")
     return task
@@ -158,7 +159,7 @@ def create_task(title: str, due: str | None = None, priority: int = 2,
 def update_task(task_id: int, title: str | None = None, due: str | None = None,
                 priority: int | None = None, notes: str | None = None,
                 project: str | None = None, status: str | None = None):
-    task = _find_task(task_id)
+    task = _find_task(task_id, current_user.id)
     fields = {}
     if title is not None:
         fields["title"] = title
@@ -191,7 +192,7 @@ def update_task(task_id: int, title: str | None = None, due: str | None = None,
     },
 )
 def complete_task(task_id: int):
-    task = _find_task(task_id)
+    task = _find_task(task_id, current_user.id)
     task_service.set_task_status(task, "done")
     return f"✅ 任务「{task.title}」已完成"
 
@@ -208,7 +209,7 @@ def complete_task(task_id: int):
     dangerous=True,
 )
 def delete_task(task_id: int):
-    task = _find_task(task_id)
+    task = _find_task(task_id, current_user.id)
     title = task.title
     task_service.soft_delete_task(task)
     return f"🗑️ 已删除任务「{title}」"

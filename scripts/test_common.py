@@ -25,6 +25,15 @@ def login(session, base="http://127.0.0.1:5000",
                          data={"csrf_token": token, "username": username, "password": password},
                          allow_redirects=False)
         if r.status_code == 302:
+            # 登录后刷新 CSRF（Flask-Login 可能轮换 session），并注入后续 JSON 请求头
+            try:
+                r2 = session.get(base + "/", timeout=5)
+                m2 = re.search(r'name="csrf-token"[^>]*content="([^"]+)"', r2.text)
+                if m2:
+                    token = m2.group(1)
+            except Exception:
+                pass
+            session.headers["X-CSRFToken"] = token
             return token
         if r.status_code == 429:
             print("  (登录限流，等待 65s 后重试…)")

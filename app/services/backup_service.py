@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -35,6 +36,15 @@ KEEP_BACKUPS = 7  # 保留最近 N 份备份（可被 settings.backup_keep 覆�
 
 # 支持的备份文件后缀（新文件为 .json.gz，兼容历史 .json）
 _SUFFIXES = (".json", ".json.gz")
+
+# 恢复表白名单：仅业务表、仅合法标识符，防反引号注入与任意表覆写
+_TABLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_BUSINESS_TABLES = frozenset({
+    "users", "events", "tasks", "notes", "conversations", "messages",
+    "notifications", "scheduled_jobs", "settings", "webpages", "image_assets",
+    "skills", "memories", "embeddings", "fitness_records", "trip_plans",
+    "expense_records",
+})
 
 
 def _serialize(value):
@@ -144,6 +154,31 @@ def delete_backup(name: str) -> None:
         p.unlink()
 
 
+def _restore_users(table, rows: list) -> int:
+    """恢复 users：不整表清空，不覆盖已有账号，新增用户强制非管理员。"""
+    from app.models.user import User
+
+    existing_ids = {u.id for u in User.query.all()}
+    existing_names = {u.username for u in User.query.all()}
+    inserted = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        uid = row.get("id")
+        name = row.get("username")
+        if uid in existing_ids or (name and name in existing_names):
+            continue  # 不覆盖已有用户（含管理员）
+        payload = dict(row)
+        payload["is_admin"] = False
+        db.session.execute(table.insert(), [payload])
+        if uid is not None:
+            existing_ids.add(uid)
+        if name:
+            existing_names.add(name)
+        inserted += 1
+    return inserted
+
+
 def restore_from_json(path) -> dict[str, int]:
     """从备份文件恢复数据：逐表清空后按备份重建（保留原 ID），返回各表恢复行数。
 
@@ -176,9 +211,17 @@ def restore_from_json(path) -> dict[str, int]:
 
     try:
         for table_name, rows in tables.items():
-            if table_name not in existing or not isinstance(rows, list):
+            if not isinstance(table_name, str) or not _TABLE_NAME_RE.fullmatch(table_name):
+                continue
+            if (table_name not in existing or table_name not in _BUSINESS_TABLES
+                    or not isinstance(rows, list)):
                 continue
             table = Table(table_name, meta, autoload_with=db.engine)
+            if table_name == "settings":
+                continue  # 不覆盖运行时配置（含密钥）
+            if table_name == "users":
+                restored[table_name] = _restore_users(table, rows)
+                continue
             db.session.execute(text(f"DELETE FROM `{table_name}`"))
             # 分批插入，避免单条多值语句过大
             batch = 1000

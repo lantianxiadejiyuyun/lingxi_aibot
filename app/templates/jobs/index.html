@@ -167,13 +167,11 @@
 {% for j in builtin %}
 <form id="job-update-{{ j.id }}" method="post" action="{{ url_for('jobs.update', job_id=j.id) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <input type="hidden" name="enabled" value="0">
 </form>
 {% endfor %}
 {% for j in custom %}
 <form id="job-update-{{ j.id }}" method="post" action="{{ url_for('jobs.update', job_id=j.id) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <input type="hidden" name="enabled" value="0">
 </form>
 <form id="job-delete-{{ j.id }}" method="post" action="{{ url_for('jobs.delete', job_id=j.id) }}" data-confirm="确定删除该定时提醒吗？删除后不可恢复。">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

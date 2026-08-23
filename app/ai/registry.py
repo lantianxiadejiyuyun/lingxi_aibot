@@ -27,7 +27,7 @@ def register_tool(name: str, description: str, parameters: dict, dangerous: bool
     :param name: 工具名（英文 snake_case）
     :param description: 用途描述（模型依赖它决定何时调用，要写清参数含义）
     :param parameters: JSON Schema（OpenAI function calling 格式，需含 type/properties/required）
-    :param dangerous: 是否危险操作（保留字段，前端可据此提示）
+    :param dangerous: 是否危险操作（技能变更类工具会在 execute_tool 强制管理员门槛）
     """
 
     def decorator(fn: Callable) -> Callable:
@@ -77,11 +77,35 @@ def openai_tools() -> list[dict]:
     ]
 
 
+# 技能变更类危险工具：任何登录用户都可能诱导模型调用，必须强制管理员门槛。
+_SKILL_MUTATION_TOOLS = frozenset({
+    "create_skill", "update_skill", "delete_skill", "set_skill_enabled",
+})
+
+
+def _caller_is_admin() -> bool:
+    """当前请求调用者是否为管理员（无登录上下文视为否）。"""
+    try:
+        from flask_login import current_user
+
+        return bool(
+            getattr(current_user, "is_authenticated", False)
+            and getattr(current_user, "is_admin", False)
+        )
+    except Exception:  # noqa: BLE001 —— 无请求上下文
+        return False
+
+
 def execute_tool(name: str, arguments: dict[str, Any]) -> str:
     """执行工具并返回字符串结果（内容或 JSON 错误）。"""
     tool = _registry.get(name)
     if tool is None:
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
+    if tool.get("dangerous") and name in _SKILL_MUTATION_TOOLS and not _caller_is_admin():
+        return json.dumps(
+            {"error": "安全限制：创建/修改/删除技能仅管理员可执行"},
+            ensure_ascii=False,
+        )
     try:
         args = arguments or {}
         if not isinstance(args, dict):

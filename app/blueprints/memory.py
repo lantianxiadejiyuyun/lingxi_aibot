@@ -4,7 +4,6 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
-from app.extensions import csrf
 from app.services import memory_service
 from app.utils.timeutil import fmt_dt, user_tz
 
@@ -28,7 +27,6 @@ def index():
 
 
 @bp.route("/api/delete", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_delete():
     """软删除一条记忆。"""
@@ -41,7 +39,6 @@ def api_delete():
 
 
 @bp.route("/api/consolidate", methods=["POST"])
-@csrf.exempt
 @login_required
 def api_consolidate():
     """手动触发上下文梳理（压缩长对话 + 抽取长期记忆），耗时可能较长。"""

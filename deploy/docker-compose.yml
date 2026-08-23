@@ -60,6 +60,9 @@ services:
       - ./data:/app/data
 
   # ---- 应用（waitress 单进程多线程，监听容器内 8000，不对外暴露）----
+  # bind mount ./data 属主须与容器用户 aibot(uid 1000) 一致：
+  #   mkdir -p data && chown -R 1000:1000 data
+  # 或改用具名卷：  - app_data:/app/data
   app:
     build: .
     image: aibot:latest
@@ -67,6 +70,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      init:
+        condition: service_completed_successfully
     env_file: .env
     environment:
       MYSQL_HOST: db

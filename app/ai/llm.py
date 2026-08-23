@@ -466,6 +466,12 @@ class LLMClient:
         return bool(self._read_config()["api_key"])
 
     def _apply(self, cfg: dict) -> None:
+        from app.utils.urlsafety import UrlSafetyError, check_provider_url
+
+        try:
+            cfg["base_url"] = check_provider_url(cfg["base_url"])
+        except UrlSafetyError as e:
+            raise LLMError(f"模型接口地址不安全：{e}") from e
         self.protocol = cfg["protocol"]
         self.base_url = cfg["base_url"]
         self.api_key = cfg["api_key"]

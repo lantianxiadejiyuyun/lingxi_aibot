@@ -129,7 +129,14 @@ class Config:
 
     # ---- App 对接 API 鉴权 ----
     # 留空 = 禁用 /api/v1/* 接口（返回 401）；设置后 App 需在请求头携带该 Token。
-    API_TOKEN = os.getenv("API_TOKEN", "").strip()
+    # 过短的 Token 视为未配置（最小 16 位）。
+    _API_TOKEN_RAW = os.getenv("API_TOKEN", "").strip()
+    API_TOKEN_MIN_LEN = 16
+    if _API_TOKEN_RAW and len(_API_TOKEN_RAW) < API_TOKEN_MIN_LEN:
+        logger.warning("API_TOKEN 长度不足 %s 位，已忽略（视为未配置）", API_TOKEN_MIN_LEN)
+        API_TOKEN = ""
+    else:
+        API_TOKEN = _API_TOKEN_RAW
 
     # ---- MySQL ----
     MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
@@ -175,8 +182,9 @@ class Config:
     DEFAULT_CHANNELS = os.getenv("DEFAULT_CHANNELS", "inapp")
 
     # ---- 管理员（仅首次初始化使用）----
+    # ADMIN_PASSWORD 留空时，CLI 初始化会自动生成随机密码并打印一次（不再使用弱默认口令）
     ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 
     # ---- 调度 ----
     SCHEDULER_ENABLED = _bool("SCHEDULER_ENABLED", True)
@@ -190,7 +198,11 @@ class Config:
     # 独立网页 HTTP 端口（无需 HTTPS）：如 8080 → http://IP:8080/<slug>；0/空 = 不另开端口
     PAGE_PORT = _int("PAGE_PORT", 0)
     PAGE_HOST = os.getenv("PAGE_HOST", "").strip()  # 链接里显示的主机，留空则自动用局域网 IPv4
+    # 网页站点监听地址：默认 127.0.0.1（避免公网直开与后台同主机共享 Cookie）
+    PAGE_BIND = os.getenv("PAGE_BIND", "127.0.0.1").strip() or "127.0.0.1"
     MAIN_PORT = _int("PORT", 5000)
+    # 允许把 LLM/图片/TTS 等 provider 指到本机/局域网（Ollama 等）；默认关，防 SSRF
+    ALLOW_LOCAL_PROVIDERS = _bool("ALLOW_LOCAL_PROVIDERS", False)
 
     # ---- 后台安全入口（可选）----
     # 设置后，后台域名必须带 /<入口> 前缀访问（其余路径 404，隐藏后台存在）。

@@ -209,10 +209,12 @@ def build_briefing(kind: str, user) -> str:
     else:
         content = _fallback_markdown(kind, data)
 
-    # ---- 落库（复用当天同名简报会话）----
-    conv = Conversation.query.filter(Conversation.title == title).order_by(Conversation.id.desc()).first()
+    # ---- 落库（复用当天该用户的同名简报会话）----
+    conv = Conversation.query.filter(Conversation.title == title,
+                                     Conversation.user_id == user.id).order_by(
+        Conversation.id.desc()).first()
     if conv is None:
-        conv = Conversation(title=title)
+        conv = Conversation(title=title, user_id=user.id)
         db.session.add(conv)
     conv.updated_at = utcnow()
     conv.messages.append(Message(role="assistant", content=content, conversation=conv))

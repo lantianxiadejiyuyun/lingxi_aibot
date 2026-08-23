@@ -42,6 +42,12 @@ def describe_image(image_bytes: bytes, prompt: str = "请用简洁的中文描�
     cfg = _read_config()
     if not is_configured():
         raise VisionError("视觉模型未配置：请先在「设置 → 视觉模型」填入 BaseURL / API Key / 模型")
+    from app.utils.urlsafety import UrlSafetyError, check_provider_url
+
+    try:
+        cfg["base_url"] = check_provider_url(cfg["base_url"])
+    except UrlSafetyError as e:
+        raise VisionError(f"视觉接口地址不安全：{e}") from e
 
     b64 = base64.b64encode(image_bytes).decode()
     data_uri = f"data:image/{image_format};base64,{b64}"

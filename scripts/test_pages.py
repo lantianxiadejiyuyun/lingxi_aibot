@@ -68,12 +68,12 @@ auto_id = (r.json().get("data") or {}).get("id")
 auto_slug = (r.json().get("data") or {}).get("slug")
 check("自动生成 slug", bool(auto_slug and auto_slug.startswith("p")), str(r.json()))
 
-# ---- 公开访问（登录态 + 匿名态）----
+# ---- 公开访问：后台域不再输出公开页（防同源 XSS）；未配独立域名/端口则 404 ----
 r = s.get(BASE + "/p/smoke-page")
-check("公开页登录态 200", r.status_code == 200 and "test-marker" in r.text)
+check("公开页后台域不直接渲染", r.status_code in (302, 404), f"status={r.status_code}")
 anon = requests.Session()
 r = anon.get(BASE + "/p/smoke-page")
-check("公开页匿名 200", r.status_code == 200 and "灵犀 网页测试" in r.text)
+check("公开页后台域匿名不直接渲染", r.status_code in (302, 404), f"status={r.status_code}")
 
 # ---- 编辑 ----
 r = s.post(BASE + "/pages/api/save", json={
@@ -81,8 +81,8 @@ r = s.post(BASE + "/pages/api/save", json={
     "content": HTML_OK.replace("灵犀 网页测试", "灵犀 网页测试-已更新"),
 })
 check("更新网页", r.json().get("ok") is True, str(r.json()))
-r = s.get(BASE + "/p/smoke-page")
-check("更新已生效", "已更新" in r.text)
+r = s.get(BASE + f"/pages/edit/{page_id}")
+check("更新已生效", "已更新" in r.text, f"status={r.status_code}")
 
 # ---- 显示开关（后台控制显示）----
 r = s.post(BASE + "/pages/api/toggle", json={"page_id": page_id, "enabled": False})
