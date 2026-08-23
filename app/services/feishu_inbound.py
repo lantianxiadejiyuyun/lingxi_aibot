@@ -166,9 +166,12 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
                     return
 
                 image_ids: list[int] = []
-                final_text, err = "", ""
+                final_text, err, ack_text = "", "", ""
                 for ev in run_chat(conv, text, user):
-                    if ev[0] == "done":
+                    if ev[0] == "ack":
+                        ack_text = ev[1]
+                        send_text(chat_id, ack_text)
+                    elif ev[0] == "done":
                         final_text = ev[1]
                     elif ev[0] == "error":
                         err = ev[1]
@@ -179,6 +182,10 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
 
                 reply = final_text or f"🤖 处理失败：{err}"
                 reply_clean = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', reply).strip()
+                if ack_text:
+                    from app.ai.prompts import strip_leading_ack
+
+                    reply_clean = strip_leading_ack(reply_clean, ack_text)
 
                 if reply_clean:
                     from app.utils.netinfo import feishu_sdk_page_warning, reply_looks_like_page

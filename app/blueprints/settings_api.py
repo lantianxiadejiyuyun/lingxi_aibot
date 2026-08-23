@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request
 from flask_login import current_user, login_required
 
 from app.blueprints.settings_page import _CHANNEL_OPTIONS
-from app.extensions import csrf
+from app.extensions import csrf, db
 from app.services.notify_service import notify
 
 api_bp = Blueprint("settings_api", __name__, url_prefix="/settings/api")
@@ -185,3 +185,22 @@ def api_token():
         revoke_user_api_token(current_user)
         return jsonify({"ok": True, "data": {"revoked": True}})
     return jsonify({"ok": False, "error": "action 应为 generate 或 revoke"}), 400
+
+
+@api_bp.route("/theme", methods=["POST"])
+@csrf.exempt
+@login_required
+def save_theme():
+    """保存当前用户界面主题（light / dark / system），写入 users.prefs。"""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.models.user import THEMES
+
+    data = request.get_json(silent=True) or {}
+    theme = str(data.get("theme") or "").strip()
+    if theme not in THEMES:
+        return jsonify({"ok": False, "error": "主题应为 light / dark / system"}), 400
+    saved = current_user.set_theme(theme)
+    flag_modified(current_user, "prefs")
+    db.session.commit()
+    return jsonify({"ok": True, "data": {"theme": saved}})

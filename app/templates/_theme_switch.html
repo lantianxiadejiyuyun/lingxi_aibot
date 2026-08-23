@@ -1,0 +1,11 @@
+<div class="theme-switch {{ extra_class|default('') }}" data-theme-switch>
+  <button type="button" class="btn btn-ghost btn-sm theme-switch-btn" data-theme-toggle
+          aria-label="切换主题" title="主题" aria-haspopup="true" aria-expanded="false">
+    <i class="bi bi-circle-half" data-theme-icon></i>
+  </button>
+  <div class="theme-menu" hidden>
+    <button type="button" data-theme-set="light"><i class="bi bi-sun"></i> 浅色</button>
+    <button type="button" data-theme-set="dark"><i class="bi bi-moon"></i> 深色</button>
+    <button type="button" data-theme-set="system"><i class="bi bi-circle-half"></i> 跟随系统</button>
+  </div>
+</div>

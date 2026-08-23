@@ -197,4 +197,92 @@
     html = html.replace(/<p><\/p>/g, "");
     return html;
   };
+
+  /* ---------- 主题切换（立即生效 + 登录后写入账号） ---------- */
+  var THEME_KEY = "lingxi-theme";
+  var THEMES = { light: 1, dark: 1, system: 1 };
+  var THEME_ICONS = { light: "bi-sun", dark: "bi-moon", system: "bi-circle-half" };
+
+  function themePref() {
+    var p = document.documentElement.getAttribute("data-theme-pref") || "";
+    return THEMES[p] ? p : "light";
+  }
+
+  function resolveTheme(pref) {
+    if (pref === "dark" || pref === "light") return pref;
+    try {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    } catch (e) {
+      return "light";
+    }
+  }
+
+  function syncThemeUI(pref) {
+    document.querySelectorAll("[data-theme-icon]").forEach(function (icon) {
+      icon.className = "bi " + (THEME_ICONS[pref] || THEME_ICONS.system);
+    });
+    document.querySelectorAll("[data-theme-set]").forEach(function (btn) {
+      btn.classList.toggle("active", btn.getAttribute("data-theme-set") === pref);
+    });
+  }
+
+  function applyTheme(pref, persist) {
+    if (!THEMES[pref]) pref = "light";
+    document.documentElement.setAttribute("data-theme-pref", pref);
+    document.documentElement.setAttribute("data-theme", resolveTheme(pref));
+    syncThemeUI(pref);
+    if (!persist) return;
+    try { localStorage.setItem(THEME_KEY, pref); } catch (e) { /* 隐私模式 */ }
+    if (document.body && document.body.getAttribute("data-auth") === "1" && window.api) {
+      window.api.post("/settings/api/theme", { theme: pref }).then(function (res) {
+        if (!res || !res.ok) toast((res && res.error) || "主题未保存到账号", "error");
+      }).catch(function () {
+        toast("主题未保存到账号", "error");
+      });
+    }
+  }
+
+  window.setTheme = function (pref) { applyTheme(pref, true); };
+
+  document.addEventListener("DOMContentLoaded", function () {
+    syncThemeUI(themePref());
+    try {
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () {
+        if (themePref() === "system") applyTheme("system", false);
+      });
+    } catch (e) { /* 旧浏览器 */ }
+  });
+
+  document.addEventListener("click", function (e) {
+    var setter = e.target.closest("[data-theme-set]");
+    if (setter) {
+      applyTheme(setter.getAttribute("data-theme-set"), true);
+      document.querySelectorAll(".theme-menu").forEach(function (m) {
+        m.hidden = true;
+        var btn = m.parentElement && m.parentElement.querySelector("[data-theme-toggle]");
+        if (btn) btn.setAttribute("aria-expanded", "false");
+      });
+      return;
+    }
+    var toggle = e.target.closest("[data-theme-toggle]");
+    if (toggle) {
+      var wrap = toggle.closest("[data-theme-switch]");
+      var menu = wrap && wrap.querySelector(".theme-menu");
+      if (!menu) return;
+      var open = menu.hidden;
+      document.querySelectorAll(".theme-menu").forEach(function (m) { m.hidden = true; });
+      document.querySelectorAll("[data-theme-toggle]").forEach(function (b) {
+        b.setAttribute("aria-expanded", "false");
+      });
+      menu.hidden = !open;
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      return;
+    }
+    if (!e.target.closest("[data-theme-switch]")) {
+      document.querySelectorAll(".theme-menu").forEach(function (m) { m.hidden = true; });
+      document.querySelectorAll("[data-theme-toggle]").forEach(function (b) {
+        b.setAttribute("aria-expanded", "false");
+      });
+    }
+  });
 })();

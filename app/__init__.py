@@ -272,11 +272,23 @@ def register_context(app: Flask):
             ]),
         ]
         nav_items = [item for _, items in nav_groups for item in items]
+        ui_theme = ""
+        try:
+            from flask_login import current_user as _cu
+
+            from app.models.user import DEFAULT_THEME, THEMES
+
+            if getattr(_cu, "is_authenticated", False):
+                theme = _cu.get_theme()
+                ui_theme = theme if theme in THEMES else DEFAULT_THEME
+        except Exception:  # noqa: BLE001 —— 未登录或库未初始化
+            pass
         return {
             "nav_groups": nav_groups,
             "nav_items": nav_items,
             "unread_count": unread,
             "now_utc": utcnow(),
+            "ui_theme": ui_theme,
         }
 
 

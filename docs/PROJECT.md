@@ -1,6 +1,6 @@
 # 灵犀 项目文档
 
-> 版本：v1.2 · 更新日期：2026-08-22 · 代码位置：E:\Codes\AiBot（含后台界面分组）
+> 版本：v1.2 · 更新日期：2026-08-23 · 代码位置：E:\Codes\AiBot（含后台界面分组）
 > 相关文档：[README.md](../README.md)（快速上手）· [部署.md](部署.md)（宝塔/服务器/Docker/MySQL）· [PLAN.md](PLAN.md)（原始规划）· [使用说明.html](使用说明.html)（面向使用者）
 
 ---
@@ -156,15 +156,17 @@
 | 智能 | 技能、记忆 |
 | 系统 | 定时任务、通知、设置 |
 
-- 顶栏：当前页 Bootstrap Icon + 标题（不再用 emoji）；右侧「AI 助手」按钮（对话页隐藏）、用户名、退出
+- 顶栏：当前页 Bootstrap Icon + 标题（不再用 emoji）；右侧「AI 助手」按钮（对话页隐藏）、主题切换、用户名、退出
+- **界面主题**：浅色 / 深色 / 跟随系统。登录用户写入 `users.prefs.theme`（`POST /settings/api/theme`）；未登录回退 `localStorage`。`<html data-theme>` 在 CSS 加载前由内联脚本设置，避免闪白。设置页「账户 → 外观」同步三选项
 - 设置 Tab：`tabs-wrap` 分组 + 胶囊选中态，`position: sticky`；`app.js` 在 `[data-tabs-scope]` 内切换（跨组只高亮一个）
 - 窄屏（≤860px）：侧栏收成图标、分组标签隐藏
-- 静态资源版本号 `v=20260822`（`style.css` / `app.js`）
+- 静态资源版本号 `v=20260823c`（`style.css` / `app.js`）
 
 ### 5.2 AI 助手（基座核心）
 
-- **对话人设**：设置页「模型与人设 → 对话人设」（用户级 settings：`ai_persona_name` / `ai_persona_preset` / `ai_persona_verbosity` / `ai_persona_address` / `ai_persona_extra`）。预设：默认助理 / 专业干练 / 温柔陪伴 / 幽默机智 / 讲解老师 / 行动教练 / 自定义。`build_system_prompt` 注入名字与风格，**使用规则始终追加且优先于人设**（避免改人设把工具调用改没）。保存后下一轮对话生效，无需重启。
-- **SSE 流式输出**：`POST /chat/api/send` 返回 `text/event-stream`，事件：`delta`（增量文本）/ `tool`（工具调用与结果）/ `title` / `done` / `error`
+- **对话人设**：设置页「模型与人设 → 对话人设」（用户级 settings：`ai_persona_name` / `ai_persona_preset` / `ai_persona_verbosity` / `ai_persona_address` / `ai_persona_extra` / `ai_persona_ack_template` / `ai_persona_ack_enabled`）。预设：默认助理 / 专业干练 / 温柔陪伴 / 幽默机智 / 讲解老师 / 行动教练 / 自定义。`build_system_prompt` 注入名字与风格，**使用规则始终追加且优先于人设**（避免改人设把工具调用改没）。保存后下一轮对话生效，无需重启。
+- **立即回复**：消息一到先发确认再作答。默认模板 `收到：{message}`；占位符 `{message}`（原话，超长截断）、`{name}`、`{address}`。`run_chat` 先 yield `ack`；网页把 ack 转成首段 `delta`；飞书先单独发一条，正文再发并去掉开头确认行。关闭（`ai_persona_ack_enabled=false`）则跳过
+- **SSE 流式输出**：`POST /chat/api/send` 返回 `text/event-stream`，事件：`delta`（增量文本）/ `ack`（立即确认，网页转 delta）/ `tool`（工具调用与结果）/ `title` / `done`（含确认行）/ `error`
 - **Function Calling**：模型按需调用工具，工具结果回传模型继续推理，最多 8 轮防死循环
 - **63 个工具**（`app/ai/tools/`，自动发现注册）：
 
@@ -207,7 +209,7 @@
   - `callback`（默认）：`POST /feishu/event` HTTP Webhook。URL 验证握手、AES-256-CBC 解密、v1/v2 兼容、message_id 去重；需公网 HTTPS
   - `sdk`：官方 `lark-oapi` WebSocket 长连接（`app/services/feishu_ws.py`），进程主动连开放平台，无需公网回调；开放平台须选「使用长连接接收事件」。保存配置后热启停；HTTP 路由在此模式下忽略消息事件（仍可握手），避免双通道重复回复。**无公网 IPv4 / 未配置网页域名公网 A 记录时，飞书里打不开 AI 构建的网页**（设置页黄条提示；回复含网页地址时附带说明，见 `utils/netinfo.py`）
 - **消息处理**（两种接入共用 `feishu_inbound.py`）：文本 → 绑定用户 → 会话 → AI 全工具回复；图片 → 下载入库，配置视觉模型时识别回传
-- **回复文本**：收到文本消息 → 自动创建/续接会话（chat_id → conversation 映射，多轮上下文）→ AI 全工具可用 → 通过 `im/v1/messages` API 回复原会话
+- **回复文本**：收到文本消息 → 自动创建/续接会话（chat_id → conversation 映射，多轮上下文）→ 若开启立即回复则先发确认句 → AI 全工具可用 → 通过 `im/v1/messages` API 再发正文（去掉开头确认行，避免重复）
 - **回复图片**：本轮对话中 AI 调用 `generate_image`/`edit_image` 生成图片时，自动经 `im/v1/images` 上传取 `image_key` → `msg_type:image` 把图发回飞书（文本回复自动去掉 Markdown 图片链接，避免显示裸 URL）
 - **主动发送**：`feishu_app` 渠道经 tenant_access_token（缓存至过期前 60s）发送文本/图片到指定 chat_id / open_id
 - 前置条件：飞书自建应用 + 公网 HTTPS 回调地址（国内需备案域名），见 README
@@ -344,7 +346,7 @@
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| `users` | username, password_hash, timezone, is_admin, feishu_open_id, api_token, prefs | 管理员可在设置页创建用户；飞书 `open_id` 用于消息归属；`api_token` 为 App REST 用户级鉴权 |
+| `users` | username, password_hash, timezone, is_admin, feishu_open_id, api_token, prefs | 管理员可在设置页创建用户；飞书 `open_id` 用于消息归属；`api_token` 为 App REST 用户级鉴权；`prefs.theme` 为 light/dark/system |
 | `events` | user_id, title, start_utc, end_utc, all_day, rrule, reminder_minutes, location, deleted_at | 重复事件存 RFC5545 rrule，查询时按日期范围展开 |
 | `tasks` | user_id, title, notes, due_utc, priority(1-3), status(open/done/cancelled), project, tags(JSON), completed_at, deleted_at | |
 | `notes` | user_id, title, content, tags(JSON), deleted_at | AI 长期记忆素材 |
@@ -362,7 +364,7 @@
 | `trip_plans` | user_id, destination, start_date, end_date, transports(JSON), segments(JSON), alternatives(JSON), budget, companions, notes, itinerary | 出行计划（硬删除） |
 | `expense_records` | user_id, amount, category, date, payment_method, notes | 消费记录（硬删除） |
 
-**运行时配置键（settings 表）**：`llm_base_url / llm_model / llm_api_key`、`sc_key`、`feishu_webhook_url / feishu_secret`、`feishu_app_id / feishu_app_secret / feishu_event_token / feishu_event_encrypt_key / feishu_app_target / feishu_app_target_type`、`default_channels`、`notify_briefing_channels / notify_report_channels / notify_backup_channels / notify_cleanup_channels / notify_reminder_channels`（场景渠道）、`briefing_time_morning / noon / evening`、`backup_enabled / backup_time / backup_keep / backup_channel`、`admin_domain / page_domain`、`image_base_url / image_api_key / image_model / image_size`、`feishu_chat_map`。
+**运行时配置键（settings 表）**：`llm_base_url / llm_model / llm_api_key`、`sc_key`、`feishu_webhook_url / feishu_secret`、`feishu_app_id / feishu_app_secret / feishu_event_token / feishu_event_encrypt_key / feishu_app_target / feishu_app_target_type`、`default_channels`、`notify_briefing_channels / notify_report_channels / notify_backup_channels / notify_cleanup_channels / notify_reminder_channels`（场景渠道）、`briefing_time_morning / noon / evening`、`backup_enabled / backup_time / backup_keep / backup_channel`、`admin_domain / page_domain`、`image_base_url / image_api_key / image_model / image_size`、`feishu_chat_map`、`ai_persona_name / ai_persona_preset / ai_persona_verbosity / ai_persona_address / ai_persona_extra / ai_persona_ack_template / ai_persona_ack_enabled`（对话人设，用户级）。
 
 ---
 
@@ -469,7 +471,7 @@ class MyChannel(BaseChannel):
 | POST | `/memory/api/consolidate · /delete` | 手动上下文梳理/删除记忆（JSON） |
 | GET | `/chat/api/conversations` | 会话列表 |
 | GET | `/chat/api/messages/<id>` | 会话消息 |
-| POST | `/chat/api/send` | **SSE 流式对话**（events: delta/tool/title/done/error） |
+| POST | `/chat/api/send` | **SSE 流式对话**（events: delta/ack/tool/title/done/error） |
 | POST | `/chat/api/new · /delete/<id> · /clear-all` | 会话管理（一键清空所有会话，CASCADE 删消息） |
 | POST | `/jobs/create · /update/<id> · /run/<id> · /delete/<id>` | 定时任务管理（表单） |
 | POST | `/notifications/read/<id> · /mark-all-read · /clear-read · /delete/<id>` | 通知管理（表单） |
@@ -479,6 +481,7 @@ class MyChannel(BaseChannel):
 | GET | `/api/v1/expenses` · `/stats` · `/<id>` | App 消费列表/统计/详情（用户 Token 或 `.env API_TOKEN`） |
 | POST/PUT/PATCH/DELETE | `/api/v1/expenses` · `/<id>` | App 消费增改删（用户 Token 或 `.env API_TOKEN`） |
 | POST | `/settings/api/api-token` | 生成/撤销当前用户 App Token（`{action: generate\|revoke}`） |
+| POST | `/settings/api/theme` | 保存界面主题（`{theme: light\|dark\|system}`，写入 `users.prefs`） |
 | POST | `/settings/account · /ai · /persona · /channels · /briefing · /feishu-app · /backup · /pages-domain · /image · /voice · /search · /vision` | 设置保存（表单；`/persona` 为人设） |
 | POST | `/settings/users` · `/settings/users/bind` | 管理员创建用户 / 绑定飞书 open_id |
 | POST | `/settings/api/test-channel · /test-llm · /test-feishu-app · /test-image · /backup-now` | 测试/立即执行（JSON） |
@@ -596,7 +599,8 @@ $env:FLASK_APP = "run:app"
 | `mock_image_server.py` | 本地 mock OpenAI 兼容图片接口（b64/url 双模式 + /images/edits），无真实 Key 时验证全链路 | — |
 | `test_grid_layout.py` / `test_wide_screen.py` | 布局元素与宽屏 CSS 规则 | 28/28 ✅ |
 | `test_life_modules.py` | 健身/出行/消费 AI 工具 CRUD、重置表清单、App Token 按用户隔离 | 37/37 ✅ |
-| `test_persona.py` | 对话人设：默认/自定义注入系统提示词、HTTP 保存、自定义必填、恢复默认 | 26/26 ✅ |
+| `test_persona.py` | 对话人设：默认/自定义注入系统提示词、立即回复模板与开关、HTTP 保存、自定义必填、恢复默认 | 47/47 ✅ |
+| `test_theme.py` | 界面主题：prefs 读写、非法值回退、API 保存、页面 data-theme-pref、顶栏/设置页/登录页切换 | 20/20 ✅ |
 | `test_feishu_receive.py` | 飞书接入：parse_message、callback/sdk 切换、SDK 模式 HTTP 不重复处理、无公网 IPv4 无法打开构建网页的提示 | 24/24 ✅ |
 | `test_page_port.py` | 网页独立 HTTP 端口：URL 为 http、公开页走端口、迷你站点渲染 | 10/10 ✅ |
 | `test_llm_protocol.py` | OpenAI/Anthropic 转换、每用户 Key、22 家官方 Base URL 快捷填入 | 61/61 ✅ |
@@ -681,3 +685,5 @@ $env:FLASK_APP = "run:app"
 | 2026-08-22 | 飞书收消息两种接入：HTTP 回调 / 官方 SDK（lark-oapi）长连接，后台可切换；消息处理抽到 feishu_inbound |
 | 2026-08-22 | 后台界面：侧栏分组（工作/生活/智能/系统）+ AI 置顶；设置 Tab 五组吸顶；仪表盘快捷补健身/出行/消费/网页；顶栏标题改图标、去掉 emoji |
 | 2026-08-22 | 网页站点：独立 HTTP 端口（PAGE_PORT），无需 HTTPS/域名；`page_site_server` 热启停 |
+| 2026-08-23 | 界面主题：浅色 / 深色 / 跟随系统；顶栏与登录页切换，登录后写入 `users.prefs.theme` |
+| 2026-08-23 | 对话立即回复：先确认再作答；模板可自定义（`{message}`/`{name}`/`{address}`），可关闭；网页流式首段、飞书先发一条 |

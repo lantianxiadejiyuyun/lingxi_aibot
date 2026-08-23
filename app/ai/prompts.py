@@ -1,6 +1,7 @@
 """提示词构建：系统人设、早安简报、晚间复盘。"""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.utils.timeutil import to_user, user_tz, utcnow, weekday_cn
@@ -11,6 +12,9 @@ DEFAULT_PERSONA_VERBOSITY = "normal"
 PERSONA_NAME_MAX = 32
 PERSONA_ADDRESS_MAX = 16
 PERSONA_EXTRA_MAX = 2000
+DEFAULT_ACK_TEMPLATE = "收到：{message}"
+ACK_TEMPLATE_MAX = 80
+DEFAULT_ACK_ENABLED = True
 
 # 人设预设：label 给人看，style 写进系统提示词。custom 不套风格，只用人写的补充说明。
 PERSONA_PRESETS: dict[str, dict[str, str]] = {
@@ -57,6 +61,73 @@ VERBOSITY_HINTS: dict[str, str] = {
     "detailed": "适当展开：给出步骤、原因和注意点，但仍避免注水。",
 }
 
+# 每轮对话先回立即确认再作答。截断过长原话，避免确认行喧宾夺主。
+ACK_MAX_CHARS = 40
+_ACK_PLACEHOLDER_RE = re.compile(r"\{(message|name|address)\}")
+
+
+def _message_snippet(user_text: str, max_len: int = ACK_MAX_CHARS) -> str:
+    snippet = " ".join((user_text or "").split())
+    if len(snippet) > max_len:
+        snippet = snippet[:max_len].rstrip() + "…"
+    return snippet
+
+
+def ack_received(user_text: str, user=None, persona: dict | None = None,
+                 max_len: int = ACK_MAX_CHARS) -> str:
+    """按用户模板生成立即确认。关闭或空模板返回空串。"""
+    p = persona
+    if p is None and user is not None:
+        p = load_persona(user)
+    if p is not None and not p.get("ack_enabled", DEFAULT_ACK_ENABLED):
+        return ""
+    template = DEFAULT_ACK_TEMPLATE if p is None else (p.get("ack_template") or "")
+    template = str(template).strip()
+    if p is not None and not template:
+        return ""
+    if not template:
+        template = DEFAULT_ACK_TEMPLATE
+    snippet = _message_snippet(user_text, max_len=max_len)
+    values = {
+        "message": snippet,
+        "name": (p or {}).get("name") or DEFAULT_PERSONA_NAME,
+        "address": (p or {}).get("address") or "",
+    }
+    rendered = _ACK_PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), ""), template)
+    rendered = " ".join(rendered.split()).strip()
+    if rendered in ("收到：", "收到:"):
+        return "收到。"
+    return rendered
+
+
+def compose_reply(ack: str, body: str) -> str:
+    """确认行接到正式回答前面；正文已含同样确认则不重复。"""
+    ack = (ack or "").strip()
+    body = (body or "").strip()
+    if not ack:
+        return body
+    if not body:
+        return ack
+    if body.startswith(ack):
+        return body
+    first = body.split("\n", 1)[0].strip()
+    if ack.startswith("收到") and (first.startswith("收到：") or first.startswith("收到:")):
+        return body
+    return f"{ack}\n\n{body}"
+
+
+def strip_leading_ack(text: str, ack: str = "") -> str:
+    """去掉开头的「收到：…」行，供飞书二次发送时避免重复确认。"""
+    t = (text or "").lstrip()
+    a = (ack or "").strip()
+    if a and t.startswith(a):
+        return t[len(a):].lstrip("\n").strip()
+    first, sep, rest = t.partition("\n")
+    head = first.strip()
+    if sep and (head.startswith("收到：") or head.startswith("收到:")):
+        return rest.lstrip("\n").strip()
+    return t.strip()
+
 
 def load_persona(user=None) -> dict[str, Any]:
     """读取当前用户的对话人设（settings 用户级）。缺省为默认助理。"""
@@ -73,6 +144,14 @@ def load_persona(user=None) -> dict[str, Any]:
     if verbosity not in VERBOSITY_HINTS:
         verbosity = DEFAULT_PERSONA_VERBOSITY
     address = str(get_setting("ai_persona_address", "", user_id=uid) or "").strip()[:PERSONA_ADDRESS_MAX]
+    ack_template = str(
+        get_setting("ai_persona_ack_template", DEFAULT_ACK_TEMPLATE, user_id=uid) or ""
+    ).strip()[:ACK_TEMPLATE_MAX]
+    raw_en = get_setting("ai_persona_ack_enabled", DEFAULT_ACK_ENABLED, user_id=uid)
+    if isinstance(raw_en, str):
+        ack_enabled = raw_en.strip().lower() not in ("0", "false", "")
+    else:
+        ack_enabled = bool(raw_en) if raw_en is not None else DEFAULT_ACK_ENABLED
     meta = PERSONA_PRESETS[preset]
     return {
         "name": name,
@@ -80,6 +159,8 @@ def load_persona(user=None) -> dict[str, Any]:
         "extra": extra,
         "verbosity": verbosity,
         "address": address,
+        "ack_template": ack_template or DEFAULT_ACK_TEMPLATE,
+        "ack_enabled": ack_enabled,
         "label": meta["label"],
         "style": meta["style"],
         "blurb": meta["blurb"],
@@ -130,6 +211,11 @@ def build_system_prompt(user) -> str:
         "保存为笔记（tags 加“调研”），笔记会自动进入语义检索知识库。\n"
         "6. " + VERBOSITY_HINTS[p["verbosity"]]
     )
+    if p.get("ack_enabled", DEFAULT_ACK_ENABLED):
+        parts[-1] += (
+            "\n7. 系统会在回复开头自动加上一行立即确认（用户自定义的开场白）。"
+            "你不要再写确认、不要复述用户原话，直接进入正题作答。"
+        )
     return "\n".join(parts)
 
 

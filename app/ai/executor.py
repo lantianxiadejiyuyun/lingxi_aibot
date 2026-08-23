@@ -2,9 +2,10 @@
 
 run_chat 是生成器，事件元组：
   ("delta", str)      流式文本增量
+  ("ack", str)        开场确认「收到：…」（网页转成首段 delta，飞书立即先发一条）
   ("tool", dict)      一次工具调用结果 {name, arguments, result, ok}
   ("title", str)      新会话标题
-  ("done", str)       最终助手回答
+  ("done", str)       最终助手回答（含开场确认）
   ("error", str)      出错信息
 """
 from __future__ import annotations
@@ -17,6 +18,7 @@ from flask import current_app
 from app.ai import registry
 from app.ai.llm import LLMClient
 from app.ai.memory import build_messages
+from app.ai.prompts import ack_received, compose_reply
 from app.extensions import db
 from app.models.conversation import Message
 from app.utils.timeutil import utcnow
@@ -44,6 +46,11 @@ def run_chat(conversation, user_text, user):
         user_msg = Message(role="user", content=user_text, conversation_id=conversation.id)
         db.session.add(user_msg)
         db.session.commit()
+
+        # 先回立即确认（用户可在人设里自定义）；关闭则跳过
+        ack = ack_received(user_text, user=user)
+        if ack:
+            yield ("ack", ack)
 
         # 2) 新会话：生成标题（除刚存这条外没有其他消息）
         others = [m for m in conversation.messages if m is not user_msg and m.role in ("user", "assistant")]
@@ -124,6 +131,7 @@ def run_chat(conversation, user_text, user):
         # 循环因轮数上限退出且最后一轮只有工具调用无文本：给用户明确提示
         if not final_content and tool_calls_json:
             final_content = "已连续执行多轮工具调用，达到轮次上限。请简化需求后重试。"
+        final_content = compose_reply(ack, final_content)
 
         # 5) 存储最终助手回答
         conversation.updated_at = utcnow()

@@ -75,6 +75,15 @@
       </form>
     </div>
     <div class="card" style="margin-top:16px">
+      <div class="card-head"><h2>外观</h2></div>
+      <p class="muted" style="margin-top:0">选择界面主题，保存在当前账号；换浏览器或设备登录后仍然生效。</p>
+      <div class="theme-picks" data-theme-picks>
+        <button type="button" class="chip" data-theme-set="light"><i class="bi bi-sun"></i> 浅色</button>
+        <button type="button" class="chip" data-theme-set="dark"><i class="bi bi-moon"></i> 深色</button>
+        <button type="button" class="chip" data-theme-set="system"><i class="bi bi-circle-half"></i> 跟随系统</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
       <div class="card-head"><h2>App API Token</h2></div>
       <p class="muted" style="margin-top:0">
         给手机记账 App 用。请求头带 <code>X-API-Token</code> 或 <code>Authorization: Bearer</code>，
@@ -227,6 +236,17 @@
             <label class="chip"><input type="radio" name="ai_persona_verbosity" value="normal" {% if persona.verbosity == 'normal' %}checked{% endif %}> 适中</label>
             <label class="chip"><input type="radio" name="ai_persona_verbosity" value="detailed" {% if persona.verbosity == 'detailed' %}checked{% endif %}> 详细</label>
           </div>
+        </div>
+        <div class="form-group">
+          <label for="ai_persona_ack">立即回复</label>
+          <label class="chip" style="margin-bottom:8px">
+            <input type="checkbox" name="ai_persona_ack_enabled" value="1"
+                   {% if persona.ack_enabled %}checked{% endif %}> 先立即回复，再作答
+          </label>
+          <input class="input" type="text" id="ai_persona_ack" name="ai_persona_ack"
+                 value="{{ persona.ack_template }}" maxlength="80"
+                 placeholder="收到：{message}">
+          <p class="cron-hint">消息一到立刻发出这一句，正式回答随后跟上。可用 {message} 用户原话（过长截断）、{name} 助手名、{address} 对你的称呼。</p>
         </div>
         <div class="form-group">
           <label for="ai_persona_extra">补充说明</label>

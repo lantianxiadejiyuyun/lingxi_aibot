@@ -8,6 +8,9 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from app.extensions import db
 from app.utils.timeutil import utcnow
 
+THEMES = ("light", "dark", "system")
+DEFAULT_THEME = "light"
+
 
 class User(UserMixin, db.Model):
     __tablename__ = "users"
@@ -29,6 +32,18 @@ class User(UserMixin, db.Model):
 
     def check_password(self, raw: str) -> bool:
         return check_password_hash(self.password_hash, raw)
+
+    def get_theme(self) -> str:
+        prefs = self.prefs if isinstance(self.prefs, dict) else {}
+        theme = str(prefs.get("theme") or "").strip()
+        return theme if theme in THEMES else DEFAULT_THEME
+
+    def set_theme(self, theme: str) -> str:
+        saved = theme if theme in THEMES else DEFAULT_THEME
+        prefs = dict(self.prefs or {})
+        prefs["theme"] = saved
+        self.prefs = prefs
+        return saved
 
     def __repr__(self) -> str:
         return f"<User {self.username}>"

@@ -18,6 +18,7 @@ from app.services.notify_service import (
     list_notify_groups, save_notify_group,
 )
 from app.ai.prompts import (
+    ACK_TEMPLATE_MAX, DEFAULT_ACK_ENABLED, DEFAULT_ACK_TEMPLATE,
     DEFAULT_PERSONA_NAME, DEFAULT_PERSONA_PRESET, DEFAULT_PERSONA_VERBOSITY,
     PERSONA_PRESETS, load_persona,
 )
@@ -407,7 +408,7 @@ def ai():
 @bp.route("/persona", methods=["POST"])
 @login_required
 def persona():
-    """保存对话人设（名字 / 预设 / 称呼 / 回复详细度 / 补充说明）。下一轮对话立即生效。"""
+    """保存对话人设（名字 / 预设 / 称呼 / 回复详细度 / 立即回复 / 补充说明）。下一轮对话立即生效。"""
     from app.ai.prompts import PERSONA_ADDRESS_MAX, PERSONA_EXTRA_MAX, PERSONA_NAME_MAX
     from app.ai.prompts import VERBOSITY_HINTS
 
@@ -417,6 +418,8 @@ def persona():
         set_setting("ai_persona_verbosity", DEFAULT_PERSONA_VERBOSITY)
         set_setting("ai_persona_address", "")
         set_setting("ai_persona_extra", "")
+        set_setting("ai_persona_ack_template", DEFAULT_ACK_TEMPLATE)
+        set_setting("ai_persona_ack_enabled", DEFAULT_ACK_ENABLED)
         flash("已恢复默认人设，下一轮对话生效", "success")
         return redirect(url_for("settings_page.index") + "?tab=ai")
 
@@ -439,6 +442,14 @@ def persona():
     set_setting("ai_persona_verbosity", verbosity)
     set_setting("ai_persona_address", address)
     set_setting("ai_persona_extra", extra)
+    # 旧表单/测试不带立即回复字段时保持原值，避免误关
+    if "ai_persona_ack" in request.form:
+        ack_template = (request.form.get("ai_persona_ack") or "").strip()[:ACK_TEMPLATE_MAX]
+        ack_enabled = request.form.get("ai_persona_ack_enabled") == "1"
+        if ack_enabled and not ack_template:
+            ack_template = DEFAULT_ACK_TEMPLATE
+        set_setting("ai_persona_ack_template", ack_template)
+        set_setting("ai_persona_ack_enabled", ack_enabled)
     flash("人设已保存，下一轮对话立即生效", "success")
     return redirect(url_for("settings_page.index") + "?tab=ai")
 

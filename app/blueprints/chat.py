@@ -141,6 +141,9 @@ def api_send():
                     kind, payload = ev
                     if kind == "delta":
                         yield _sse("delta", payload)
+                    elif kind == "ack":
+                        # 先把「收到：…」推到气泡里，正式回答随后流式接上
+                        yield _sse("delta", payload + "\n\n")
                     elif kind == "tool":
                         yield _sse("tool", json.dumps(payload, ensure_ascii=False))
                     elif kind == "title":
