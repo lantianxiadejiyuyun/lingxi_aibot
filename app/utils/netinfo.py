@@ -58,16 +58,14 @@ def diagnose_page_reachability() -> dict[str, Any]:
     if _cache["data"] is not None and now - _cache["at"] < _CACHE_TTL:
         return dict(_cache["data"])
 
-    from app.services.page_service import (
-        admin_domain_configured, page_domain_configured, page_port_configured,
-    )
+    from app.services.page_service import page_access_host, page_port_configured
 
     outbound, local_ip = _probe_local_ipv4()
     local_public = bool(local_ip and _is_global_ipv4(local_ip))
-    page_host = page_domain_configured() or admin_domain_configured()
+    page_host = page_access_host()
     host_public = _host_has_public_a(page_host) if page_host else False
     port = page_port_configured()
-    # 独立 HTTP 端口 + 本机有公网 IPv4 时，飞书也能打开 http://公网IP:端口/slug
+    # 独立 HTTP 端口 + 本机有公网 IPv4 时，飞书也能打开 http://公网IP:端口/webs/html/slug
     pages_ok = host_public or bool(port and local_public)
     data = {
         "outbound_ipv4": outbound,
@@ -100,14 +98,6 @@ def feishu_sdk_page_warning() -> str:
 
 def reply_looks_like_page(text: str) -> bool:
     t = text or ""
-    if "访问地址" in t or "/p/" in t:
+    if "访问地址" in t or "/p/" in t or "/webs/html/" in t:
         return True
-    try:
-        from app.services.page_service import page_domain_configured
-
-        host = page_domain_configured()
-        if host and host in t:
-            return True
-    except Exception:  # noqa: BLE001
-        pass
     return False

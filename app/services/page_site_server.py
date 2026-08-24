@@ -1,8 +1,8 @@
-"""独立 HTTP 网页站点：只提供公开网页和公开图片，不配 HTTPS / 域名。
+"""独立 HTTP 网页站点：只提供公开网页和公开图片。
 
 设置页填写「网页端口」后，在本进程再开一个监听（默认 127.0.0.1，
-可用 PAGE_BIND / page_bind 指定内网接口），访问 http://<主机>:<端口>/<slug>。
-改端口保存后热启停。
+可用 PAGE_BIND / page_bind 指定内网接口），访问
+http://<主机>:<端口>/webs/html/<slug>。改端口保存后热启停。
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import logging
 import threading
 from typing import Any, Optional
 
-from flask import Flask, Response, abort, send_file
+from flask import Flask, Response, abort, redirect, send_file
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +47,11 @@ def create_page_site_app(main_app: Flask) -> Flask:
         return Response(
             "<!doctype html><meta charset=utf-8><title>灵犀网页</title>"
             "<p style='font-family:sans-serif;padding:2rem'>这是网页站点端口。"
-            "请访问 <code>/页面slug</code>。</p>",
+            "请访问 <code>/webs/html/页面slug</code>。</p>",
             mimetype="text/html; charset=utf-8",
         )
 
-    @site.get("/p/<slug>")
-    @site.get("/<slug>")
+    @site.get("/webs/html/<slug>")
     def serve_page(slug: str):
         if "/" in slug or not slug:
             abort(404)
@@ -65,6 +64,10 @@ def create_page_site_app(main_app: Flask) -> Flask:
             resp = Response(page.content or "", mimetype="text/html; charset=utf-8")
             resp.headers["X-Content-Type-Options"] = "nosniff"
             return resp
+
+    @site.get("/p/<slug>")
+    def legacy_p(slug: str):
+        return redirect(f"/webs/html/{slug}", code=301)
 
     @site.get("/img/<path:filename>")
     def serve_image(filename: str):

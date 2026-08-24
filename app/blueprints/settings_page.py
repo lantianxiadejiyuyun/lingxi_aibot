@@ -78,12 +78,8 @@ _CHANNEL_OPTIONS = (
 
 
 def _feishu_callback_url() -> str:
-    """飞书事件回调地址：优先用配置的域名（后台域名 > 网页/主域名），避免 localhost/内网访问时生成错误地址。"""
-    domain = (str(get_setting_from("admin_domain", "ADMIN_DOMAIN", "", user_id=0) or "").strip()
-              or str(get_setting_from("page_domain", "PAGE_DOMAIN", "", user_id=0) or "").strip())
-    if domain:
-        return f"https://{domain}/feishu/event"
-    return request.host_url.rstrip("/") + url_for("feishu.event")
+    """飞书事件回调地址：固定 /feishu/event（免后台短入口）。"""
+    return request.host_url.rstrip("/") + "/feishu/event"
 
 
 def _api_token_view() -> dict:
@@ -175,6 +171,9 @@ def index():
         feishu_app["net"] = diagnose_page_reachability()
         feishu_app["page_warn"] = PAGE_UNREACHABLE_MSG
     except Exception:  # noqa: BLE001
+        from app.extensions import recover_session
+
+        recover_session()
         feishu_app["net"] = {}
         feishu_app["page_warn"] = ""
     from app.services.backup_service import list_backups
@@ -196,8 +195,6 @@ def index():
 
     port_val = page_port_configured()
     site_pages = {
-        "admin_domain": str(get_setting_from("admin_domain", "ADMIN_DOMAIN", "", user_id=0) or ""),
-        "page_domain": str(get_setting_from("page_domain", "PAGE_DOMAIN", "", user_id=0) or ""),
         "admin_entry": str(get_setting_from("admin_entry", "ADMIN_ENTRY", "", user_id=0) or ""),
         "page_port": str(port_val or get_setting_from("page_port", "PAGE_PORT", "") or ""),
         "page_host": str(get_setting_from("page_host", "PAGE_HOST", "", user_id=0) or ""),
@@ -758,13 +755,11 @@ def briefing():
 @bp.route("/pages-domain", methods=["POST"])
 @login_required
 def pages_domain():
-    """保存网页站点（端口优先）+ 可选域名/安全入口（仅管理员：影响全局部署配置与 .env）。"""
+    """保存网页站点（短入口 + 可选独立端口；仅管理员）。"""
     import re
 
     if not _is_admin():
         return _admin_denied()
-    admin = (request.form.get("admin_domain") or "").strip().lower()
-    page = (request.form.get("page_domain") or "").strip().lower()
     entry = (request.form.get("admin_entry") or "").strip().strip("/")
     host = (request.form.get("page_host") or "").strip()
     host = host.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
@@ -783,32 +778,20 @@ def pages_domain():
         if port == main_port:
             flash(f"网页端口不能与后台端口相同（{port}）", "error")
             return redirect(url_for("settings_page.index") + "?tab=pages-domain")
-    domain_re = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
-    for name, value in (("后台域名", admin), ("网页域名", page)):
-        if not value:
-            continue
-        value = re.sub(r"^https?://", "", value).split("/")[0].split(":")[0].strip().rstrip(".")
-        if not re.match(domain_re, value):
-            flash(f"{name}格式不正确（如 example.com，不要带协议/端口/路径）", "error")
-            return redirect(url_for("settings_page.index") + "?tab=pages-domain")
-        if name == "后台域名":
-            admin = value
-        else:
-            page = value
     if entry:
         if not re.match(r"^[A-Za-z0-9_-]{1,32}$", entry):
-            flash("安全入口只能包含字母/数字/下划线/连字符，且不超过 32 位", "error")
+            flash("后台短入口只能包含字母/数字/下划线/连字符，且不超过 32 位", "error")
             return redirect(url_for("settings_page.index") + "?tab=pages-domain")
-    if admin and page and admin == page:
-        flash("后台域名与网页域名不能相同", "error")
-        return redirect(url_for("settings_page.index") + "?tab=pages-domain")
-    set_setting("admin_domain", admin, user_id=0)
-    set_setting("page_domain", page, user_id=0)
+        reserved = {"webs", "html", "p", "static", "img", "setup", "feishu", "healthz",
+                    "pages", "login", "api", "admin"}
+        if entry.lower() in reserved:
+            flash("此后台短入口与系统路径冲突，请换一个", "error")
+            return redirect(url_for("settings_page.index") + "?tab=pages-domain")
     set_setting("admin_entry", entry, user_id=0)
     set_setting("page_port", port, user_id=0)
     set_setting("page_host", host, user_id=0)
     current_app.config["ADMIN_ENTRY"] = entry
-    current_app.config["ADMIN_DOMAIN"] = admin
+    current_app.config["SESSION_COOKIE_PATH"] = f"/{entry}" if entry else "/"
     current_app.config["PAGE_PORT"] = port
     current_app.config["PAGE_HOST"] = host
     try:
@@ -817,8 +800,6 @@ def pages_domain():
         from app.services.install_service import ENV_PATH, _ensure_env_file
 
         _ensure_env_file()
-        _dotenv_set_key(ENV_PATH, "ADMIN_DOMAIN", admin, quote_mode="always")
-        _dotenv_set_key(ENV_PATH, "PAGE_DOMAIN", page, quote_mode="always")
         _dotenv_set_key(ENV_PATH, "ADMIN_ENTRY", entry, quote_mode="always")
         _dotenv_set_key(ENV_PATH, "PAGE_PORT", str(port or ""), quote_mode="never")
         _dotenv_set_key(ENV_PATH, "PAGE_HOST", host, quote_mode="never")
@@ -833,9 +814,9 @@ def pages_domain():
         flash("设置已保存，但网页端口启动失败，请换一个端口或重启应用", "error")
         return redirect(url_for("settings_page.index") + "?tab=pages-domain")
     if port:
-        flash(f"已保存：网页站点 http 端口 {port}（无需 HTTPS）", "success")
+        flash(f"已保存：公开页 http 端口 {port}/webs/html/<slug>", "success")
     else:
-        flash("已保存：未设置网页端口，公开页仍走后台 /p/<slug>", "success")
+        flash("已保存：公开页走后台端口 /webs/html/<slug>（局域网 IP 可直达）", "success")
     return redirect(url_for("settings_page.index") + "?tab=pages-domain")
 
 

@@ -99,7 +99,7 @@
 ├── app/
 │   ├── __init__.py            # 应用工厂（蓝图注册/工具加载/调度器启动）
 │   ├── config.py              # 配置（.env → Config）
-│   ├── commands.py            # flask CLI：init-db / create-admin / backup-now / restore-backup / reindex / routes
+│   ├── commands.py            # flask CLI：init-db / create-admin / reset-db / reset-admin-password / backup-now / restore-backup / reindex / routes
 │   ├── extensions.py          # db / migrate / login / csrf / limiter 单例
 │   ├── scheduler.py           # APScheduler 封装 + @register_action 动作注册表
 │   ├── models/                # 17 张表 ORM 模型
@@ -111,6 +111,7 @@
 │   └── utils/                 # timeutil / urlsafety / api_auth / scoping（当前用户上下文）
 ├── data/backups/              # 备份文件目录（自动生成）
 ├── scripts/                   # 冒烟测试与功能测试脚本
+├── .grok/skills/              # 项目 Skill（改功能走 edit-flow）
 ├── docker/                    # Caddy 配置
 ├── Dockerfile / docker-compose.yml
 ├── requirements.txt / .env / .env.example
@@ -128,7 +129,7 @@
 |---|---|---|
 | 登录 | `/login` | 密码登录（限流 10 次/分）、CSRF、session 会话 |
 | 仪表盘 | `/` | 今日统计（日程/待办/到期/完成）、今日日程、待办列表、快捷操作（日历/任务/笔记/健身/出行/消费/网页/AI）、AI 提示语 |
-| 安装引导 | `/setup` | 首次安装引导页：仅在系统未初始化（数据库未连接/未建表/无管理员）时显示完整安装命令；已初始化后访问自动跳转（登录→仪表盘，匿名→登录页） |
+| 安装引导 | `/setup` | 安装向导始终可打开，每次从第①步开始：①保存数据库连接 → ②开始初始化（有表也不跳过，可重置/DROP 全部表）→ ③创建管理员 → ④基础配置。步进只跟点击，不检测管理员。写接口一律校验安装令牌。其它页面在系统未初始化时仍会跳到 `/setup` |
 | 日历 | `/calendar/` | 月视图网格（周一起始、重复展开、今天高亮）、当日明细、事件增删改弹窗 |
 | 任务 | `/tasks/` | 状态/优先级/关键词筛选、勾选完成、优先级圆点、标签、到期高亮 |
 | 笔记 | `/notes/` | 卡片流、全文搜索、增删改弹窗 |
@@ -453,7 +454,7 @@ class MyChannel(BaseChannel):
 
 ## 9. 路由 / API 清单
 
-**页面路由**：`/login` `/logout` `/` `/setup`（首次安装引导，仅未初始化时显示）`/calendar/` `/tasks/` `/notes/` `/pages/` `/pages/edit/<id>` `/images/` `/skills/` `/memory/` `/fitness/` `/travel/` `/expenses/` `/chat/` `/jobs/` `/notifications/` `/settings/` `/p/<slug>`（页面渲染；网页域名下 `/<slug>` 与 `/p/<slug>` 由 Host 路由处理，后台域名下私有页面需登录）`/img/<文件名>`（图片文件）
+**页面路由**：`/login` `/logout` `/` `/setup`（安装向导，始终可打开、从第①步开始）`/calendar/` `/tasks/` `/notes/` `/pages/` `/pages/edit/<id>` `/images/` `/skills/` `/memory/` `/fitness/` `/travel/` `/expenses/` `/chat/` `/jobs/` `/notifications/` `/settings/` `/p/<slug>`（页面渲染；网页域名下 `/<slug>` 与 `/p/<slug>` 由 Host 路由处理，后台域名下私有页面需登录）`/img/<文件名>`（图片文件）
 
 **JSON API**（`@csrf.exempt` + `@login_required`，返回 `{"ok": true, "data": ...}` / `{"ok": false, "error": "..."}`）：
 
@@ -489,7 +490,7 @@ class MyChannel(BaseChannel):
 | POST | `/feishu/event` | 飞书事件 HTTP 回调（**无登录、CSRF 豁免、token 握手**；SDK 模式下忽略消息） |
 | GET | `/settings/api/feishu-ws-status` | 官方 SDK 长连接状态 |
 
-**CLI**：`flask init-db`（建表+补列+管理员+每用户内置任务种子，幂等）· `flask create-admin` · `flask backup-now` · `flask restore-backup <path>` · `flask reindex`（重建 RAG 索引）· `flask routes`
+**CLI**：`flask init-db`（建表+补列+管理员+每用户内置任务种子，幂等）· `flask create-admin` · `flask reset-db --yes`（DROP 当前库全部数据表，不加 `--yes` 只列出表名）· `flask reset-admin-password [--username 名] [--password 新密码]`（省略密码则随机生成并打印一次；多名管理员必须指定用户名）· `flask backup-now` · `flask restore-backup <path>` · `flask reindex`（重建 RAG 索引）· `flask routes`
 
 ---
 
@@ -586,7 +587,8 @@ $env:FLASK_APP = "run:app"
 | `test_images_ai_e2e.py` | AI 端到端：对话生成图片 + 对话改图（走 mock 图服务，消耗 LLM 调用） | 4/4 ✅ |
 | `test_skills.py` | 技能：沙箱拒绝/默认禁用/启用注册执行/命名冲突/HTTP 启停删除 | 16/16 ✅ |
 | `test_memory.py` | 记忆：长对话压缩/长期记忆抽取/上下文注入/手动梳理（消耗 LLM 调用） | 13/13 ✅ |
-| `test_setup.py` | 安装引导：已初始化自动跳转/未初始化显示引导/登录页提示 | 9/9 ✅ |
+| `test_setup.py` | 安装引导：始终显示向导/从第①步开始/令牌校验/重置数据库/未初始化其它页跳 /setup | 38/38 ✅（活服务项可跳过） |
+| `test_cli.py` | flask CLI：reset-db（无 --yes 不删 / --yes mock 删除）/ reset-admin-password（指定/随机/校验/非管理员） | 11/11 ✅ |
 | `test_phase_a.py` | 阶段A：日程冲突检测/周报生成/主动早安引导/语音接口（消耗 LLM 调用） | 11/11 ✅ |
 | `test_phase_b.py` | 阶段B：记忆重要度/过期衰减/每周整理（归档/合并/坏链/清通知） | 17/17 ✅ |
 | `test_rag.py` | RAG：未配置降级/向量召回排序/索引挂钩（monkeypatch，无需真实嵌入服务） | 9/9 ✅ |
@@ -603,12 +605,14 @@ $env:FLASK_APP = "run:app"
 | `test_theme.py` | 界面主题：prefs 读写、非法值回退、API 保存、页面 data-theme-pref、顶栏/设置页/登录页切换 | 20/20 ✅ |
 | `test_feishu_receive.py` | 飞书接入：parse_message、callback/sdk 切换、SDK 模式 HTTP 不重复处理、无公网 IPv4 无法打开构建网页的提示 | 24/24 ✅ |
 | `test_page_port.py` | 网页独立 HTTP 端口：URL 为 http、公开页走端口、迷你站点渲染 | 10/10 ✅ |
+| `test_db_session.py` | 失败事务回滚：`get_setting` / 设置页遇 PendingRollbackError 自动恢复 | 4/4 ✅ |
 | `test_llm_protocol.py` | OpenAI/Anthropic 转换、每用户 Key、22 家官方 Base URL 快捷填入 | 61/61 ✅ |
 
 ---
 
 ## 14. 开发约定（新模块必读）
 
+0. **改功能流程**：功能 / 修 bug / 改页面或接口必须走 **[edit-flow](../.grok/skills/edit-flow/SKILL.md)**（`/edit-flow`）：先读源码 → 至少两轮确认需求 → 再改代码 → 跑 `scripts/` 对应测试 → **测试通过后**才更新 `docs/PROJECT.md`、`README.md`、`docs/使用说明.html`。错别字/注释/纯格式可跳过。细则只维护在 Skill 里。
 1. **时间**：DB 一律 naive UTC（`timeutil.utcnow()`）；展示用 `user_tz(current_user)`；表单/接口时间字符串用 `parse_local(text, tz)` 解析
 2. **软删除**：Event/Task/Note 删除置 `deleted_at`，查询默认过滤
 3. **AI 工具**：`@register_tool(name, description, parameters, dangerous=...)`，返回 str/dict，非法参数抛 `ValueError`（错误回传模型自纠）
@@ -652,6 +656,8 @@ $env:FLASK_APP = "run:app"
 
 | 日期 | 内容 |
 |---|---|
+| 2026-08-24 | 修复设置页 `PendingRollbackError`：失败事务自动 rollback，定时任务异常先回滚再写状态，避免连接池把坏事务传给后续请求 |
+| 2026-08-24 | 项目编辑流程 Skill `edit-flow`：先读源码、两轮确认、改代码、测试通过后再同步 PROJECT.md / README / 使用说明 |
 | 2026-08-22 | 新增完整 [部署教程](部署.md)：宝塔 / 普通 Linux / Docker / MySQL 连库 / 网页端口 / 飞书 / 安全清单；compose 增加 mysql profile、.env 挂载、PAGE_PORT 映射 |
 | 2026-08-23 | 对话模型按用户隔离 API Key；支持 OpenAI 兼容（chat.completions）与 Anthropic Messages（Claude）；设置页协议切换 + 快捷预设 |
 | 2026-08-23 | 设置页「快捷填入官方地址」：国内/国际/本地共 22 家（DeepSeek/通义/Kimi/智谱/豆包/硅基流动/星火/混元/OpenAI/Claude/Grok/Gemini/Ollama 等） |
@@ -687,3 +693,7 @@ $env:FLASK_APP = "run:app"
 | 2026-08-22 | 网页站点：独立 HTTP 端口（PAGE_PORT），无需 HTTPS/域名；`page_site_server` 热启停 |
 | 2026-08-23 | 界面主题：浅色 / 深色 / 跟随系统；顶栏与登录页切换，登录后写入 `users.prefs.theme` |
 | 2026-08-23 | 对话立即回复：先确认再作答；模板可自定义（`{message}`/`{name}`/`{address}`），可关闭；网页流式首段、飞书先发一条 |
+| 2026-08-24 | 安装向导第②步「重置数据库」：DROP 当前库全部数据表（不删库、不改 .env）；需安装令牌 + 二次确认；已初始化后禁用 |
+| 2026-08-24 | 安装向导：库中已有数据表时不自动跳过第②步，须点「开始初始化」后才进入创建管理员 |
+| 2026-08-24 | 安装向导严格按 ①→②→③→④ 点击前进：不检测管理员、已初始化也不跳离 /setup；写接口只校验安装令牌 |
+| 2026-08-24 | flask CLI：`reset-db --yes` DROP 全部数据表；`reset-admin-password` 重设管理员密码（可随机打印一次） |

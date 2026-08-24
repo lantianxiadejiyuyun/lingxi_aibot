@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask_login import login_user
 
 from run import app
+from app.extensions import db
 from app.models.user import User
 from app.models.webpage import WebPage
 from app.services import page_service
@@ -45,32 +46,64 @@ with app.app_context():
         page = WebPage(title="t", slug="porttest1", content="<html>ok</html>",
                        is_public=True, enabled=True, user_id=user.id)
         url = page_service.page_public_url(page)
-        check("公开页 URL 走端口", url == "http://10.0.0.8:18080/porttest1", url)
+        check("公开页 URL 走端口 /webs/html/", url == "http://10.0.0.8:18080/webs/html/porttest1", url)
         page.is_public = False
         priv = page_service.page_public_url(page)
-        check("私有页不走独立端口", "18080" not in priv, priv)
+        check("私有页不走独立端口", "18080" not in priv and "/webs/html/porttest1" in priv, priv)
 
         set_setting("page_port", 0, user_id=0)
         set_setting("page_host", "", user_id=0)
         check("关闭端口后 base 为空", page_service.page_site_base_url() == "")
+    db.session.rollback()
 
     site = create_page_site_app(app)
     client = site.test_client()
     pub = page_service.create_page(user.id, title="端口页", content="<h1>hello-port</h1>",
                                    slug=None, is_public=True, enabled=True)
-    r = client.get("/" + pub.slug)
+    r = client.get("/webs/html/" + pub.slug)
     check("独立站点 GET 公开页 200", r.status_code == 200 and b"hello-port" in r.data, str(r.status_code))
-    r2 = client.get("/no-such-slug-xyz")
+    r_legacy = client.get("/p/" + pub.slug, follow_redirects=False)
+    check("独立站点旧路径 301", r_legacy.status_code == 301
+          and "/webs/html/" + pub.slug in (r_legacy.headers.get("Location") or ""),
+          str(r_legacy.status_code))
+    r2 = client.get("/webs/html/no-such-slug-xyz")
     check("不存在 slug 404", r2.status_code == 404)
-    page_service.soft_delete_page(pub)
+    c_main = app.test_client()
+    r_main = c_main.get("/webs/html/" + pub.slug)
+    check("后台端口 /webs/html/ 公开页 200", r_main.status_code == 200 and b"hello-port" in r_main.data,
+          str(r_main.status_code))
+    r_lan = c_main.get("/webs/html/" + pub.slug, headers={"Host": "192.168.1.8:5000"})
+    check("局域网 Host 打开公开页", r_lan.status_code == 200, str(r_lan.status_code))
 
-    c = app.test_client()
-    with c.session_transaction() as s:
-        s["_user_id"] = str(user.id)
-        s["_fresh"] = True
-    html = c.get("/settings/").text
-    check("设置页有网页端口", "网页端口" in html and "page_port" in html)
-    check("设置页说明无需 HTTPS", "不必配证书" in html or "无需 HTTPS" in html)
+    from pathlib import Path
+
+    html = Path(app.root_path, "templates", "settings", "index.html").read_text(encoding="utf-8")
+    check("设置页有网页端口", "page_port" in html and "admin_entry" in html)
+    check("设置页说明短入口与 /webs/html/",
+          "后台短入口" in html and "/webs/html/" in html)
+
+    prev_entry = app.config.get("ADMIN_ENTRY") or ""
+    try:
+        app.config["ADMIN_ENTRY"] = "abc123"
+        app.config["SESSION_COOKIE_PATH"] = "/abc123"
+        c_ent = app.test_client()
+        r_login = c_ent.get("/login")
+        check("未带短入口 /login 404", r_login.status_code == 404, str(r_login.status_code))
+        r_ok = c_ent.get("/abc123/login", follow_redirects=False)
+        loc = r_ok.headers.get("Location") or ""
+        check("短入口 /abc123/login 进入后台",
+              r_ok.status_code != 404 and (r_ok.status_code == 200 or loc.startswith("/abc123")),
+              f"status={r_ok.status_code} loc={loc}")
+        r_pub = c_ent.get("/webs/html/" + pub.slug)
+        check("短入口模式下公开页免入口", r_pub.status_code == 200 and b"hello-port" in r_pub.data,
+              str(r_pub.status_code))
+        r_dash = c_ent.get("/", follow_redirects=False)
+        check("未带短入口访问后台 404", r_dash.status_code == 404, str(r_dash.status_code))
+    finally:
+        app.config["ADMIN_ENTRY"] = prev_entry
+        app.config["SESSION_COOKIE_PATH"] = f"/{prev_entry}" if prev_entry else "/"
+
+    page_service.soft_delete_page(pub)
 
 print(f"\n通过 {len(PASSED)}  失败 {len(FAILED)}")
 if FAILED:

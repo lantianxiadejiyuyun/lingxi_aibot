@@ -68,12 +68,19 @@ auto_id = (r.json().get("data") or {}).get("id")
 auto_slug = (r.json().get("data") or {}).get("slug")
 check("自动生成 slug", bool(auto_slug and auto_slug.startswith("p")), str(r.json()))
 
-# ---- 公开访问：后台域不再输出公开页（防同源 XSS）；未配独立域名/端口则 404 ----
-r = s.get(BASE + "/p/smoke-page")
-check("公开页后台域不直接渲染", r.status_code in (302, 404), f"status={r.status_code}")
+# ---- 公开访问：/webs/html/<slug>，局域网 Host 同样可开 ----
+r = s.get(BASE + "/webs/html/smoke-page")
+check("公开页 /webs/html/<slug> 渲染", r.status_code == 200 and "灵犀 网页测试" in r.text,
+      f"status={r.status_code}")
 anon = requests.Session()
-r = anon.get(BASE + "/p/smoke-page")
-check("公开页后台域匿名不直接渲染", r.status_code in (302, 404), f"status={r.status_code}")
+r = anon.get(BASE + "/webs/html/smoke-page")
+check("公开页匿名可访问", r.status_code == 200, f"status={r.status_code}")
+r = anon.get(BASE + "/p/smoke-page", allow_redirects=False)
+check("旧路径 /p/<slug> 301 到 /webs/html/",
+      r.status_code == 301 and "/webs/html/smoke-page" in (r.headers.get("Location") or ""),
+      f"status={r.status_code} loc={r.headers.get('Location')}")
+r = anon.get(BASE + "/webs/html/smoke-page", headers={"Host": "192.168.1.8:5000"})
+check("局域网 IP Host 可打开公开页", r.status_code == 200, f"status={r.status_code}")
 
 # ---- 编辑 ----
 r = s.post(BASE + "/pages/api/save", json={
@@ -87,7 +94,7 @@ check("更新已生效", "已更新" in r.text, f"status={r.status_code}")
 # ---- 显示开关（后台控制显示）----
 r = s.post(BASE + "/pages/api/toggle", json={"page_id": page_id, "enabled": False})
 check("隐藏页面", r.json().get("ok") is True and r.json()["data"]["enabled"] is False, str(r.json()))
-r = s.get(BASE + "/p/smoke-page")
+r = s.get(BASE + "/webs/html/smoke-page")
 check("隐藏后前台 404（登录态）", r.status_code == 404, f"status={r.status_code}")
 r = s.post(BASE + "/pages/api/toggle", json={"page_id": page_id, "enabled": True})
 check("重新显示", r.json().get("ok") is True)
@@ -97,9 +104,9 @@ r = s.post(BASE + "/pages/api/save", json={
     "page_id": page_id, "is_public": False,
 })
 check("改为私有", r.json().get("ok") is True, str(r.json()))
-r = anon.get(BASE + "/p/smoke-page")
+r = anon.get(BASE + "/webs/html/smoke-page")
 check("私有页匿名 404", r.status_code == 404, f"status={r.status_code}")
-r = s.get(BASE + "/p/smoke-page")
+r = s.get(BASE + "/webs/html/smoke-page")
 check("私有页登录态 200", r.status_code == 200)
 
 # ---- 复制 ----
@@ -110,61 +117,21 @@ check("复制页面", r.json().get("ok") is True and dup_id, str(r.json()))
 # ---- 列表页包含新页面 ----
 r = s.get(BASE + "/pages")
 check("列表页含新页面", "冒烟测试网页(改)" in r.text)
+check("列表页显示 /webs/html/ 地址", "/webs/html/smoke-page" in r.text)
 
-# ---- 域名分离（Host 模拟：后台域名 + 网页域名 + 守卫）----
-r = s.post(BASE + "/settings/pages-domain",
-           data={"csrf_token": token, "admin_domain": "admin.eugenstudio.test",
-                 "page_domain": "web.eugenstudio.test"},
-           allow_redirects=False)
-check("保存域名设置", r.status_code == 302, f"实际 {r.status_code}")
-
-# 公开页面：网页域名 /<slug>（匿名/登录均可，含 /p/ 别名）
+# 不再按 Host 跳转：任意域名/局域网 IP 都走同一路径
 s.post(BASE + "/pages/api/save", json={"page_id": page_id, "is_public": True})
-r = s.get(BASE + "/smoke-page", headers={"Host": "web.eugenstudio.test"})
-check("网页域名 /<slug> 渲染", r.status_code == 200 and "灵犀 网页测试" in r.text, f"status={r.status_code}")
-r = anon.get(BASE + "/smoke-page", headers={"Host": "web.eugenstudio.test"})
-check("网页域名公开页匿名 200", r.status_code == 200, f"status={r.status_code}")
-r = anon.get(BASE + "/p/smoke-page", headers={"Host": "web.eugenstudio.test"})
-check("网页域名 /p/<slug> 别名", r.status_code == 200, f"status={r.status_code}")
-
-# 网页域名不提供后台能力
-r = anon.get(BASE + "/login", headers={"Host": "web.eugenstudio.test"})
-check("网页域名后台路径 404", r.status_code == 404, f"status={r.status_code}")
-
-# 私有页面：网页域名 404；后台域名 /p/<slug> 登录可见
-s.post(BASE + "/pages/api/save", json={"page_id": page_id, "is_public": False})
-r = s.get(BASE + "/smoke-page", headers={"Host": "web.eugenstudio.test"})
-check("网页域名私有页 404", r.status_code == 404, f"status={r.status_code}")
-# requests 按 Host 头匹配 cookie 域：为模拟的后台域名注入同一会话 cookie（值本身与域名无关）
-_ses = s.cookies.get("session")
-if _ses:
-    s.cookies.set("session", _ses, domain="admin.eugenstudio.test", path="/")
-r = s.get(BASE + "/p/smoke-page", headers={"Host": "admin.eugenstudio.test"})
-check("后台域名私有页登录态 200", r.status_code == 200, f"status={r.status_code}")
-r = anon.get(BASE + "/p/smoke-page", headers={"Host": "admin.eugenstudio.test"})
-check("后台域名私有页匿名 404", r.status_code == 404, f"status={r.status_code}")
-
-# 后台域名守卫：其他域名 → 302 跳转后台域名
+r = anon.get(BASE + "/webs/html/smoke-page", headers={"Host": "other.eugenstudio.test"},
+             allow_redirects=False)
+check("任意 Host 不 302 跳域名", r.status_code == 200, f"status={r.status_code}")
 r = s.get(BASE + "/", headers={"Host": "other.eugenstudio.test"}, allow_redirects=False)
-check("非后台域名 302 跳转", r.status_code == 302
-      and (r.headers.get("Location") or "").startswith("https://admin.eugenstudio.test/"),
+check("任意 Host 后台不跳域名", r.status_code in (200, 302) and not (r.headers.get("Location") or "").startswith("https://"),
       f"status={r.status_code} loc={r.headers.get('Location')}")
-r = s.get(BASE + "/p/smoke-page", headers={"Host": "other.eugenstudio.test"}, allow_redirects=False)
-check("非后台域名访问页面也跳转", r.status_code == 302, f"status={r.status_code}")
-
-# 列表页展示按域名体系计算的地址（此时页面为私有 → 后台域名 /p/<slug>）
-r = s.get(BASE + "/pages")
-check("列表页显示后台域名地址", "https://admin.eugenstudio.test/p/smoke-page" in r.text)
-
-# 清理域名配置（恢复默认路径模式）
-s.post(BASE + "/settings/pages-domain",
-       data={"csrf_token": token, "admin_domain": "", "page_domain": ""},
-       allow_redirects=False)
 
 # ---- 删除（软删除 + slug 释放）----
 r = s.post(BASE + "/pages/api/delete", json={"page_id": page_id})
 check("软删除页面", r.json().get("ok") is True, str(r.json()))
-r = s.get(BASE + "/p/smoke-page")
+r = s.get(BASE + "/webs/html/smoke-page")
 check("删除后 404", r.status_code == 404, f"status={r.status_code}")
 r = s.post(BASE + "/pages/api/save", json={"title": "复用地址页", "slug": "smoke-page", "content": HTML_OK})
 check("删除后 slug 可复用", r.json().get("ok") is True, str(r.json()))

@@ -47,7 +47,7 @@ print("调用工具序列:", names)
 check("调用了 web_search", "web_search" in names)
 check("调用了 create_page", "create_page" in names)
 check("调用了 create_note（知识库）", "create_note" in names)
-check("回复含网页地址", "/p/" in text or "调研" in text)
+check("回复含网页地址", "/webs/html/" in text or "/p/" in text or "调研" in text)
 
 # 验证页面与笔记落库
 from run import app
@@ -76,7 +76,7 @@ if page_id:
         from app.services import page_service
         p = page_service.get_page(page_id)
         if p and p.is_public:
-            rr = requests.Session().get(BASE + "/p/" + p.slug, timeout=10)
+            rr = requests.Session().get(BASE + "/webs/html/" + p.slug, timeout=10)
             check("调研网页可公开访问", rr.status_code == 200 and "Python" in rr.text or "调研" in rr.text)
 
 # 清理

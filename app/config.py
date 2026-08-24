@@ -192,22 +192,24 @@ class Config:
     DATA_DIR = BASE_DIR / "data"
     BACKUP_DIR = DATA_DIR / "backups"
 
-    # ---- 域名体系（后台与网页域名分离，可在设置页修改）----
-    ADMIN_DOMAIN = os.getenv("ADMIN_DOMAIN", "")   # 后台域名，如 admin.eugenstudio.cn（留空不限制）
-    PAGE_DOMAIN = os.getenv("PAGE_DOMAIN", "")     # AI 网页域名，如 web.eugenstudio.cn（留空则用当前主机路径 /p/<slug>）
-    # 独立网页 HTTP 端口（无需 HTTPS）：如 8080 → http://IP:8080/<slug>；0/空 = 不另开端口
+    # ---- 网页站点（路径固定 /webs/html/<slug>，不再按域名分流）----
+    # 独立网页 HTTP 端口（可选）：如 8080 → http://IP:8080/webs/html/<slug>；0/空 = 走后台端口同一路径
     PAGE_PORT = _int("PAGE_PORT", 0)
     PAGE_HOST = os.getenv("PAGE_HOST", "").strip()  # 链接里显示的主机，留空则自动用局域网 IPv4
-    # 网页站点监听地址：默认 127.0.0.1（避免公网直开与后台同主机共享 Cookie）
+    # 网页站点监听地址：默认 127.0.0.1；局域网访问独立端口可改为 0.0.0.0
     PAGE_BIND = os.getenv("PAGE_BIND", "127.0.0.1").strip() or "127.0.0.1"
     MAIN_PORT = _int("PORT", 5000)
     # 允许把 LLM/图片/TTS 等 provider 指到本机/局域网（Ollama 等）；默认关，防 SSRF
     ALLOW_LOCAL_PROVIDERS = _bool("ALLOW_LOCAL_PROVIDERS", False)
 
-    # ---- 后台安全入口（可选）----
-    # 设置后，后台域名必须带 /<入口> 前缀访问（其余路径 404，隐藏后台存在）。
-    # 如 ADMIN_ENTRY=abc123 → https://botadmin.eugenstudio.cn/abc123/login
-    # 留空 = 不启用安全入口。改这里需重启应用。
+    # 兼容旧 .env：不再用于访问分流
+    ADMIN_DOMAIN = os.getenv("ADMIN_DOMAIN", "")
+    PAGE_DOMAIN = os.getenv("PAGE_DOMAIN", "")
+
+    # ---- 后台短入口（推荐）----
+    # 设置后后台须访问 /<入口>/login；不带入口访问后台 404。
+    # 公开网页仍是 /webs/html/<slug>，局域网 IP 可直达。
+    # 如 ADMIN_ENTRY=abc123 → http://192.168.1.8:8000/abc123/login
     ADMIN_ENTRY = os.getenv("ADMIN_ENTRY", "").strip().strip("/")
 
     # ---- 图片生成（OpenAI 兼容 images 接口，可在设置页修改）----

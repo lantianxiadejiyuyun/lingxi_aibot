@@ -44,7 +44,7 @@
 | 模块 | 说明 |
 |---|---|
 | 📊 仪表盘 | 今日日程、待办、到期、完成数；快捷入口覆盖日历/任务/笔记/健身/出行/消费/网页/AI |
-| ⚡ 安装引导 | 首次安装引导页：仅在系统未初始化（数据库未连接/未建表/无管理员）时显示，含完整安装命令；初始化后访问自动跳转登录/仪表盘 |
+| ⚡ 安装引导 | `/setup` 始终可打开，每次从第①步开始（连库 → 初始化 → 管理员 → 基础配置）；有表也不跳过；第②步可重置数据库（DROP 全部表，不改 .env）；写操作需安装令牌 |
 | 📅 日历 | 月视图 + 当日明细，重复事件（每天/周/月/年），提前提醒 |
 | ✅ 任务 | 优先级、截止时间、项目、标签，筛选搜索 |
 | 📝 笔记 | 快速记录，全文检索，作为 AI 的长期记忆 |
@@ -81,7 +81,13 @@ $env:FLASK_APP = "run:app"
 .\.venv\Scripts\python run.py
 ```
 
-默认管理员：`admin / admin123`（**登录后请立即在「设置 → 账号」修改密码**）。
+默认管理员：`admin / admin123`（**登录后请立即在「设置 → 账号」修改密码**）。忘记密码或要在终端清库：
+
+```powershell
+$env:FLASK_APP = "run:app"
+.\.venv\Scripts\python -m flask reset-admin-password --username admin
+.\.venv\Scripts\python -m flask reset-db --yes   # DROP 全部数据表，不加 --yes 只预览
+```
 
 ## 配置说明（.env）
 
@@ -317,6 +323,12 @@ class MyChannel(BaseChannel):
 
 顶栏右侧有「AI 助手」按钮（对话页除外）和主题切换（浅色 / 深色 / 跟随系统，写入当前账号）。设置页 Tab 分成五组并吸顶：**账户**（账号 / 外观 / 用户）、**AI**（模型与人设 / 语音 / 联网搜索）、**通知**（渠道 / 飞书 / 简报）、**生成**（图片 / 视觉）、**系统**（备份 / 网页站点）。公开网页推荐只填一个 HTTP 端口（如 8080），不必配证书和域名。
 
+## 改功能怎么做
+
+功能 / 修 bug / 改页面或接口，走项目 Skill **`.grok/skills/edit-flow/SKILL.md`**（对话里也可 `/edit-flow`）：
+
+先看源码 → 至少两轮问清需求 → 再改代码 → 跑 `scripts/` 对应测试 → **测试通过后**同步 `docs/PROJECT.md`、`README.md`、`docs/使用说明.html`。
+
 ## 项目结构
 
 ```
@@ -328,6 +340,7 @@ app/
 ├── scheduler.py   # APScheduler 调度框架 + 动作注册表
 ├── templates/     # Jinja2 模板
 └── static/        # 样式与前端工具 JS
+.grok/skills/edit-flow/  # 改功能固定流程（先读源码、确认需求、测试后再改文档）
 scripts/smoke_test.py   # 端到端冒烟测试（28 项）
 scripts/test_pages.py   # 网页生成器功能测试（34 项，含域名分离）
 scripts/test_pages_ai_e2e.py   # AI 对话真实生成网页（消耗一次 LLM 调用）
@@ -344,7 +357,8 @@ scripts/test_persona.py       # 对话人设：系统提示词、立即回复模
 scripts/test_theme.py         # 界面主题：prefs 读写、API 保存、页面 data-theme
 scripts/test_llm_protocol.py  # OpenAI / Anthropic 协议转换 + 每用户 API Key 隔离
 scripts/test_feishu_receive.py  # 飞书 HTTP 回调 vs 官方 SDK 长连接
-scripts/test_setup.py    # 安装引导页测试（9 项）
+scripts/test_setup.py    # 安装引导页测试（38 项；活服务未启动时跳过已初始化访问项）
+scripts/test_cli.py      # flask CLI：reset-db / reset-admin-password（11 项）
 scripts/mock_image_server.py   # 本地 mock 图片接口（无真实 Key 时验证全链路）
 docker/                 # Caddy 配置
 ```

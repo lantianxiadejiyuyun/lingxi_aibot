@@ -1,7 +1,7 @@
 """网页 AI 工具：创建 / 查询 / 修改 / 复制 / 删除自由 HTML 页面（网页生成器）。
 
 - content 为完整 HTML 源码（含 <!DOCTYPE html>），AI 直接编写
-- slug 为访问地址标识（公开页面：网页域名/<slug>；私有页面：后台域名/p/<slug>），不传自动生成
+- slug 为访问地址标识（公开页面：/webs/html/<slug>；私有页面登录后同一路径），不传自动生成
 - 参数非法抛 ValueError，信息回传给模型自我修正
 """
 from __future__ import annotations

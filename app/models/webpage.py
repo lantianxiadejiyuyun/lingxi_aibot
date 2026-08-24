@@ -1,6 +1,6 @@
 """网页模型：AI 生成 / 手动创建的自由 HTML 页面。
 
-- slug 唯一标识访问路径（/p/<slug> 或 <slug>.<子域名前缀>.<域名>）
+- slug 唯一标识访问路径（/webs/html/<slug>）
 - is_public=False 时仅登录用户可访问
 - enabled=False 时后台隐藏（前台 404），即"显示开关"
 - 软删除：deleted_at 非空视为已删除

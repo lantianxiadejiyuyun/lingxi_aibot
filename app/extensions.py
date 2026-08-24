@@ -7,6 +7,17 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import CSRFProtect
 
 db = SQLAlchemy()
+
+
+def recover_session() -> None:
+    """回滚失败事务，避免 PendingRollbackError 污染后续查询。"""
+    try:
+        db.session.rollback()
+    except Exception:  # noqa: BLE001
+        try:
+            db.session.remove()
+        except Exception:  # noqa: BLE001
+            pass
 migrate = Migrate()
 login_manager = LoginManager()
 csrf = CSRFProtect()

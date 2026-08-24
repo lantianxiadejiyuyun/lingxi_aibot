@@ -1,10 +1,10 @@
-"""首次安装引导页：/setup。
+"""安装引导页：/setup。
 
-- 未初始化时显示可视化安装向导：①配置数据库 → ②初始化数据库 → ③创建管理员
+- 可视化安装向导：①配置数据库 → ②初始化数据库（可重置/DROP 全部表） → ③创建管理员 → ④基础配置
+- 四步严格按点击前进，不因库里已有表/管理员而跳步或跳转离开
+- 每次打开都从第①步开始；写操作一律校验安装令牌（data/setup_token.txt）
 - 数据库连接信息直接在网页上填写，保存后写入项目 .env（无需手动编辑、无需重启）
-- 系统已初始化后访问自动跳转：登录用户 → 仪表盘，匿名 → 登录页
 - 所有探测均容错：数据库不可用时页面仍可正常渲染引导内容
-- 安全：写操作需一次性安装令牌（存于服务器 data/setup_token.txt，防止首装窗口期被公网抢注）
 """
 from __future__ import annotations
 
@@ -13,11 +13,10 @@ import secrets
 from pathlib import Path
 
 from flask import (
-    Blueprint, current_app, jsonify, redirect, render_template, request, session, url_for,
+    Blueprint, current_app, jsonify, render_template, request, session,
 )
-from flask_login import current_user
 
-from app.extensions import csrf, db
+from app.extensions import csrf, db, recover_session
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +80,7 @@ def install_status() -> dict:
 
         admin_ok = User.query.count() > 0
     except Exception:  # noqa: BLE001
+        recover_session()
         admin_ok = False
     return {"db_ok": True, "tables_ok": True, "admin_ok": admin_ok}
 
@@ -89,13 +89,6 @@ def system_initialized() -> bool:
     """系统是否已初始化：数据库可连 + 已有数据表 + 存在管理员账号。"""
     st = install_status()
     return st["db_ok"] and st["tables_ok"] and st["admin_ok"]
-
-
-def _guard_not_initialized():
-    """系统已初始化后拒绝安装 API（防止误改 .env / 重复初始化）。返回 None 表示允许。"""
-    if system_initialized():
-        return jsonify(ok=False, error="系统已初始化，安装接口已禁用"), 400
-    return None
 
 
 # ---------- 安装令牌（防首装窗口期公网抢注） ----------
@@ -147,7 +140,7 @@ def _check_token() -> bool:
     if not token:
         return False
     data = request.get_json(silent=True) or {}
-    provided = str(data.get("setup_token") or "")
+    provided = str(data.get("setup_token") or "").strip()
     return secrets.compare_digest(provided, token)
 
 
@@ -160,21 +153,17 @@ def _require_setup_token():
     return None
 
 
+def _admin_login_url() -> str:
+    """安装完成后的登录地址（含短入口），并带 installed=1 以便登录页提示收藏。"""
+    entry = (current_app.config.get("ADMIN_ENTRY") or "").strip().strip("/")
+    path = f"/{entry}/login" if entry else "/login"
+    return f"{path}?installed=1"
+
+
 @bp.route("/setup")
 def index():
-    """首次安装引导页（未初始化时显示，已初始化自动跳转）。
-
-    向导进行中会写入 session['setup_wizard']：刚建完管理员时系统已「初始化」，
-    但仍要留在本页走第④步，不能刷新后直接踢去登录。
-    """
+    """安装引导页。始终渲染向导，从第①步开始，不因已有管理员跳转。"""
     st = install_status()
-    wizard = bool(session.get("setup_wizard"))
-    if st["db_ok"] and st["tables_ok"] and st["admin_ok"] and not wizard:
-        if current_user.is_authenticated:
-            return redirect(url_for("dashboard.index"))
-        return redirect(url_for("auth.login"))
-    if not (st["db_ok"] and st["tables_ok"] and st["admin_ok"]):
-        session["setup_wizard"] = True
     # 预填当前 .env 中的数据库配置（密码不回显）
     cfg = current_app.config
     dbcfg = {
@@ -187,8 +176,6 @@ def index():
     extracfg = {
         "llm_base_url": cfg.get("LLM_BASE_URL", ""),
         "llm_model": cfg.get("LLM_MODEL", ""),
-        "admin_domain": cfg.get("ADMIN_DOMAIN", ""),
-        "page_domain": cfg.get("PAGE_DOMAIN", ""),
         "admin_entry": cfg.get("ADMIN_ENTRY", ""),
         "default_channels": cfg.get("DEFAULT_CHANNELS", "inapp"),
     }
@@ -197,6 +184,15 @@ def index():
 
 
 # ---------- 安装 API（未初始化期间可用，需安装令牌） ----------
+
+@bp.route("/setup/api/verify-token", methods=["POST"])
+@csrf.exempt
+def api_verify_token():
+    """校验安装令牌是否正确（不写入任何状态）。"""
+    if (denied := _require_setup_token()) is not None:
+        return denied
+    return jsonify(ok=True)
+
 
 def _db_form_data() -> tuple[dict | None, str]:
     data = request.get_json(silent=True) or {}
@@ -217,8 +213,6 @@ def _db_form_data() -> tuple[dict | None, str]:
 @csrf.exempt
 def api_db_test():
     """测试数据库连接（不保存）。"""
-    if (g := _guard_not_initialized()) is not None:
-        return g
     if (denied := _require_setup_token()) is not None:
         return denied
     d, err = _db_form_data()
@@ -238,8 +232,6 @@ def _probe(d: dict) -> tuple[bool, str]:
 @csrf.exempt
 def api_db_save():
     """保存数据库配置到 .env 并热重建引擎（无需重启进程）。"""
-    if (g := _guard_not_initialized()) is not None:
-        return g
     if (denied := _require_setup_token()) is not None:
         return denied
     d, err = _db_form_data()
@@ -270,12 +262,36 @@ def api_db_save():
     return _status_json(ok=ok, error=err if not ok else "")
 
 
+@bp.route("/setup/api/reset-db", methods=["POST"])
+@csrf.exempt
+def api_reset_db():
+    """安装向导中重置数据库：DROP 当前库全部数据表（不删库、不改 .env）。
+
+    只校验安装令牌，不因已有管理员拒绝。成功后前端停在第②步。
+    """
+    if (denied := _require_setup_token()) is not None:
+        return denied
+    if not _db_connectable():
+        return jsonify(ok=False, error="数据库未连接"), 400
+    from app.services.install_service import drop_all_tables
+
+    try:
+        dropped = drop_all_tables()
+        session["setup_wizard"] = True
+        msg = (f"已删除 {len(dropped)} 张数据表" if dropped else "当前库没有数据表")
+        return jsonify(ok=True, db_ok=True, tables_ok=False, admin_ok=False,
+                       dropped=dropped, message=msg)
+    except Exception as e:  # noqa: BLE001
+        recover_session()
+        payload = install_status()
+        payload.update(ok=False, error=f"重置失败：{e}")
+        return jsonify(payload), 500
+
+
 @bp.route("/setup/api/init-db", methods=["POST"])
 @csrf.exempt
 def api_init_db():
-    """初始化数据库：建表 + 补列（管理员在第③步创建，避免刷新后被踢去登录）。"""
-    if (g := _guard_not_initialized()) is not None:
-        return g
+    """初始化数据库：建表 + 补列（管理员在第③步创建）。"""
     if (denied := _require_setup_token()) is not None:
         return denied
     from app.services.install_service import initialize_database, restart_scheduler
@@ -293,9 +309,7 @@ def api_init_db():
 @bp.route("/setup/api/create-admin", methods=["POST"])
 @csrf.exempt
 def api_create_admin():
-    """创建管理员账号。"""
-    if (g := _guard_not_initialized()) is not None:
-        return g
+    """创建管理员账号。用户名已存在则报错，需换名或先重置数据库。"""
     if (denied := _require_setup_token()) is not None:
         return denied
     data = request.get_json(silent=True) or {}
@@ -331,7 +345,6 @@ def api_create_admin():
 def api_extra_save():
     """安装向导第④步：保存 AI 模型 / 域名 / 通知渠道到 .env（可跳过）。
 
-    该步骤在管理员创建后（系统已初始化）使用，因此不走 _guard_not_initialized，
     仅靠安装令牌保护；LLM 等配置之后也可在「设置」页继续修改。
     """
     if (denied := _require_setup_token()) is not None:
@@ -347,20 +360,30 @@ def api_extra_save():
         return jsonify(ok=False, error=f"保存失败：{e}"), 500
     session.pop("setup_wizard", None)
     _delete_setup_token()
+    login_url = _admin_login_url()
     if saved:
-        return jsonify(ok=True, message=f"已保存到 .env：{', '.join(saved)}（重启应用后全部生效）")
-    return jsonify(ok=True, message="未填写任何配置项，已跳过")
+        return jsonify(ok=True, message=f"已保存到 .env：{', '.join(saved)}",
+                       login_url=login_url)
+    return jsonify(ok=True, message="未填写任何配置项，已跳过", login_url=login_url)
 
 
 @bp.route("/setup/api/finish", methods=["POST"])
 @csrf.exempt
 def api_finish():
-    """结束向导（第④步跳过）：清掉 wizard 标记，之后访问 /setup 会跳登录。"""
-    if system_initialized():
-        session.pop("setup_wizard", None)
-        _delete_setup_token()
-        return jsonify(ok=True)
+    """结束向导（第④步跳过）：可顺带保存短入口，然后跳到新的登录页。"""
     if (denied := _require_setup_token()) is not None:
         return denied
+    data = request.get_json(silent=True) or {}
+    entry = str(data.get("admin_entry") or "").strip().strip("/")
+    if entry:
+        from app.services.install_service import save_extra_config
+
+        try:
+            save_extra_config({"admin_entry": entry})
+        except PermissionError:
+            return jsonify(ok=False, error="无法写入项目 .env 文件（权限不足）"), 500
+        except Exception as e:  # noqa: BLE001
+            return jsonify(ok=False, error=f"保存失败：{e}"), 500
     session.pop("setup_wizard", None)
-    return jsonify(ok=True)
+    _delete_setup_token()
+    return jsonify(ok=True, login_url=_admin_login_url())

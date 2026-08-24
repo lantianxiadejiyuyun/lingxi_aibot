@@ -684,17 +684,25 @@
     <div class="card">
       <div class="card-head"><h2>网页站点</h2></div>
       <p class="muted" style="margin-top:0">
-        AI 生成的公开网页走<strong>独立 HTTP 端口</strong>，不必配证书、也不必配域名。
-        填端口并保存后即可：<code>http://局域网IP:端口/页面slug</code>。
+        不再使用独立后台域名 / 网页域名。后台走<strong>短入口</strong>，生成的网页走
+        <code>/webs/html/页面slug</code>，局域网 IP 可直接访问。
       </p>
       <form method="post" action="{{ url_for('settings_page.pages_domain') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label for="admin_entry">后台短入口</label>
+          <div class="form-inline">
+            <input class="input" type="text" id="admin_entry" name="admin_entry" value="{{ site_pages.admin_entry }}" placeholder="如 abc123（留空则不启用）" style="flex:1">
+            <button class="btn btn-ghost" type="button" id="btn-gen-admin-entry">随机生成</button>
+          </div>
+          <p class="cron-hint">设置后后台地址为 <code>http://主机:端口/入口/login</code>，例如 <code>http://192.168.1.8:8000/abc123/login</code>。不带入口访问后台会 404。</p>
+        </div>
         <div class="form-row">
           <div class="form-group">
-            <label for="page_port">网页端口</label>
+            <label for="page_port">网页独立端口（可选）</label>
             <input class="input" type="number" id="page_port" name="page_port" min="1" max="65535"
-                   value="{{ site_pages.page_port }}" placeholder="如 8080，留空则不另开端口">
-            <p class="cron-hint">与后台端口（默认 5000 / 生产 8000）不要相同。保存后立即监听。</p>
+                   value="{{ site_pages.page_port }}" placeholder="如 8080，留空则与后台同端口">
+            <p class="cron-hint">与后台端口不要相同。留空时公开页走后台端口 <code>/webs/html/&lt;slug&gt;</code>（局域网 IP 可直达）。独立端口若要给局域网访问，请在 .env 设 <code>PAGE_BIND=0.0.0.0</code>。</p>
           </div>
           <div class="form-group">
             <label for="page_host">链接里的主机（可选）</label>
@@ -705,7 +713,7 @@
         </div>
         {% if site_pages.page_base_url %}
         <p>
-          当前公开页地址：<code>{{ site_pages.page_base_url }}/&lt;slug&gt;</code>
+          当前公开页地址：<code>{{ site_pages.page_base_url }}/webs/html/&lt;slug&gt;</code>
           {% if site_pages.page_site.running %}
           <span class="tag tag-green">端口已监听</span>
           {% elif site_pages.page_site.error %}
@@ -716,29 +724,8 @@
         </p>
         {% endif %}
         <p class="cron-hint">
-          防火墙/路由器只需放行该 TCP 端口。飞书等外网要打开页面时，主机需是公网 IPv4（或把该端口映射出去）。
+          局域网用 IP 访问即可。飞书等外网要打开页面时，把该端口映射到公网，或把 PAGE_HOST 填成公网 IP。
         </p>
-        <details style="margin:14px 0">
-          <summary class="muted" style="cursor:pointer">高级：域名与后台入口（可选，不配 HTTPS 也可不用）</summary>
-          <div class="form-row" style="margin-top:12px">
-            <div class="form-group">
-              <label for="admin_domain">后台域名</label>
-              <input class="input" type="text" id="admin_domain" name="admin_domain" value="{{ site_pages.admin_domain }}" placeholder="如 admin.eugenstudio.cn">
-            </div>
-            <div class="form-group">
-              <label for="page_domain">网页域名</label>
-              <input class="input" type="text" id="page_domain" name="page_domain" value="{{ site_pages.page_domain }}" placeholder="如 web.eugenstudio.cn">
-            </div>
-          </div>
-          <div class="form-group">
-            <label for="admin_entry">后台安全入口</label>
-            <div class="form-inline">
-              <input class="input" type="text" id="admin_entry" name="admin_entry" value="{{ site_pages.admin_entry }}" placeholder="如 abc123（留空则不启用）" style="flex:1">
-              <button class="btn btn-ghost" type="button" id="btn-gen-admin-entry">随机生成</button>
-            </div>
-            <p class="cron-hint">仅在你已经用 Nginx/Caddy 反代 HTTPS 时才需要域名。只开端口时请留空。</p>
-          </div>
-        </details>
         <button class="btn btn-primary" type="submit">保存网页站点</button>
       </form>
     </div>

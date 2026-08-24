@@ -24,24 +24,36 @@
   /* 步骤条 */
   .steps { display: flex; gap: 6px; margin: 14px 0 6px; }
   .steps .step { flex: 1; text-align: center; font-size: 12.5px; padding: 7px 4px; border-radius: 8px; background: var(--bg-2); color: var(--text-3); border: 1px solid var(--border); }
-  .steps .step.cur { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .steps .step.cur { border-color: var(--primary); color: var(--primary); font-weight: 600; }
   .steps .step.done { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
   .setup-card .setup-panel { display: none; }
+  .setup-card .setup-panel.is-on { display: block; }
+  .setup-card .token-row { display: flex; gap: 8px; align-items: stretch; }
+  .setup-card .token-row input { flex: 1; width: auto; min-width: 0; }
+  .setup-card .token-row .btn { white-space: nowrap; flex-shrink: 0; }
+  .setup-card .wizard-body.is-locked { opacity: .45; pointer-events: none; user-select: none; }
+  .setup-card .token-lock-hint { display: none; text-align: center; margin: 10px 0 0; }
+  .setup-card .wizard-body.is-locked + .token-lock-hint { display: block; }
 </style>
 
 <div class="setup-page">
   <div class="setup-card">
     <div class="logo">🤖</div>
     <h1>灵犀 安装引导</h1>
-    <p class="sub">AI 个人工作生活管理基座 · 系统尚未初始化，请按步骤完成安装</p>
+    <p class="sub">AI 个人工作生活管理基座 · 请按 ①→②→③→④ 完成安装（每次打开从第①步开始）</p>
 
-    <div class="warn" style="display:flex; flex-direction:column; gap:8px; text-align:left;">
+    <div class="warn" id="token-wrap" style="display:flex; flex-direction:column; gap:8px; text-align:left;">
       <label style="margin:0">🔑 安装令牌（安全校验，必填）</label>
-      <input type="text" id="setup-token" placeholder="粘贴安装令牌" autocomplete="off">
-      <span class="muted" style="margin:0">请读取服务器上的文件 <code>{{ setup_token_hint }}</code> 的内容粘贴到上方；
+      <div class="token-row">
+        <input type="text" id="setup-token" placeholder="粘贴安装令牌" autocomplete="off">
+        <button type="button" class="btn btn-primary" id="btn-token">确认</button>
+      </div>
+      <span class="muted" style="margin:0">请读取服务器上的文件 <code>{{ setup_token_hint }}</code> 的内容粘贴到上方，然后点击「确认」；
       未携带正确令牌时，所有安装操作都会被拒绝（防止安装窗口期被他人抢注管理员）。</span>
+      <div class="msgbox" id="token-msg"></div>
     </div>
 
+    <div class="wizard-body is-locked" id="wizard-body">
     <div class="steps">
       <div class="step" data-step="1">① 数据库</div>
       <div class="step" data-step="2">② 初始化</div>
@@ -82,10 +94,22 @@
     <section class="setup-panel" data-panel="2">
     <h2>② 初始化数据库</h2>
     <div class="okbox">✓ 数据库连接成功</div>
+    <div class="warn" id="tables-exist-hint" style="display:none">当前库中已有数据表，不会自动跳过本步。请点击「开始初始化」继续（幂等，已有表会保留），或先「重置数据库」清空后再初始化。</div>
     <p class="muted">点击「开始初始化」：自动创建数据表、补齐字段。内置定时任务会在创建管理员时写入。</p>
     <div class="msgbox" id="init-msg"></div>
     <div class="actions">
       <button type="button" class="btn btn-primary" id="btn-init"><i class="bi bi-rocket-takeoff"></i> 开始初始化</button>
+    </div>
+    <div class="warn" id="reset-db-wrap" style="margin-top:20px; background:#fef2f2; border-color:#fca5a5;">
+      <h2 style="color:#b91c1c; margin-top:0;">重置数据库（危险）</h2>
+      <p class="muted" style="color:#991b1b;">删除当前库中的<strong>全部数据表</strong>（不可恢复）。数据库连接、.env 与磁盘文件不动。删除后留在本步骤重新初始化。</p>
+      <div class="msgbox" id="reset-msg"></div>
+      <div class="actions">
+        <button type="button" class="btn btn-danger" id="btn-reset-db" disabled>
+          <i class="bi bi-trash"></i> 重置数据库
+        </button>
+      </div>
+      <p class="hint" id="reset-db-hint">当前没有数据表，按钮不可用。</p>
     </div>
     </section>
 
@@ -122,23 +146,13 @@
       <label>API Key</label>
       <input type="password" name="llm_api_key" placeholder="sk-…（留空则不修改）">
 
-      <h2 style="font-size:14px">🌐 域名与后台安全入口（可选）</h2>
-      <div class="row2">
-        <div>
-          <label>后台域名</label>
-          <input type="text" name="admin_domain" value="{{ extracfg.admin_domain }}" placeholder="admin.example.com">
-        </div>
-        <div>
-          <label>网页/主域名</label>
-          <input type="text" name="page_domain" value="{{ extracfg.page_domain }}" placeholder="eugenstudio.cn">
-        </div>
-      </div>
-      <label>后台安全入口（可选，单域名模式）</label>
+      <h2 style="font-size:14px">🔐 后台短入口（可选，推荐）</h2>
+      <label>后台短入口</label>
       <div style="display:flex; gap:8px;">
         <input type="text" name="admin_entry" id="setup-admin-entry" value="{{ extracfg.admin_entry }}" placeholder="如 abc123（留空则不启用）" style="flex:1">
         <button type="button" class="btn btn-ghost" id="btn-gen-setup-entry">🎲 随机生成</button>
       </div>
-      <div class="hint">设置后，后台需通过 <code>/&lt;入口&gt;</code> 访问（如 <code>https://你的域名/abc123/login</code>），不带入口访问后台路径一律 404；公开网页仍在 <code>/&lt;slug&gt;</code>。</div>
+      <div class="hint">设置后后台通过 <code>/&lt;入口&gt;/login</code> 访问（局域网 IP 同样适用，如 <code>http://192.168.1.8:8000/abc123/login</code>）。生成的网页在 <code>/webs/html/页面slug</code>，不需要单独域名。</div>
 
       <h2 style="font-size:14px">🔔 通知渠道（可选）</h2>
       <label>Server酱 SendKey</label>
@@ -157,6 +171,8 @@
       </div>
     </form>
     </section>
+    </div>
+    <p class="muted token-lock-hint" id="token-lock-hint">请先填写安装令牌并点击「确认」，再进行后续步骤。</p>
   </div>
 </div>
 {% endblock %}
@@ -170,6 +186,7 @@
   var status = {{ status | tojson }};
 
   function showMsg(box, text, ok) {
+    if (!box) return;
     box.style.display = "block";
     box.className = "msgbox " + (ok ? "okbox" : "errbox");
     box.style.whiteSpace = "pre-wrap";
@@ -180,17 +197,20 @@
     btn.disabled = on;
     btn.style.opacity = on ? 0.6 : 1;
   }
-  function currentStep(st) {
-    if (!st || !st.db_ok) return 1;
-    if (!st.tables_ok) return 2;
-    if (!st.admin_ok) return 3;
-    return 4;
+  var wizardStep = 1;
+  function currentStep() {
+    return wizardStep;
   }
-  function applyStatus(st) {
-    status = st || status;
-    var step = currentStep(status);
+  var tokenOk = false;
+  var btnReset = document.getElementById("btn-reset-db");
+  var btnInit = document.getElementById("btn-init");
+  var resetHint = document.getElementById("reset-db-hint");
+  var tablesHint = document.getElementById("tables-exist-hint");
+  function renderWizard() {
+    var step = currentStep();
     document.querySelectorAll(".setup-panel").forEach(function (p) {
-      p.style.display = String(p.getAttribute("data-panel")) === String(step) ? "" : "none";
+      var on = tokenOk && String(p.getAttribute("data-panel")) === String(step);
+      p.classList.toggle("is-on", on);
     });
     document.querySelectorAll(".steps .step").forEach(function (el) {
       var n = parseInt(el.getAttribute("data-step"), 10);
@@ -198,6 +218,26 @@
       if (n < step) el.classList.add("done");
       else if (n === step) el.classList.add("cur");
     });
+    var wizard = document.getElementById("wizard-body");
+    if (wizard) wizard.classList.toggle("is-locked", !tokenOk);
+    if (btnReset) {
+      btnReset.disabled = !status.tables_ok;
+      btnReset.style.opacity = status.tables_ok ? 1 : 0.6;
+    }
+    if (resetHint) {
+      resetHint.style.display = status.tables_ok ? "none" : "block";
+    }
+    if (tablesHint) {
+      tablesHint.style.display = status.tables_ok ? "block" : "none";
+    }
+  }
+  function applyStatus(st) {
+    status = st || status;
+    if (btnInit) {
+      disable(btnInit, false);
+      btnInit.innerHTML = '<i class="bi bi-rocket-takeoff"></i> 开始初始化';
+    }
+    renderWizard();
   }
   function goLogin() {
     try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {}
@@ -226,16 +266,65 @@
   }
 
   var tokenInput = document.getElementById("setup-token");
+  var btnToken = document.getElementById("btn-token");
+  var tokenBox = document.getElementById("token-msg");
+  var tokenWrap = document.getElementById("token-wrap");
+  function rememberToken() {
+    if (!tokenInput) return;
+    try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch (e) {}
+  }
+  function setTokenVerified(ok) {
+    tokenOk = !!ok;
+    if (tokenWrap) {
+      tokenWrap.classList.toggle("okbox", tokenOk);
+      tokenWrap.classList.toggle("warn", !tokenOk);
+    }
+    if (btnToken) btnToken.textContent = tokenOk ? "已确认" : "确认";
+    applyStatus(status);
+  }
+  function verifyToken(opts) {
+    opts = opts || {};
+    var val = tokenInput ? tokenInput.value.trim() : "";
+    if (!val) {
+      if (!opts.silent) showMsg(tokenBox, "请填写安装令牌", false);
+      setTokenVerified(false);
+      return;
+    }
+    disable(btnToken, true);
+    post("/setup/api/verify-token", {}).then(function (r) {
+      if (r.ok) {
+        setTokenVerified(true);
+        showMsg(tokenBox, "✓ 令牌校验通过，请继续安装", true);
+      } else {
+        setTokenVerified(false);
+        showMsg(tokenBox, "✗ " + (r.error || "安装令牌不正确"), false);
+      }
+    }).catch(function (e) {
+      setTokenVerified(false);
+      showMsg(tokenBox, "请求失败：" + e, false);
+    }).finally(function () { disable(btnToken, false); });
+  }
   if (tokenInput) {
     try {
       if (!tokenInput.value) tokenInput.value = sessionStorage.getItem(TOKEN_KEY) || "";
     } catch (e) {}
     tokenInput.addEventListener("input", function () {
-      try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch (e) {}
+      rememberToken();
+      if (tokenOk) {
+        setTokenVerified(false);
+        if (tokenBox) tokenBox.style.display = "none";
+      }
     });
-    if (tokenInput.value) {
-      try { sessionStorage.setItem(TOKEN_KEY, tokenInput.value.trim()); } catch (e) {}
-    }
+    tokenInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        verifyToken();
+      }
+    });
+    rememberToken();
+  }
+  if (btnToken) {
+    btnToken.addEventListener("click", function () { verifyToken(); });
   }
   function post(url, data) {
     data = data || {};
@@ -248,6 +337,7 @@
   }
 
   applyStatus(status);
+  if (tokenInput && tokenInput.value.trim()) verifyToken({ silent: true });
 
   // ---------- 步骤 1：数据库配置 ----------
   var dbForm = document.getElementById("db-form");
@@ -279,6 +369,7 @@
       post("/setup/api/db-save", d).then(function (r) {
         if (r.ok) {
           showMsg(box, "✓ 已保存，数据库连接成功", true);
+          wizardStep = 2;
           applyStatus({
             db_ok: true,
             tables_ok: !!r.tables_ok,
@@ -292,8 +383,41 @@
     });
   }
 
-  // ---------- 步骤 2：初始化 ----------
-  var btnInit = document.getElementById("btn-init");
+  // ---------- 步骤 2：初始化 / 重置 ----------
+  var resetBox = document.getElementById("reset-msg");
+  if (btnReset) {
+    btnReset.addEventListener("click", function () {
+      if (!status.tables_ok) return;
+      if (!window.confirm("确定要删除当前数据库中的全部数据表吗？此操作不可恢复。.env 与磁盘文件不会改动。")) {
+        return;
+      }
+      disable(btnReset, true);
+      post("/setup/api/reset-db", {}).then(function (r) {
+        if (r.ok) {
+          showMsg(resetBox, "✓ " + (r.message || "已删除全部数据表"), true);
+          wizardStep = 2;
+          applyStatus({
+            db_ok: r.db_ok !== false,
+            tables_ok: false,
+            admin_ok: false
+          });
+        } else {
+          showMsg(resetBox, "✗ " + (r.error || "重置失败"), false);
+          if (r.db_ok != null) {
+            applyStatus({
+              db_ok: !!r.db_ok,
+              tables_ok: !!r.tables_ok,
+              admin_ok: !!r.admin_ok
+            });
+          }
+        }
+      }).catch(function (e) {
+        showMsg(resetBox, "请求失败：" + e, false);
+      }).finally(function () {
+        disable(btnReset, !status.tables_ok);
+      });
+    });
+  }
   if (btnInit) {
     var initBox = document.getElementById("init-msg");
     btnInit.addEventListener("click", function () {
@@ -303,6 +427,7 @@
         if (r.ok) {
           var list = (r.messages || []).map(function (m) { return "• " + m; }).join("\n");
           showMsg(initBox, list, true);
+          wizardStep = 3;
           setTimeout(function () {
             applyStatus({
               db_ok: r.db_ok !== false,
@@ -338,6 +463,7 @@
       post("/setup/api/create-admin", { username: username, password: password }).then(function (r) {
         if (r.ok) {
           showMsg(adminBox, "✓ " + (r.message || "创建成功"), true);
+          wizardStep = 4;
           setTimeout(function () {
             applyStatus({
               db_ok: r.db_ok !== false,
@@ -362,16 +488,22 @@
     var extraBox = document.getElementById("extra-msg");
     var btnExtra = document.getElementById("btn-extra-save");
     var btnSkip = document.getElementById("btn-extra-skip");
+    function goLoginMaybe(url) {
+      try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {}
+      location.href = url || LOGIN_URL;
+    }
     btnSkip.addEventListener("click", function () {
       disable(btnSkip, true);
-      post("/setup/api/finish", {}).then(function () { goLogin(); })
-        .catch(function () { goLogin(); });
+      var entry = extraForm.admin_entry ? extraForm.admin_entry.value.trim() : "";
+      post("/setup/api/finish", { admin_entry: entry }).then(function (r) {
+        goLoginMaybe(r && r.login_url);
+      }).catch(function () { goLogin(); });
     });
     extraForm.addEventListener("submit", function (e) {
       e.preventDefault();
       disable(btnExtra, true);
       var data = {};
-      ["llm_base_url", "llm_api_key", "llm_model", "admin_domain", "page_domain",
+      ["llm_base_url", "llm_api_key", "llm_model",
        "admin_entry", "sc_key", "feishu_webhook_url", "feishu_secret",
        "default_channels"].forEach(function (n) {
         data[n] = extraForm[n].value.trim();
@@ -379,7 +511,7 @@
       post("/setup/api/extra-save", data).then(function (r) {
         if (r.ok) {
           showMsg(extraBox, "✓ " + (r.message || "已保存"), true);
-          setTimeout(goLogin, 1500);
+          setTimeout(function () { goLoginMaybe(r.login_url); }, 400);
         } else {
           showMsg(extraBox, "✗ " + (r.error || "保存失败"), false);
           disable(btnExtra, false);

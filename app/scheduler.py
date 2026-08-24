@@ -69,12 +69,21 @@ def _job_func(db_id: int, app):
             fn(user, row.params or {})
             row.last_status = "成功"
             logger.info("任务执行成功: %s", row.job_key)
+            db.session.commit()
         except Exception as e:  # noqa: BLE001 —— 任务异常不中断调度器
-            row.last_status = f"失败: {e}"
             logger.exception("任务执行失败: %s", row.job_key)
+            db.session.rollback()
+            try:
+                row = db.session.get(ScheduledJob, db_id)
+                if row is not None:
+                    row.last_run_utc = utcnow()
+                    row.last_status = f"失败: {e}"
+                    db.session.commit()
+            except Exception:  # noqa: BLE001
+                db.session.rollback()
+                logger.exception("任务失败状态无法写入: %s", row.job_key if row else db_id)
         finally:
             clear_current_user_id()
-        db.session.commit()
 
 
 class SchedulerService:
@@ -97,17 +106,23 @@ class SchedulerService:
 
     # ---------- 同步 ----------
     def _desired_jobs(self) -> dict[str, dict]:
-        """DB 中启用的任务 → {aps_job_id: (row, trigger)}。"""
+        """DB 中启用的任务 → {aps_job_id: (job_id, trigger)}。
+
+        必须在 app_context 内把字段拷出来：上下文结束会 rollback/expire，不能在外面读 ORM 对象。
+        """
         with self.app.app_context():
-            rows = ScheduledJob.query.filter_by(enabled=True).all()
+            snaps = [
+                {"id": row.id, "job_key": row.job_key, "cron": row.cron}
+                for row in ScheduledJob.query.filter_by(enabled=True).all()
+            ]
         desired = {}
-        for row in rows:
+        for snap in snaps:
             try:
-                trig = trigger_from_cron(row.cron, self.app.config["SCHEDULER_TIMEZONE"])
+                trig = trigger_from_cron(snap["cron"], self.app.config["SCHEDULER_TIMEZONE"])
             except Exception as e:
-                logger.warning("任务 %s 的 cron 非法（%s）：%s", row.job_key, row.cron, e)
+                logger.warning("任务 %s 的 cron 非法（%s）：%s", snap["job_key"], snap["cron"], e)
                 continue
-            desired[f"sj-{row.id}"] = (row, trig)
+            desired[f"sj-{snap['id']}"] = (snap["id"], snap["cron"], trig)
         return desired
 
     def sync(self):
@@ -123,11 +138,11 @@ class SchedulerService:
                 pass
             logger.info("移除调度任务 %s", jid)
         # 添加/更新
-        for jid, (row, trig) in desired.items():
+        for jid, (row_id, _cron, trig) in desired.items():
             kwargs = {
                 "id": jid,
                 "func": _job_func,
-                "args": [row.id, self.app],
+                "args": [row_id, self.app],
                 "trigger": trig,
                 "replace_existing": True,
                 "coalesce": True,
@@ -152,8 +167,8 @@ class SchedulerService:
 
     def _signature(self, desired) -> str:
         parts = []
-        for jid, (row, trig) in sorted(desired.items()):
-            parts.append(f"{jid}:{row.cron}:{str(trig)}")
+        for jid, (_row_id, cron, trig) in sorted(desired.items()):
+            parts.append(f"{jid}:{cron}:{str(trig)}")
         return "|".join(parts)
 
     # ---------- 手动执行 ----------

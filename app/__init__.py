@@ -7,7 +7,7 @@ import sys
 from flask import Flask, redirect, render_template, request, url_for
 
 from app.config import Config
-from app.extensions import csrf, db, limiter, login_manager, migrate
+from app.extensions import csrf, db, limiter, login_manager, migrate, recover_session
 
 # Windows 控制台默认 GBK：无法输出 ✓/emoji 等字符，会导致 flask CLI（init-db 等）崩溃。
 # 统一把 stdout/stderr 切到 UTF-8（失败时静默降级，不影响无控制台环境）。
@@ -30,17 +30,31 @@ def _is_flask_cli() -> bool:
     return name in ("flask", "flask.exe") or argv0.endswith("flask/__main__.py")
 
 
+def apply_admin_entry_config(app: Flask, entry: str | None = None) -> str:
+    """同步后台短入口，并把会话 Cookie 限定在入口路径下。
+
+    公开网页走 /webs/html/<slug>，不带此后缀，因此不会拿到后台 Cookie。
+    """
+    if entry is None:
+        entry = str(app.config.get("ADMIN_ENTRY") or "")
+    entry = entry.strip().strip("/")
+    app.config["ADMIN_ENTRY"] = entry
+    app.config["SESSION_COOKIE_PATH"] = f"/{entry}" if entry else "/"
+    return entry
+
+
 def create_app(config_class=Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
+    apply_admin_entry_config(app)
 
     # 反代部署（Nginx/Caddy 终结 HTTPS）时，信任 X-Forwarded-Proto 以便 Flask 生成 https 链接。
-    # 仅信任 proto（x_proto=1）：不信任 X-Forwarded-Host，避免伪造 Host 绕过后台域名守卫。
+    # 仅信任 proto（x_proto=1）：不信任 X-Forwarded-Host（访问不再按域名分流）。
     from werkzeug.middleware.proxy_fix import ProxyFix
 
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
 
-    # ---- 后台安全入口（单域名模式）：配置 ADMIN_ENTRY 后，后台藏于 /<入口> 前缀下 ----
+    # ---- 后台短入口：配置 ADMIN_ENTRY 后，后台藏于 /<入口> 前缀下 ----
     _entry_inner = app.wsgi_app
 
     def _admin_entry_middleware(environ, start_response):
@@ -49,36 +63,34 @@ def create_app(config_class=Config) -> Flask:
             return _entry_inner(environ, start_response)
 
         path = environ.get("PATH_INFO") or "/"
-        # 飞书事件回调是外部 webhook，免安全入口（自身有 token/加密鉴权）
-        if path == "/feishu" or path.startswith("/feishu/"):
+
+        def _pass():
             return _entry_inner(environ, start_response)
-        # 探活端点：未登录、不依赖安全入口
-        if path == "/healthz":
-            return _entry_inner(environ, start_response)
+
+        def _is(prefix: str) -> bool:
+            return path == prefix or path.startswith(prefix + "/")
+
+        # 飞书 / 探活 / 公开网页 / 静态资源：免短入口（局域网 IP 可直达）
+        if _is("/feishu") or path == "/healthz" or _is("/webs/html") or _is("/p") \
+                or _is("/static") or _is("/img") or _is("/setup"):
+            return _pass()
 
         prefix = "/" + entry
         if path == prefix:
             environ["SCRIPT_NAME"] = (environ.get("SCRIPT_NAME") or "") + prefix
             environ["PATH_INFO"] = "/"
             environ["aibot.admin_entry_passed"] = "1"
-            return _entry_inner(environ, start_response)
+            return _pass()
         if path.startswith(prefix + "/"):
             environ["SCRIPT_NAME"] = (environ.get("SCRIPT_NAME") or "") + prefix
             environ["PATH_INFO"] = path[len(prefix):]
             environ["aibot.admin_entry_passed"] = "1"
-            return _entry_inner(environ, start_response)
+            return _pass()
 
-        # 未带入口：交给 Flask 的 before_request 决定（仅公开网页/静态资源可访问，其余 404）
-        return _entry_inner(environ, start_response)
+        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"Not Found"]
 
     app.wsgi_app = _admin_entry_middleware
-
-    # 公网部署安全告警：配置了域名但未开启 HTTPS-only cookie 时提示
-    if not app.config.get("SESSION_COOKIE_SECURE"):
-        if app.config.get("ADMIN_DOMAIN") or app.config.get("PAGE_DOMAIN"):
-            app.logger.warning(
-                "检测到已配置公网域名（ADMIN_DOMAIN/PAGE_DOMAIN），但 SESSION_COOKIE_SECURE=0："
-                "公网 HTTPS 部署请设置 SESSION_COOKIE_SECURE=1，否则会话 cookie 可被中间人截获")
 
     logging.basicConfig(
         level=getattr(logging, app.config.get("LOG_LEVEL", "INFO")),
@@ -91,6 +103,11 @@ def create_app(config_class=Config) -> Flask:
     login_manager.init_app(app)
     csrf.init_app(app)
     limiter.init_app(app)
+
+    @app.teardown_appcontext
+    def _rollback_db_session(exc):
+        if exc is not None:
+            recover_session()
 
     login_manager.login_view = "auth.login"
     login_manager.login_message = "请先登录"
@@ -143,6 +160,8 @@ def create_app(config_class=Config) -> Flask:
 
     app.cli.add_command(commands.init_db)
     app.cli.add_command(commands.create_admin)
+    app.cli.add_command(commands.reset_db)
+    app.cli.add_command(commands.reset_admin_password)
     app.cli.add_command(commands.backup_now)
     app.cli.add_command(commands.restore_backup_cmd)
     app.cli.add_command(commands.reindex)
@@ -239,6 +258,7 @@ def create_app(config_class=Config) -> Flask:
             if not system_initialized():
                 return redirect(url_for("setup.index"))
         except Exception:  # noqa: BLE001 —— 探测异常一律视为未初始化
+            recover_session()
             return redirect(url_for("setup.index"))
         return None
 
@@ -256,7 +276,7 @@ def register_context(app: Flask):
 
             unread = Notification.query.filter_by(read=False).count()
         except Exception:  # noqa: BLE001 —— 数据库未初始化时降级
-            pass
+            recover_session()
         nav_groups = [
             ("", [
                 ("dashboard.index", "仪表盘", "bi-speedometer2"),
@@ -295,7 +315,7 @@ def register_context(app: Flask):
                 theme = _cu.get_theme()
                 ui_theme = theme if theme in THEMES else DEFAULT_THEME
         except Exception:  # noqa: BLE001 —— 未登录或库未初始化
-            pass
+            recover_session()
         return {
             "nav_groups": nav_groups,
             "nav_items": nav_items,
@@ -312,5 +332,5 @@ def register_errors(app: Flask):
 
     @app.errorhandler(500)
     def server_error(e):
-        db.session.rollback()
+        recover_session()
         return render_template("errors/500.html"), 500

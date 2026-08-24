@@ -41,6 +41,7 @@
 <div class="toc">
   <a href="#start">快速开始</a><a href="#features">功能一览</a><a href="#ui">后台界面</a><a href="#life">健身/出行/消费</a>
   <a href="#ai">AI 对话示例</a><a href="#settings">重要设置</a><a href="#deploy">部署</a><a href="#security">安全提示</a>
+  <a href="#edit-flow">改功能流程</a>
 </div>
 
 <!-- 快速开始 -->
@@ -58,8 +59,12 @@ $env:FLASK_APP = "run:app"
 .\.venv\Scripts\python -m flask init-db
 
 # 4. 启动（默认 http://127.0.0.1:5000）
-.\.venv\Scripts\python run.py</code></pre>
-  <p class="ok">默认管理员：<code>admin / admin123</code> —— <strong>登录后请立即到「设置 → 账号」修改密码</strong>。</p>
+.\.venv\Scripts\python run.py
+
+# 终端维护（项目根，先 $env:FLASK_APP = "run:app"）
+.\.venv\Scripts\python -m flask reset-admin-password --username admin
+.\.venv\Scripts\python -m flask reset-db --yes</code></pre>
+  <p class="ok">默认管理员：<code>admin / admin123</code> —— <strong>登录后请立即到「设置 → 账号」修改密码</strong>。忘记密码用上面的 <code>reset-admin-password</code>（省略 <code>--password</code> 会打印一次随机密码）。<code>reset-db</code> 会 DROP 全部数据表，不加 <code>--yes</code> 只列出表名。</p>
 </div>
 
 <!-- 功能一览 -->
@@ -68,6 +73,7 @@ $env:FLASK_APP = "run:app"
   <table>
     <tr><th style="width:130px">模块</th><th>说明</th></tr>
     <tr><td>📊 仪表盘</td><td>今日日程 / 待办 / 到期 / 完成数；快捷入口含日历、任务、笔记、健身、出行、消费、网页、AI</td></tr>
+    <tr><td>⚡ 安装引导</td><td>打开 <code>/setup</code> 每次从第①步开始：保存连接 → 开始初始化 → 创建管理员 → 基础配置。有表也不跳步；第②步可重置数据库（DROP 全部表，不改 <code>.env</code>）。写操作需要安装令牌</td></tr>
     <tr><td>📅 日历</td><td>月视图 + 当日明细；重复事件（每天/周/月/年）、提前提醒</td></tr>
     <tr><td>✅ 任务</td><td>优先级、截止时间、项目、标签；筛选与搜索</td></tr>
     <tr><td>📝 笔记</td><td>快速记录、全文检索，作为 AI 的长期记忆素材</td></tr>
@@ -235,7 +241,7 @@ Authorization: Bearer 你的Token</code></pre>
     <li>不要用 uvicorn。MySQL 库要先建好，字符集 utf8mb4。</li>
     <li>公开网页推荐只填端口（设置 → 网页站点），<strong>不必配 HTTPS / 域名</strong>；云安全组要放行该端口。</li>
     <li>Docker 里连宿主机 MySQL 填 <code>MYSQL_HOST=host.docker.internal</code>，不要填 127.0.0.1。</li>
-    <li>首次安装打开 <code>/setup</code>，令牌在服务器 <code>data/setup_token.txt</code>。</li>
+    <li>安装打开 <code>/setup</code>，令牌在服务器 <code>data/setup_token.txt</code>。每次从第①步开始，保存连接后才到第②步；有数据表也不会自动跳过。可「开始初始化」继续，或先「重置数据库」（DROP 全部表，需令牌和二次确认，不改 <code>.env</code>）。用户名已存在则第③步报错，需换名或先重置。</li>
     <li>AI 对话走 SSE：若前面有 Nginx，必须 <code>proxy_buffering off</code>。</li>
   </ul>
   <pre><code># Docker 接已有 MySQL（无域名）
@@ -249,6 +255,20 @@ docker compose --profile mysql up -d --build app db
 docker compose exec app python -m flask init-db</code></pre>
 </div>
 
+<!-- 改功能流程 -->
+<div class="card" id="edit-flow">
+  <h2>🛠️ 改功能流程（维护者）</h2>
+  <p>改功能、修缺陷、改页面或接口时，按仓库 Skill <code>.grok/skills/edit-flow/SKILL.md</code>（对话里 <code>/edit-flow</code>）执行，不要直接开改：</p>
+  <ol>
+    <li>先阅读相关源码和现有测试，说明当前实现</li>
+    <li>至少两轮提问，确认需求与边界（空值、未登录、局域网、短入口、旧链接等）</li>
+    <li>按确认范围改代码</li>
+    <li>用 <code>.venv</code> 跑 <code>scripts/</code> 里对应测试</li>
+    <li>测试通过后，再同步 <code>docs/PROJECT.md</code>、<code>README.md</code>、本页对应章节</li>
+  </ol>
+  <p>错别字、注释、纯格式可以不走全流程。细则以 Skill 为准。</p>
+</div>
+
 <!-- 安全提示 -->
 <div class="card" id="security">
   <h2>🔒 安全提示（公网部署必读）</h2>
@@ -259,10 +279,12 @@ docker compose exec app python -m flask init-db</code></pre>
     <li>技能启用前人工审查代码；生成网页/图片公开前确认内容合规</li>
     <li>给 App 开接口时用「设置 → 账号」生成 Token（或足够长的 <code>API_TOKEN</code>），不要提交进 git</li>
     <li>公网建议配置 <code>ADMIN_ENTRY</code>，避免后台路径被扫到</li>
+    <li>保管好 <code>data/setup_token.txt</code>：<code>/setup</code> 装好后仍可打开，持有令牌就能改库配置、DROP 全部表或再建管理员（与设置页「清空业务数据、保留账号」不是一回事）</li>
+    <li>能登录服务器的人可用 <code>flask reset-db --yes</code> / <code>flask reset-admin-password</code>，不必经过网页令牌。不要把生产机器 shell 随便给人</li>
   </ul>
 </div>
 
-<footer>灵犀 · 个人 AI 工作生活管理基座 · 文档：<code>README.md</code> · <code>docs/部署.md</code> · <code>docs/PROJECT.md</code></footer>
+<footer>灵犀 · 个人 AI 工作生活管理基座 · 文档：<code>README.md</code> · <code>docs/部署.md</code> · <code>docs/PROJECT.md</code> · 改功能：<code>.grok/skills/edit-flow</code></footer>
 
 </div>
 </body>

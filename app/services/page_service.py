@@ -237,8 +237,16 @@ def visible_by_slug(slug: str) -> Optional[WebPage]:
     return page
 
 
+PAGE_URL_PREFIX = "/webs/html"
+
+
+def page_url_path(slug: str) -> str:
+    """生成网页的规范路径：/webs/html/<slug>。"""
+    return f"{PAGE_URL_PREFIX}/{slug}"
+
+
 def page_port_configured() -> int:
-    """独立网页 HTTP 端口；0 表示不另开端口（走后台 /p/<slug>）。"""
+    """独立网页 HTTP 端口；0 表示不另开端口（走后台 /webs/html/<slug>）。"""
     raw = get_setting_from("page_port", "PAGE_PORT", 0, user_id=0)
     try:
         port = int(raw or 0)
@@ -287,33 +295,29 @@ def page_site_base_url() -> str:
     return f"http://{host}:{port}"
 
 
+def _admin_entry_prefix() -> str:
+    entry = str(get_setting_from("admin_entry", "ADMIN_ENTRY", "", user_id=0) or "").strip().strip("/")
+    return f"/{entry}" if entry else ""
+
+
 def page_public_url(page: WebPage) -> str:
     """页面访问地址。
 
-    优先：独立网页端口 → http://主机:端口/<slug>（无需 HTTPS/域名）
-    其次：PAGE_DOMAIN / ADMIN_DOMAIN 双域名
-    否则：当前后台 /p/<slug>
+    公开页优先独立网页端口 → http://主机:端口/webs/html/<slug>（局域网 IP 可直达）
+    否则当前主机 /webs/html/<slug>（不带后台短入口）
+    私有页：当前主机 /<短入口>/webs/html/<slug>
     """
     from flask import has_request_context, request
 
+    path = page_url_path(page.slug)
     port_base = page_site_base_url()
     if port_base and page.is_public:
-        return f"{port_base}/{page.slug}"
+        return f"{port_base}{path}"
 
-    page_domain = page_domain_configured()
-    admin_domain = admin_domain_configured()
-    entry = str(get_setting_from("admin_entry", "ADMIN_ENTRY", "", user_id=0) or "").strip().strip("/")
-    prefix = f"/{entry}" if entry else ""
-
-    if page.is_public and page_domain:
-        return f"https://{page_domain}/{page.slug}"
-    if admin_domain:
-        return f"https://{admin_domain}{prefix}/p/{page.slug}"
-    if page_domain:
-        return f"https://{page_domain}{prefix}/p/{page.slug}"
+    entry = "" if page.is_public else _admin_entry_prefix()
     if has_request_context():
-        return f"{request.host_url.rstrip('/')}{prefix}/p/{page.slug}"
-    return f"{prefix}/p/{page.slug}"
+        return f"{request.host_url.rstrip('/')}{entry}{path}"
+    return f"{entry}{path}"
 
 
 def page_domain_configured() -> str:

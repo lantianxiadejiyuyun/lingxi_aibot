@@ -42,9 +42,9 @@ else:
     print("列表页未找到「AI 测试网页」"); sys.exit(1)
 print("列表页包含新页面:", "✓")
 
-r = s.get(BASE + "/p/ai-test-page")
+r = s.get(BASE + "/webs/html/ai-test-page")
 ok = r.status_code == 200 and ("h1" in r.text or "自我介绍" in r.text)
-print(f"公开访问 /p/ai-test-page: {r.status_code}", "✓" if ok else "✗")
+print(f"公开访问 /webs/html/ai-test-page: {r.status_code}", "✓" if ok else "✗")
 print("  内容前 150 字:", r.text[:150].replace("\n", "|"))
 
 # 清理

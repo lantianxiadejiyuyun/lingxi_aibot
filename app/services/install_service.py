@@ -4,6 +4,7 @@
 - save_db_config：把数据库配置写入项目根 .env（供网页向导保存）
 - rebuild_engine：热重建 SQLAlchemy 引擎（改配置后无需重启进程）
 - initialize_database：建表 + 补列 + 管理员 + 内置任务（幂等，CLI 与网页共用）
+- drop_all_tables：DROP 当前库全部数据表（安装向导重置用，不删库、不改 .env）
 - restart_scheduler：数据库就绪后补启动调度器（首次启动连不上库时调度器会启动失败）
 """
 from __future__ import annotations
@@ -139,8 +140,6 @@ EXTRA_ENV_FIELDS: dict[str, str] = {
     "llm_base_url": "LLM_BASE_URL",
     "llm_api_key": "LLM_API_KEY",
     "llm_model": "LLM_MODEL",
-    "admin_domain": "ADMIN_DOMAIN",
-    "page_domain": "PAGE_DOMAIN",
     "admin_entry": "ADMIN_ENTRY",
     "sc_key": "SC_KEY",
     "feishu_webhook_url": "FEISHU_WEBHOOK_URL",
@@ -150,10 +149,10 @@ EXTRA_ENV_FIELDS: dict[str, str] = {
 
 
 def save_extra_config(data: dict) -> list[str]:
-    """安装向导「基础配置」步骤：把 AI/域名/通知渠道写入 .env。
+    """安装向导「基础配置」步骤：把 AI/短入口/通知渠道写入 .env。
 
     只写入用户实际填写（非空）的项；返回已保存的变量名列表（用于页面提示）。
-    域名/安全入口等同时刷新到 current_app.config，立即生效（无需重启）。
+    短入口同时刷新到 current_app.config，立即生效（无需重启）。
     """
     from flask import current_app
 
@@ -165,9 +164,11 @@ def save_extra_config(data: dict) -> list[str]:
             set_key(ENV_PATH, env_key, value, quote_mode="always")
             saved.append(env_key)
             # 中间件 / 路由守卫运行时读 current_app.config，这里同步刷新，立即生效
-            if env_key in ("ADMIN_ENTRY", "ADMIN_DOMAIN", "PAGE_DOMAIN"):
+            if env_key == "ADMIN_ENTRY":
                 try:
-                    current_app.config[env_key] = value
+                    entry = value.strip().strip("/")
+                    current_app.config["ADMIN_ENTRY"] = entry
+                    current_app.config["SESSION_COOKIE_PATH"] = f"/{entry}" if entry else "/"
                 except RuntimeError:
                     pass  # 无应用上下文时忽略
     return saved
@@ -408,6 +409,49 @@ def seed_builtin_jobs_for_user(user) -> list[str]:
             created.append(name)
     db.session.commit()
     return created
+
+
+def drop_all_tables() -> list[str]:
+    """DROP 当前连接库中的全部数据表。不删库、不改 .env、不碰磁盘文件。
+
+    返回已删除的表名；空库返回空列表。MySQL 下先关外键检查再一条 DROP，
+    以便循环外键也能删干净。DDL 基本无法事务回滚：失败时可能已删掉一部分。
+    """
+    from sqlalchemy import inspect, text
+
+    insp = inspect(db.engine)
+    tables = list(insp.get_table_names())
+    if not tables:
+        return []
+    preparer = db.engine.dialect.identifier_preparer
+    quoted = ", ".join(preparer.quote(name) for name in tables)
+    is_mysql = db.engine.dialect.name == "mysql"
+    # DDL 走引擎连接，避免和 session 事务搅在一起（MySQL DROP 会隐式提交）
+    try:
+        with db.engine.connect() as conn:
+            if is_mysql:
+                conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+            conn.execute(text(f"DROP TABLE IF EXISTS {quoted}"))
+            if is_mysql:
+                conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+            conn.commit()
+    except Exception:
+        if is_mysql:
+            try:
+                with db.engine.connect() as conn:
+                    conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+                    conn.commit()
+            except Exception:  # noqa: BLE001
+                pass
+        raise
+    finally:
+        try:
+            insp.clear_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        db.session.remove()
+    logger.info("已删除数据表 %d 张：%s", len(tables), ", ".join(tables))
+    return tables
 
 
 def initialize_database(app, *, create_admin: bool = True) -> list[str]:

@@ -1,11 +1,37 @@
 {% extends 'base.html' %}
 {% block title %}登录{% endblock %}
 {% block fullpage %}
+<style>
+  .login-bookmark {
+    background: #ecfdf5; border: 1px solid #6ee7b7; color: #047857;
+    border-radius: 10px; padding: 12px 14px; font-size: 13.5px; margin-bottom: 18px; text-align: left;
+  }
+  .login-bookmark strong { display: block; margin-bottom: 4px; }
+  .login-bookmark p { margin: 0 0 10px; color: #065f46; line-height: 1.5; }
+  .login-bookmark-url { display: flex; gap: 8px; align-items: center; }
+  .login-bookmark-url code {
+    flex: 1; min-width: 0; overflow: auto; background: #fff; border: 1px solid #a7f3d0;
+    border-radius: 8px; padding: 7px 8px; font-size: 12px; color: #064e3b; white-space: nowrap;
+  }
+  .login-bookmark-hint { text-align: center; font-size: 12.5px; color: var(--text-2); margin: -8px 0 16px; }
+</style>
 <div class="login-page">
   <div class="login-card">
     <div class="login-brand">🤖 灵犀</div>
     <h1 class="login-title">登录</h1>
     <p class="login-sub">你的 AI 工作生活助理</p>
+    {% if from_setup %}
+    <div class="login-bookmark" role="status">
+      <strong>安装完成</strong>
+      <p>请收藏当前页面（Ctrl+D / ⌘+D），以免下次找不到后台入口。</p>
+      <div class="login-bookmark-url">
+        <code id="login-bookmark-url"></code>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-login-url">复制地址</button>
+      </div>
+    </div>
+    {% elif admin_entry %}
+    <p class="login-bookmark-hint">建议收藏本页。后台入口：<code>/{{ admin_entry }}/login</code></p>
+    {% endif %}
     {% include '_flash.html' %}
     <form method="post" class="form">
       {{ form.hidden_tag() }}
@@ -28,4 +54,24 @@
     {% endif %}
   </div>
 </div>
+{% if from_setup %}
+<script>
+(function () {
+  var el = document.getElementById("login-bookmark-url");
+  var btn = document.getElementById("btn-copy-login-url");
+  var url = location.origin + location.pathname;
+  if (el) el.textContent = url;
+  if (btn) {
+    btn.addEventListener("click", function () {
+      var done = function () { if (window.toast) window.toast("登录地址已复制", "success"); else btn.textContent = "已复制"; };
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(done, function () { window.prompt("复制地址：", url); });
+      } else {
+        window.prompt("复制地址：", url);
+      }
+    });
+  }
+})();
+</script>
+{% endif %}
 {% endblock %}

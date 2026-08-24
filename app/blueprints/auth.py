@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from flask_limiter.util import get_remote_address
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_wtf import FlaskForm
@@ -88,7 +88,15 @@ def login():
         if uname:
             _record_login_fail(uname)
         flash("用户名或密码错误", "error")
-    return render_template("auth/login.html", form=form, setup_required=setup_required)
+    from_setup = request.args.get("installed") == "1"
+    admin_entry = (current_app.config.get("ADMIN_ENTRY") or "").strip().strip("/")
+    return render_template(
+        "auth/login.html",
+        form=form,
+        setup_required=setup_required,
+        from_setup=from_setup,
+        admin_entry=admin_entry,
+    )
 
 
 @bp.route("/logout")

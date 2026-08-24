@@ -60,18 +60,13 @@
   <div class="card-head"><h2>访问说明</h2></div>
   {% if page_base_url %}
   <p class="muted" style="margin:0">
-    公开网页走独立 HTTP 端口：<code>{{ page_base_url }}/&lt;slug&gt;</code>（无需 HTTPS）。
-    私有页仍在后台登录后访问 <code>/p/&lt;slug&gt;</code>。可在「设置 → 网页站点」改端口。
-  </p>
-  {% elif page_domain %}
-  <p class="muted" style="margin:0">
-    已配置网页域名：公开页 <code>https://{{ page_domain }}/&lt;slug&gt;</code>；
-    私有页需登录后台。也可在「设置 → 网页站点」改用纯端口（不必配证书）。
+    公开网页：<code>{{ page_base_url }}/webs/html/&lt;slug&gt;</code>（独立端口，局域网 IP 可直达）。
+    私有页登录后台后访问同一路径。可在「设置 → 网页站点」改端口或短入口。
   </p>
   {% else %}
   <p class="muted" style="margin:0">
-    当前用后台路径 <code>/p/&lt;slug&gt;</code>。推荐到「设置 → 网页站点」填一个端口（如 8080），
-    公开页即可用 <code>http://局域网IP:8080/slug</code> 打开，不必配置 HTTPS。
+    公开网页：当前主机 <code>/webs/html/&lt;slug&gt;</code>（局域网 IP 可直达，无需单独域名）。
+    可选：到「设置 → 网页站点」再开一个端口，或设置后台短入口隐藏管理界面。
   </p>
   {% endif %}
 </div>

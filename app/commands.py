@@ -1,4 +1,4 @@
-"""flask CLI 命令。"""
+"""flask CLI 命令：init-db / create-admin / reset-db / reset-admin-password / 备份 / reindex / routes。"""
 from __future__ import annotations
 
 import click
@@ -18,6 +18,71 @@ def init_db():
         click.echo(msg)
 
 
+@click.command("reset-db")
+@click.option("--yes", "confirmed", is_flag=True, help="确认删除当前库全部数据表")
+@with_appcontext
+def reset_db(confirmed):
+    """DROP 当前库全部数据表（不删库、不改 .env）。未加 --yes 只列出表名。"""
+    from sqlalchemy import inspect
+
+    try:
+        names = list(inspect(db.engine).get_table_names())
+    except Exception as e:  # noqa: BLE001
+        raise click.ClickException(f"无法连接数据库：{e}") from e
+    if not names:
+        click.echo("当前库没有数据表")
+        return
+    click.echo("将删除以下数据表：")
+    for name in names:
+        click.echo(f"  - {name}")
+    if not confirmed:
+        raise click.ClickException(
+            "未执行删除。确认请加上 --yes：python -m flask reset-db --yes")
+    from app.services.install_service import drop_all_tables
+
+    dropped = drop_all_tables()
+    click.echo(f"✓ 已删除 {len(dropped)} 张数据表")
+
+
+@click.command("reset-admin-password")
+@click.option("--username", default="", help="管理员用户名；库中仅一名管理员时可省略")
+@click.option("--password", default=None, help="新密码；省略则随机生成并打印一次")
+@with_appcontext
+def reset_admin_password(username, password):
+    """重设管理员登录密码（密码只存哈希，无法找回明文）。"""
+    import secrets
+
+    from app.models.user import User
+
+    username = (username or "").strip()
+    admins = User.query.filter_by(is_admin=True).order_by(User.id.asc()).all()
+    if username:
+        user = User.query.filter_by(username=username).first()
+        if user is None:
+            raise click.ClickException(f"用户 {username} 不存在")
+        if not user.is_admin:
+            raise click.ClickException(f"用户 {username} 不是管理员")
+    elif len(admins) == 1:
+        user = admins[0]
+    elif not admins:
+        raise click.ClickException("库中没有管理员账号")
+    else:
+        names = ", ".join(a.username for a in admins)
+        raise click.ClickException(f"有多名管理员，请指定 --username。现有：{names}")
+
+    generated = False
+    if password is None:
+        password = secrets.token_urlsafe(12)
+        generated = True
+    if len(password or "") < 6:
+        raise click.ClickException("密码至少 6 位")
+    user.set_password(password)
+    db.session.commit()
+    click.echo(f"✓ 已重置管理员 {user.username} 的密码")
+    if generated:
+        click.echo(f"随机密码（只显示一次）：{password}")
+
+
 @click.command("create-admin")
 @click.option("--username", prompt=True)
 @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
@@ -33,7 +98,7 @@ def create_admin(username, password):
         raise click.ClickException("密码至少 6 位")
     if User.query.filter_by(username=username).first():
         raise click.ClickException("用户名已存在")
-    admin = User(username=username, timezone=current_app.config["APP_TIMEZONE"])
+    admin = User(username=username, timezone=current_app.config["APP_TIMEZONE"], is_admin=True)
     admin.set_password(password)
     db.session.add(admin)
     db.session.commit()

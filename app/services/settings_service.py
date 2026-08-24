@@ -6,16 +6,16 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.extensions import db
+from sqlalchemy.exc import PendingRollbackError
+
+from app.extensions import db, recover_session
 from app.models.setting import Setting
 from app.utils.scoping import current_user_id
 
 GLOBAL_USER = 0
 
 
-def get_setting(key: str, default: Any = None, user_id: Optional[int] = None) -> Any:
-    """读设置：用户级优先，缺省回退全局。user_id=None 时自动解析当前用户。"""
-    uid = user_id if user_id is not None else current_user_id()
+def _read_setting_row(key: str, uid: int) -> Any:
     if uid:
         row = Setting.query.filter_by(key=key, user_id=uid).first()
         if row is not None and row.value is not None:
@@ -23,6 +23,19 @@ def get_setting(key: str, default: Any = None, user_id: Optional[int] = None) ->
     row = Setting.query.filter_by(key=key, user_id=GLOBAL_USER).first()
     if row is not None and row.value is not None:
         return row.value
+    return None
+
+
+def get_setting(key: str, default: Any = None, user_id: Optional[int] = None) -> Any:
+    """读设置：用户级优先，缺省回退全局。user_id=None 时自动解析当前用户。"""
+    uid = user_id if user_id is not None else current_user_id()
+    try:
+        found = _read_setting_row(key, int(uid or 0))
+    except PendingRollbackError:
+        recover_session()
+        found = _read_setting_row(key, int(uid or 0))
+    if found is not None:
+        return found
     return default
 
 
@@ -34,7 +47,11 @@ def get_own_setting(key: str, default: Any = None, user_id: Optional[int] = None
     uid = user_id if user_id is not None else current_user_id()
     if not uid:
         return default
-    row = Setting.query.filter_by(key=key, user_id=int(uid)).first()
+    try:
+        row = Setting.query.filter_by(key=key, user_id=int(uid)).first()
+    except PendingRollbackError:
+        recover_session()
+        row = Setting.query.filter_by(key=key, user_id=int(uid)).first()
     if row is not None and row.value is not None:
         return row.value
     return default
