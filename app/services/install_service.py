@@ -389,9 +389,9 @@ def _builtin_jobs() -> list[tuple]:
     return [
         (ACTION_EVENT_REMINDER, "事件提醒扫描", "interval:1", {}),
         (ACTION_TASK_DUE, "任务到期扫描", "interval:10", {}),
-        (ACTION_MORNING_BRIEFING, "早安简报", "0 7 * * *", {"channel": "inapp"}),
-        (ACTION_NOON_BRIEFING, "午间简报", "0 12 * * *", {"channel": "inapp"}),
-        (ACTION_EVENING_REVIEW, "晚间复盘", "0 21 * * *", {"channel": "inapp"}),
+        (ACTION_MORNING_BRIEFING, "早安简报", "0 7 * * *", {}),
+        (ACTION_NOON_BRIEFING, "午间简报", "0 12 * * *", {}),
+        (ACTION_EVENING_REVIEW, "晚间复盘", "0 21 * * *", {}),
         (ACTION_DATA_BACKUP, "数据备份", "0 3 * * *", {}),
         (ACTION_CONTEXT_CONSOLIDATION, "上下文梳理", "0 4 * * *", {}),
         (ACTION_WEEKLY_REPORT, "周报", "0 18 * * 0", {}),

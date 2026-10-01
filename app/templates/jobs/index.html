@@ -78,11 +78,21 @@
           {% endif %}
         </td>
         <td>
+          {% if j.is_briefing %}
+            {% for channel in j.channels %}
+            <span class="tag tag-gray">{{ channel_labels.get(channel, channel) }}</span>
+            <input type="hidden" name="channels" value="{{ channel }}" form="job-update-{{ j.id }}">
+            {% else %}
+            <span class="muted">跟随简报默认渠道</span>
+            {% endfor %}
+            <a class="muted" href="{{ url_for('settings_page.index', tab='briefing') }}">设置推送渠道</a>
+          {% else %}
           <select class="select" name="channels" form="job-update-{{ j.id }}" style="min-width:120px;">
             {% for value, label in channel_options %}
             <option value="{{ value }}" {{ 'selected' if j.channel == value }}>{{ label }}</option>
             {% endfor %}
           </select>
+          {% endif %}
         </td>
         <td>
           <label class="toggle" title="启用 / 停用">

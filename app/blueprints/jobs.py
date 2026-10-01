@@ -35,6 +35,8 @@ _CHANNEL_OPTIONS = [
     ("feishu_app", "飞书机器人(应用)"),
 ]
 
+_BRIEFING_ACTIONS = {"morning_briefing", "noon_briefing", "evening_review"}
+
 
 def _job_row(job: ScheduledJob, tz) -> dict:
     """ScheduledJob → 模板渲染用字典（时间已转用户时区字符串）。"""
@@ -43,8 +45,10 @@ def _job_row(job: ScheduledJob, tz) -> dict:
     parts = cron.split()
     last = (job.last_status or "").strip()
     params = job.params or {}
-    channels = params.get("channels") or []
-    channel = channels[0] if channels else (params.get("channel") or "")
+    channels = params.get("channels") or params.get("channel") or []
+    if isinstance(channels, str):
+        channels = [c.strip() for c in channels.split(",") if c.strip()]
+    channel = channels[0] if channels else ""
     return {
         "id": job.id,
         "name": job.name,
@@ -64,6 +68,8 @@ def _job_row(job: ScheduledJob, tz) -> dict:
         "title": params.get("title", ""),
         "body": params.get("body", ""),
         "channel": channel,
+        "channels": channels,
+        "is_briefing": job.action in _BRIEFING_ACTIONS,
     }
 
 
@@ -82,6 +88,7 @@ def index():
         builtin=builtin,
         custom=custom,
         channel_options=channel_options,
+        channel_labels=dict(channel_options),
         tz_name=str(tz),
     )
 
@@ -111,10 +118,13 @@ def update(job_id: int):
                 flash("请输入分与时", "error")
                 return redirect(url_for("jobs.index"))
             kwargs["cron"] = f"{minute} {hour} * * *"
-        ch_raw = (request.form.get("channels") or "").strip()
+        selected_channels = list(dict.fromkeys(
+            c.strip() for c in request.form.getlist("channels") if c.strip()
+        ))
         params = dict(job.params or {})
-        if ch_raw:
-            params["channels"] = [ch_raw]
+        params.pop("channel", None)  # 清除旧版单渠道覆盖，选择默认时才能真正继承。
+        if selected_channels:
+            params["channels"] = selected_channels
         else:
             params.pop("channels", None)  # 空 = 跟随默认渠道（允许清除已设置的覆盖）
         kwargs["params"] = params

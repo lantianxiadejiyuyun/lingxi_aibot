@@ -673,25 +673,57 @@
   <div class="tab-panel" data-panel="briefing">
     <div class="card">
       <div class="card-head"><h2>简报设置</h2></div>
+      <p class="muted">早安简报、午间简报和晚间复盘可分别设置时间和推送渠道，按 {{ briefing.timezone }} 时区执行。</p>
+      <p class="cron-hint">
+        支持站内通知、飞书应用机器人、飞书群 Webhook 和 Server 酱，可同时选择多个渠道或通知组。
+        请先完成 <a href="{{ url_for('settings_page.index', tab='channels') }}">渠道配置</a> 或 <a href="{{ url_for('settings_page.index', tab='feishu-app') }}">飞书配置</a>。
+        不选渠道时，使用「渠道」中的定时简报渠道；该项也未设置时，使用默认渠道。
+      </p>
       <form method="post" action="{{ url_for('settings_page.briefing') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row">
-          <div class="form-group">
-            <label for="briefing_time_morning">早安简报时间</label>
-            <input class="input" type="time" id="briefing_time_morning" name="briefing_time_morning" value="{{ briefing.morning }}">
+        <input type="hidden" name="briefing_delivery_settings" value="1">
+        {% for row in briefing.rows %}
+        <fieldset style="min-width:0;border:1px solid var(--border);border-radius:12px;padding:16px;margin:0 0 20px">
+          <legend style="padding:0 8px;font-weight:650">{{ row.label }}</legend>
+          <p class="muted" style="margin-top:0">{{ row.description }}</p>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="briefing_time_{{ row.kind }}">每天推送时间</label>
+              <input class="input" type="time" id="briefing_time_{{ row.kind }}" name="briefing_time_{{ row.kind }}" value="{{ row.time }}" required>
+            </div>
+            <div class="form-group">
+              <label for="briefing_enabled_{{ row.kind }}">自动推送</label>
+              <label class="chip"><input type="checkbox" id="briefing_enabled_{{ row.kind }}" name="briefing_enabled_{{ row.kind }}" value="1" {{ 'checked' if row.enabled }}> 每天定时推送</label>
+            </div>
           </div>
           <div class="form-group">
-            <label for="briefing_time_noon">午间简报时间</label>
-            <input class="input" type="time" id="briefing_time_noon" name="briefing_time_noon" value="{{ briefing.noon }}">
+            <label id="briefing_channels_label_{{ row.kind }}">推送到（可多选）</label>
+            <div role="group" aria-labelledby="briefing_channels_label_{{ row.kind }}">
+              {% for value, label in all_channel_options %}
+              <label class="chip"><input type="checkbox" name="briefing_channels_{{ row.kind }}" value="{{ value }}" {{ 'checked' if value in row.channels }}> {{ label }}</label>
+              {% endfor %}
+            </div>
+            <p class="cron-hint">当前已保存渠道：{{ row.effective_labels | join('、') }}{% if not row.channels %}（继承通用设置）{% endif %}</p>
           </div>
-          <div class="form-group">
-            <label for="briefing_time_evening">晚间复盘时间</label>
-            <input class="input" type="time" id="briefing_time_evening" name="briefing_time_evening" value="{{ briefing.evening }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <span class="muted">
+              最近执行：{{ row.last_run_text or '尚未执行' }}
+              {% if row.last_status %}
+              <span class="tag {{ 'tag-green' if row.last_status.startswith('成功') else ('tag-red' if row.last_status.startswith('失败') else 'tag-gray') }}">{{ row.last_status }}</span>
+              {% endif %}
+            </span>
+            <button class="btn btn-ghost btn-sm" type="submit" form="briefing-send-{{ row.kind }}" aria-label="立即推送{{ row.label }}">立即推送</button>
           </div>
-        </div>
-        <p class="cron-hint">保存后同步更新「早安简报 / 午间简报 / 晚间复盘」定时任务的执行时间。</p>
+        </fieldset>
+        {% endfor %}
+        <p class="cron-hint">保存后更新定时任务。「立即推送」按已保存配置执行，不会保存当前修改；推送结果和失败原因可在 <a href="{{ url_for('notifications.index') }}">通知</a> 中查看。</p>
         <button class="btn btn-primary" type="submit">保存简报设置</button>
       </form>
+      {% for row in briefing.rows %}
+      <form id="briefing-send-{{ row.kind }}" method="post" action="{{ url_for('settings_page.briefing_send', kind=row.kind) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      </form>
+      {% endfor %}
     </div>
   </div>
 

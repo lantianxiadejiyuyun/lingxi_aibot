@@ -18,12 +18,23 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.extensions import db
 from app.models.scheduled_job import ScheduledJob
 from app.models.user import User
+from app.utils.scoping import user_scope
 from app.utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
 ACTIONS: dict[str, Callable] = {}
 ACTION_META: dict[str, dict] = {}  # 供 UI 展示动作说明
+
+
+def _failure_status(error, action: str = "") -> str:
+    """任务状态列仅 32 字符；完整错误留在通知记录或日志中。"""
+    status = f"失败: {error}"
+    if len(status) <= 32:
+        return status
+    is_briefing = action in {"morning_briefing", "noon_briefing", "evening_review"}
+    suffix = "…详见通知中心" if is_briefing else "…详见日志"
+    return status[:32 - len(suffix)] + suffix
 
 
 def register_action(name: str, description: str = "", editable: bool = True):
@@ -59,32 +70,28 @@ def _job_func(db_id: int, app):
             return
         fn = ACTIONS.get(row.action)
         if fn is None:
-            row.last_status = f"未注册的动作: {row.action}"
+            row.last_status = _failure_status(f"未注册的动作: {row.action}")
             db.session.commit()
             return
         row.last_run_utc = utcnow()
-        from app.utils.scoping import set_current_user_id, clear_current_user_id
-
-        set_current_user_id(user.id)
-        try:
-            fn(user, row.params or {})
-            row.last_status = "成功"
-            logger.info("任务执行成功: %s", row.job_key)
-            db.session.commit()
-        except Exception as e:  # noqa: BLE001 —— 任务异常不中断调度器
-            logger.exception("任务执行失败: %s", row.job_key)
-            db.session.rollback()
+        with user_scope(user.id):
             try:
-                row = db.session.get(ScheduledJob, db_id)
-                if row is not None:
-                    row.last_run_utc = utcnow()
-                    row.last_status = f"失败: {e}"
-                    db.session.commit()
-            except Exception:  # noqa: BLE001
+                fn(user, row.params or {})
+                row.last_status = "成功"
+                logger.info("任务执行成功: %s", row.job_key)
+                db.session.commit()
+            except Exception as e:  # noqa: BLE001 —— 任务异常不中断调度器
+                logger.exception("任务执行失败: %s", db_id)
                 db.session.rollback()
-                logger.exception("任务失败状态无法写入: %s", row.job_key if row else db_id)
-        finally:
-            clear_current_user_id()
+                try:
+                    row = db.session.get(ScheduledJob, db_id)
+                    if row is not None:
+                        row.last_run_utc = utcnow()
+                        row.last_status = _failure_status(e, row.action)
+                        db.session.commit()
+                except Exception:  # noqa: BLE001
+                    db.session.rollback()
+                    logger.exception("任务失败状态无法写入: %s", db_id)
 
 
 class SchedulerService:
@@ -188,15 +195,24 @@ class SchedulerService:
                 raise ValueError(f"未注册的动作: {row.action}")
             row.last_run_utc = utcnow()
             db.session.commit()
-            try:
-                fn(user, row.params or {})
-                row.last_status = "成功（手动）"
-            except Exception as e:
-                row.last_status = f"失败: {e}"
+            with user_scope(user.id):
+                try:
+                    fn(user, row.params or {})
+                    row.last_status = "成功（手动）"
+                except Exception as e:
+                    logger.exception("任务手动执行失败: %s", db_id)
+                    db.session.rollback()
+                    try:
+                        row = db.session.get(ScheduledJob, db_id)
+                        if row is not None:
+                            row.last_status = _failure_status(e, row.action)
+                            db.session.commit()
+                    except Exception:  # noqa: BLE001 —— 保留原始动作异常。
+                        db.session.rollback()
+                        logger.exception("任务失败状态无法写入: %s", db_id)
+                    raise
                 db.session.commit()
-                raise
-            db.session.commit()
-            return row.last_status
+                return row.last_status
 
     def next_run_time(self, db_id: int) -> Optional[datetime]:
         job = self.scheduler.get_job(f"sj-{db_id}")

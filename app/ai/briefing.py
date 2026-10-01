@@ -1,4 +1,4 @@
-"""早安简报 / 晚间复盘：数据汇总 → LLM 生成（或 Markdown 降级）→ 落库 → 调度动作推送。
+"""早安简报 / 午间简报 / 晚间复盘：数据汇总 → LLM 生成（或 Markdown 降级）→ 落库 → 推送。
 
 调度线程无 current_user，时区一律取自 user.timezone。
 """
@@ -222,6 +222,16 @@ def build_briefing(kind: str, user) -> str:
     return content
 
 
+def _push_briefing(user, title: str, content: str, params: dict) -> None:
+    from app.services.notify_service import notify_for
+
+    records = notify_for("briefing", title, content, user_id=user.id,
+                         explicit=params.get("channels") or params.get("channel"))
+    if any(record.status == "failed" for record in records):
+        # notify 已提交各渠道结果，抛异常让调度器和手动操作如实显示失败。
+        raise RuntimeError("部分或全部渠道推送失败，请查看通知中心")
+
+
 @register_action(
     "morning_briefing",
     description="生成今日早安简报并推送通知（参数：channel 或 channels 指定通知渠道）",
@@ -231,7 +241,6 @@ def morning(user, params: dict | None = None) -> None:
     from datetime import datetime
 
     from app.models.conversation import Conversation, Message
-    from app.services.notify_service import notify
 
     params = params or {}
     content = build_briefing("morning", user)
@@ -249,10 +258,7 @@ def morning(user, params: dict | None = None) -> None:
         conv.messages.append(Message(role="assistant", content=guide, conversation=conv))
         db.session.commit()
 
-    from app.services.notify_service import notify_for
-
-    notify_for("briefing", "☀️ 早安简报", content + "\n\n💬 " + guide,
-               user_id=user.id, explicit=params.get("channels") or params.get("channel"))
+    _push_briefing(user, "☀️ 早安简报", content + "\n\n💬 " + guide, params)
 
 
 @register_action(
@@ -261,12 +267,9 @@ def morning(user, params: dict | None = None) -> None:
 )
 def noon(user, params: dict | None = None) -> None:
     """调度动作：午间简报。"""
-    from app.services.notify_service import notify_for
-
     params = params or {}
     content = build_briefing("noon", user)
-    notify_for("briefing", "🕛 午间简报", content,
-               user_id=user.id, explicit=params.get("channels") or params.get("channel"))
+    _push_briefing(user, "🕛 午间简报", content, params)
 
 
 @register_action(
@@ -275,9 +278,6 @@ def noon(user, params: dict | None = None) -> None:
 )
 def evening(user, params: dict | None = None) -> None:
     """调度动作：晚间复盘。"""
-    from app.services.notify_service import notify_for
-
     params = params or {}
     content = build_briefing("evening", user)
-    notify_for("briefing", "🌙 晚间复盘", content,
-               user_id=user.id, explicit=params.get("channels") or params.get("channel"))
+    _push_briefing(user, "🌙 晚间复盘", content, params)

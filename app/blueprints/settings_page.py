@@ -10,9 +10,6 @@ from wtforms import PasswordField, SelectField
 from wtforms.validators import DataRequired, EqualTo, Length
 
 from app.extensions import db
-from app.models.scheduled_job import (
-    ACTION_EVENING_REVIEW, ACTION_MORNING_BRIEFING, ACTION_NOON_BRIEFING, ScheduledJob,
-)
 from app.services.notify_service import (
     GROUP_PREFIX, SCENE_KEYS, default_channels, delete_notify_group,
     list_notify_groups, save_notify_group,
@@ -154,11 +151,9 @@ def index():
     ]
     # 默认/场景渠道的可选项 = 真实渠道 + 自定义通知组（统一 list，模板直接遍历）
     all_channel_options = list(_CHANNEL_OPTIONS) + group_options
-    briefing = {
-        "morning": get_setting_from("briefing_time_morning", None, "07:00"),
-        "noon": get_setting_from("briefing_time_noon", None, "12:00"),
-        "evening": get_setting_from("briefing_time_evening", None, "21:00"),
-    }
+    from app.services.briefing_service import briefing_view
+
+    briefing = briefing_view(current_user)
     from app.services.feishu_ws import receive_mode as feishu_receive_mode, status as feishu_ws_status
 
     feishu_app = {
@@ -742,38 +737,39 @@ def _valid_time(t: str) -> bool:
         return False
 
 
-def _apply_briefing_job(action: str, t: str) -> None:
-    """把简报时间同步到内置定时任务：cron = '分 时 * * *'。"""
-    if not _valid_time(t):
-        return
-    hour, minute = t.split(":")  # "HH:MM" → 前为时、后为分
-    cron = f"{int(minute)} {int(hour)} * * *"
-    job = ScheduledJob.query.filter_by(job_key=action, user_id=current_user.id).first()
-    if job is not None:
-        job.cron = cron
-        db.session.commit()
-
-
 @bp.route("/briefing", methods=["POST"])
 @login_required
 def briefing():
-    """保存早安简报 / 午间简报 / 晚间复盘时间，并同步内置定时任务后触发调度器重载。"""
-    morning = (request.form.get("briefing_time_morning") or "").strip()
-    noon = (request.form.get("briefing_time_noon") or "").strip()
-    evening = (request.form.get("briefing_time_evening") or "").strip()
-    if not _valid_time(morning) or not _valid_time(noon) or not _valid_time(evening):
-        flash("简报时间格式不正确，请使用 HH:MM", "error")
-        return redirect(url_for("settings_page.index"))
-    set_setting("briefing_time_morning", morning)
-    set_setting("briefing_time_noon", noon)
-    set_setting("briefing_time_evening", evening)
-    _apply_briefing_job(ACTION_MORNING_BRIEFING, morning)
-    _apply_briefing_job(ACTION_NOON_BRIEFING, noon)
-    _apply_briefing_job(ACTION_EVENING_REVIEW, evening)
-    if current_app.scheduler:
-        current_app.scheduler.reschedule()
-    flash("已保存", "success")
-    return redirect(url_for("settings_page.index"))
+    """保存三种简报的计划及推送渠道。"""
+    from app.services.briefing_service import save_briefing_settings
+
+    try:
+        save_briefing_settings(current_user, request.form)
+        flash("已保存简报时间、开关和推送渠道", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("settings_page.index", tab="briefing"))
+
+
+@bp.route("/briefing/send/<kind>", methods=["POST"])
+@login_required
+def briefing_send(kind: str):
+    """使用已保存的渠道手动推送，允许在定时推送暂停时执行。"""
+    from flask import abort
+    from app.scheduler import SchedulerService
+    from app.services.briefing_service import BRIEFINGS, briefing_job
+
+    if kind not in BRIEFINGS:
+        abort(404)
+    job = briefing_job(current_user, kind, create=True)
+    db.session.commit()
+    sched = getattr(current_app, "scheduler", None) or SchedulerService(current_app._get_current_object())
+    try:
+        sched.run_now(job.id)
+        flash(f"{BRIEFINGS[kind][1]}已推送，可在通知中心查看各渠道结果", "success")
+    except Exception as exc:  # noqa: BLE001 — 推送结果已记录，允许用户修正配置后重试
+        flash(f"推送失败：{exc}", "error")
+    return redirect(url_for("settings_page.index", tab="briefing"))
 
 
 @bp.route("/pages-domain", methods=["POST"])

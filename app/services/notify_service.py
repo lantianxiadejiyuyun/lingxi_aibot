@@ -147,8 +147,9 @@ def delete_notify_group(name: str) -> None:
         settings_service.set_setting(key, [c for c in raw if c != ref])
     # 定时任务（内置任务 params.channels 覆盖 / 自定义提醒）中的组引用：移除后跟随默认渠道
     from app.models.scheduled_job import ScheduledJob
+    from app.utils.scoping import current_user_id
 
-    for job in ScheduledJob.query.all():
+    for job in ScheduledJob.query.filter_by(user_id=current_user_id()).all():
         params = job.params or {}
         chans = params.get("channels")
         if isinstance(chans, str):

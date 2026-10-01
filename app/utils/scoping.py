@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 
 _local = threading.local()
 
@@ -16,6 +17,20 @@ def set_current_user_id(user_id: int) -> None:
 
 def clear_current_user_id() -> None:
     _local.user_id = None
+
+
+@contextmanager
+def user_scope(user_id: int):
+    """临时绑定任务所属用户，结束后恢复线程原有覆盖（不复制请求用户）。"""
+    previous = getattr(_local, "user_id", None)
+    set_current_user_id(user_id)
+    try:
+        yield
+    finally:
+        if previous is None:
+            clear_current_user_id()
+        else:
+            set_current_user_id(previous)
 
 
 def current_user_id() -> int:
