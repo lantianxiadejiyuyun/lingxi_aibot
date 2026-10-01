@@ -1,0 +1,53 @@
+# fnOS / Linux 首次安装：应用 + MySQL，不需要域名或反向代理。
+# 先按 docs/部署.md 创建 .env、准备 data/ 并初始化数据库。
+# 快速安装模板通过 COMPOSE_FILE 自动选择本文件；也可显式使用 -f。
+services:
+  app:
+    build: .
+    environment:
+      FLASK_APP: wsgi:app
+      TZ: Asia/Shanghai
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      # 根 .env 只作首次导入；之后运行配置保存在 data/.env。
+      # 不注入 env_file，避免遮蔽网页设置保存的配置。
+      - ./.env:/app/.env:ro
+    ports:
+      # 左侧为宿主机端口，右侧为容器内端口。
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8000}:8000"
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DB:-ai_bot}
+      MYSQL_USER: ${MYSQL_USER:-ai_bot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请先在 .env 填写 MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请先在 .env 填写 MYSQL_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    # 仅供 app 通过 Docker 网络访问，不发布数据库端口。
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  mysql_data:

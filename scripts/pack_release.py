@@ -31,50 +31,44 @@ ROOT_FILES = (
     "requirements.txt",
     "Dockerfile",
     "docker-compose.yml",
+    "docker-compose.quickstart.yml",
     ".dockerignore",
     ".env.example",
+    ".env.docker.example",
     "README.md",
     "LICENSE",
     "NOTICE",
 )
 
-# 文档：发行包里只放用户/部署需要的
+# 保留 README 导航涉及的文档，使解压后的文档链接仍可用。
 DOC_FILES = (
+    "release/README.md",
     "docs/部署.md",
-    "docs/使用说明.html",
+    "docs/部署参考.md",
+    "docs/使用指南.md",
+    "docs/开发指南.md",
+    "docs/更新记录.md",
+    "docs/PROJECT.md",
+    "docs/PLAN.md",
     "docs/DEPLOY_BT.md",
+    "docs/使用说明.html",
 )
 
 START_MD = """# 灵犀 发行包 v{version}
 
-本目录是**可部署的发行文件**，不是开发仓库。不含虚拟环境、数据库、密钥和测试。
+解压到独立目录后，推荐使用 **Docker** 安装。安装包包含应用、配置模板和文档；不含密钥、运行数据或测试环境。
 
-## 里面有什么
+## 首次安装
 
-| 路径 | 说明 |
-|---|---|
-| `app/` | 应用代码 |
-| `wsgi.py` | 生产入口（waitress / gunicorn） |
-| `run.py` | 仅本地调试 |
-| `requirements.txt` | Python 依赖 |
-| `.env.example` | 配置模板，复制为 `.env` 后修改 |
-| `LICENSE` / `NOTICE` | PolyForm Shield：个人与内部自用可以，不能拿去卖或做竞品 |
-| `Dockerfile` / `docker-compose.yml` / `docker/` | Docker 部署 |
-| `docs/部署.md` | 宝塔 / 普通 Linux / Docker / MySQL 完整教程 |
-| `docs/使用说明.html` | 功能说明（浏览器打开） |
+按 [Docker 首次安装](docs/部署.md#首次安装) 操作：准备 Docker，将 `.env.docker.example` 复制为 `.env` 并填写两个 MySQL 密码，再按顺序启动数据库、初始化管理员、启动应用。无需域名，也无需单独安装 Python 或 MySQL。
 
-## 最短步骤
+登录后按 [使用指南](docs/使用指南.md) 配置自己的 AI Key、飞书和网页分享地址。
 
-1. 安装 Python 3.11/3.12 + MySQL（utf8mb4），建库 `ai_bot`
-2. `python -m venv .venv` 后安装依赖：`.venv/bin/pip install -r requirements.txt`
-3. `cp .env.example .env`，填写 MySQL
-4. `.venv/bin/python -m flask --app wsgi init-db`
-5. `.venv/bin/waitress-serve --host=0.0.0.0 --port=8000 --threads=8 wsgi:app`
-6. 浏览器打开 `/setup` 或直接登录；每位用户在「设置 → 模型与人设」填自己的 API Key
+## 升级已有安装
 
-完整说明见 [docs/部署.md](docs/部署.md)。
+先备份，再按 [升级步骤](docs/部署.md#升级) 替换程序。保留原 `.env`、`data/`、数据库卷和实际使用的 Compose 配置，不要用模板覆盖。
 
-> 不要用 uvicorn，不要多 worker。公开网页只开 `PAGE_PORT` 即可，不必配 HTTPS。
+宝塔、已有 MySQL 或原生 Python 部署见 [部署参考](docs/部署参考.md)；本地开发请使用完整仓库并阅读 [开发指南](docs/开发指南.md)。版本变化见 [更新记录](docs/更新记录.md)。
 """
 
 

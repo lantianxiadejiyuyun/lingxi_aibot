@@ -1,4 +1,4 @@
-# 灵犀 Caddy 反代（可选）。完整步骤见 docs/部署.md 第六节。
+# 灵犀 Caddy 反代（可选）。完整步骤见 docs/部署参考.md 第六节。
 #
 # 启用：改好域名后 docker compose up -d（会启动 app + caddy）。
 # 无域名请：docker compose up -d --build app

@@ -612,7 +612,7 @@ $env:FLASK_APP = "run:app"
 
 ## 14. 开发约定（新模块必读）
 
-0. **改功能流程**：功能 / 修 bug / 改页面或接口必须走 **[edit-flow](../.grok/skills/edit-flow/SKILL.md)**（`/edit-flow`）：先读源码 → 至少两轮确认需求 → 再改代码 → 跑 `scripts/` 对应测试 → **测试通过后**才更新 `docs/PROJECT.md`、`README.md`、`docs/使用说明.html`。错别字/注释/纯格式可跳过。细则只维护在 Skill 里。
+0. **改功能流程**：功能 / 修 bug / 改页面或接口必须走 **[edit-flow](https://github.com/lantianxiadejiyuyun/lingxi_aibot/blob/master/.grok/skills/edit-flow/SKILL.md)**（`/edit-flow`）：先读源码 → 至少两轮确认需求 → 再改代码 → 跑 `scripts/` 对应测试 → **测试通过后**才更新 `docs/PROJECT.md`、`README.md`、`docs/使用说明.html`。错别字/注释/纯格式可跳过。细则只维护在 Skill 里。
 1. **时间**：DB 一律 naive UTC（`timeutil.utcnow()`）；展示用 `user_tz(current_user)`；表单/接口时间字符串用 `parse_local(text, tz)` 解析
 2. **软删除**：Event/Task/Note 删除置 `deleted_at`，查询默认过滤
 3. **AI 工具**：`@register_tool(name, description, parameters, dangerous=...)`，返回 str/dict，非法参数抛 `ValueError`（错误回传模型自纠）

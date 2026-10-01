@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.docker.example
 data/
 venv/
 .venv/
@@ -14,3 +15,5 @@ certs/
 *.zip
 instance/
 migrations/
+deploy/
+release/

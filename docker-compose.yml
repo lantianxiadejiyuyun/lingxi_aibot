@@ -1,5 +1,6 @@
 # 灵犀 Docker 编排
-# 用法见 docs/部署.md
+# 已有 MySQL / Caddy 用法见 docs/部署参考.md。
+# 全新 Docker 安装推荐 docker-compose.quickstart.yml，见 docs/部署.md。
 #
 #   接已有 MySQL、只要应用：  docker compose up -d --build app
 #   自带 MySQL 8：           docker compose --profile mysql up -d --build app db
