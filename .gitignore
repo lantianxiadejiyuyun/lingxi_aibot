@@ -41,6 +41,8 @@ logs/
 # ===== IDE / 系统 =====
 .idea/
 .vscode/
+.grok/
+.claude/
 .DS_Store
 Thumbs.db
 desktop.ini

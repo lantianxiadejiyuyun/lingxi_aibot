@@ -20,7 +20,7 @@ VERSION = "1.2"
 
 SKIP_DIR_NAMES = {
     "__pycache__", ".git", ".venv", "venv", "data", "instance",
-    "migrations", ".idea", ".vscode", "deploy", "scripts", "release",
+    "migrations", ".idea", ".vscode", ".grok", ".claude", "deploy", "scripts", "release",
 }
 SKIP_SUFFIXES = {".pyc", ".pyo", ".pyd"}
 

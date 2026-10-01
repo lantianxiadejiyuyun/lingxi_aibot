@@ -263,15 +263,15 @@ docker compose exec app python -m flask init-db</code></pre>
 <!-- 改功能流程 -->
 <div class="card" id="edit-flow">
   <h2>🛠️ 改功能流程（维护者）</h2>
-  <p>改功能、修缺陷、改页面或接口时，按仓库 Skill <code>.grok/skills/edit-flow/SKILL.md</code>（对话里 <code>/edit-flow</code>）执行，不要直接开改：</p>
+  <p>改功能、修缺陷、改页面或接口时，按以下步骤进行。本地环境和测试命令见 <a href="开发指南.md">开发指南</a>。</p>
   <ol>
     <li>先阅读相关源码和现有测试，说明当前实现</li>
-    <li>至少两轮提问，确认需求与边界（空值、未登录、局域网、短入口、旧链接等）</li>
-    <li>按确认范围改代码</li>
+    <li>明确需求与影响范围，检查空值、未登录、旧链接等边界情况</li>
+    <li>按需求修改代码</li>
     <li>用 <code>.venv</code> 跑 <code>scripts/</code> 里对应测试</li>
     <li>测试通过后，再同步 <code>docs/PROJECT.md</code>、<code>README.md</code>、本页对应章节</li>
   </ol>
-  <p>错别字、注释、纯格式可以不走全流程。细则以 Skill 为准。</p>
+  <p>仅修改文档或格式时，检查内容和链接即可。</p>
 </div>
 
 <!-- 安全提示 -->
@@ -289,7 +289,7 @@ docker compose exec app python -m flask init-db</code></pre>
   </ul>
 </div>
 
-<footer>灵犀 · 个人 AI 工作生活管理基座 · 文档：<code>README.md</code> · <code>docs/部署.md</code> · <code>docs/PROJECT.md</code> · 改功能：<code>.grok/skills/edit-flow</code></footer>
+<footer>灵犀 · 个人 AI 工作生活管理基座 · 文档：<code>README.md</code> · <code>docs/部署.md</code> · <code>docs/PROJECT.md</code> · <a href="开发指南.md">开发指南</a></footer>
 
 </div>
 </body>

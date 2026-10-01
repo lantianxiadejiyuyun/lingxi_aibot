@@ -1,7 +1,7 @@
 # 灵犀 项目文档
 
 > 版本：v1.2 · 更新日期：2026-08-23 · 代码位置：E:\Codes\AiBot（含后台界面分组）
-> 相关文档：[README.md](../README.md)（快速上手）· [部署.md](部署.md)（宝塔/服务器/Docker/MySQL）· [PLAN.md](PLAN.md)（原始规划）· [使用说明.html](使用说明.html)（面向使用者）
+> 相关文档：[README.md](../README.md)（快速上手）· [部署.md](部署.md)（宝塔/服务器/Docker/MySQL）· [开发指南](开发指南.md)（本地开发与测试）· [PLAN.md](PLAN.md)（原始规划）· [使用说明.html](使用说明.html)（面向使用者）
 
 ---
 
@@ -111,7 +111,6 @@
 │   └── utils/                 # timeutil / urlsafety / api_auth / scoping（当前用户上下文）
 ├── data/backups/              # 备份文件目录（自动生成）
 ├── scripts/                   # 冒烟测试与功能测试脚本
-├── .grok/skills/              # 项目 Skill（改功能走 edit-flow）
 ├── docker/                    # Caddy 配置
 ├── Dockerfile / docker-compose.yml
 ├── requirements.txt / .env / .env.example
@@ -612,7 +611,7 @@ $env:FLASK_APP = "run:app"
 
 ## 14. 开发约定（新模块必读）
 
-0. **改功能流程**：功能 / 修 bug / 改页面或接口必须走 **[edit-flow](https://github.com/lantianxiadejiyuyun/lingxi_aibot/blob/master/.grok/skills/edit-flow/SKILL.md)**（`/edit-flow`）：先读源码 → 至少两轮确认需求 → 再改代码 → 跑 `scripts/` 对应测试 → **测试通过后**才更新 `docs/PROJECT.md`、`README.md`、`docs/使用说明.html`。错别字/注释/纯格式可跳过。细则只维护在 Skill 里。
+0. **改功能流程**：先阅读相关源码和测试，明确需求与影响范围 → 修改代码 → 运行相关测试 → 同步受影响的文档。本地环境和测试命令见 [开发指南](开发指南.md)。
 1. **时间**：DB 一律 naive UTC（`timeutil.utcnow()`）；展示用 `user_tz(current_user)`；表单/接口时间字符串用 `parse_local(text, tz)` 解析
 2. **软删除**：Event/Task/Note 删除置 `deleted_at`，查询默认过滤
 3. **AI 工具**：`@register_tool(name, description, parameters, dangerous=...)`，返回 str/dict，非法参数抛 `ValueError`（错误回传模型自纠）

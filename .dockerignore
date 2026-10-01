@@ -12,6 +12,10 @@ logs/
 certs/
 .git/
 .gitignore
+.grok/
+.claude/
+**/.grok/
+**/.claude/
 *.zip
 instance/
 migrations/
