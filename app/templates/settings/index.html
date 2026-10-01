@@ -698,7 +698,7 @@
           </div>
           <div class="form-group">
             <label id="briefing_channels_label_{{ row.kind }}">推送到（可多选）</label>
-            <div role="group" aria-labelledby="briefing_channels_label_{{ row.kind }}">
+            <div class="form-row" role="group" aria-labelledby="briefing_channels_label_{{ row.kind }}">
               {% for value, label in all_channel_options %}
               <label class="chip"><input type="checkbox" name="briefing_channels_{{ row.kind }}" value="{{ value }}" {{ 'checked' if value in row.channels }}> {{ label }}</label>
               {% endfor %}
