@@ -1,6 +1,9 @@
 {% extends 'base.html' %}
 {% block title %}AI 助手{% endblock %}
 {% block page_title %}AI 助手{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chat-controls.css', v='20261001a') }}">
+{% endblock %}
 {% block content %}
 <div class="chat-layout">
   <aside class="chat-side">
@@ -18,15 +21,44 @@
     </div>
   </aside>
   <main class="chat-main">
+    <div class="chat-control-bar">
+      <button type="button" class="chat-control-toggle" id="chat-control-toggle" aria-expanded="false" aria-controls="chat-control-panel" title="调整当前会话的模型、思考等级和上下文">
+        <i class="bi bi-sliders"></i>
+        <span id="chat-model-status">会话设置</span>
+        <span class="chat-control-effort" id="chat-effort-status"></span>
+        <i class="bi bi-chevron-down"></i>
+      </button>
+      <span class="chat-auto-status" id="chat-auto-status" title="AI 可按任务切换候选模型和思考等级"></span>
+    </div>
+    <section class="chat-control-panel" id="chat-control-panel" aria-label="当前会话设置" hidden>
+      <div class="chat-control-panel-head"><strong>当前会话</strong><button type="button" class="chat-control-close" id="chat-control-close" aria-label="收起会话设置">×</button></div>
+      <p class="chat-control-note" id="chat-control-note" role="status">选择或新建一个会话后，可调整模型和上下文。</p>
+      <label for="chat-model-select">模型</label>
+      <select class="select" id="chat-model-select" disabled><option>加载中…</option></select>
+      <label for="chat-effort-select">思考等级</label>
+      <select class="select" id="chat-effort-select" disabled><option>默认</option></select>
+      <p class="chat-control-note" id="chat-reasoning-hint">可用等级由模型与接口决定。</p>
+      <label class="chat-auto-choice"><input type="checkbox" id="chat-auto-switch" disabled><span>允许 AI 自主切换<small>仅使用你配置的候选模型，作用于当前会话。</small></span></label>
+      <div class="chat-context-summary" id="chat-context-summary"></div>
+      <div class="chat-control-actions">
+        <button type="button" class="btn btn-ghost" id="chat-compact" disabled><i class="bi bi-arrows-collapse"></i> 压缩上下文</button>
+        <button type="button" class="btn btn-ghost" id="chat-status" disabled>查看状态</button>
+      </div>
+      <p class="chat-control-note">压缩会保留摘要和近期消息。飞书等聊天入口也可发送 <code>/</code> 查看命令。</p>
+      <a class="chat-settings-link" href="{{ url_for('settings_page.index', tab='ai') }}">管理候选模型与默认配置 <i class="bi bi-arrow-up-right"></i></a>
+    </section>
     <div class="msg-list" id="msg-list">
       <p class="empty">开始和 {{ persona_name }} 对话吧，例如：“帮我看看今天有什么安排”
         <a class="muted" href="{{ url_for('settings_page.index', tab='ai') }}#persona" style="margin-left:8px">设置人设</a>
       </p>
     </div>
-    <div class="chat-input-row">
-      <input class="input" id="chat-input" type="text" placeholder="输入消息，回车发送…" autocomplete="off">
+    <div class="chat-composer">
+      <div class="chat-command-menu" id="chat-command-menu" role="listbox" aria-label="聊天命令" hidden></div>
+      <div class="chat-input-row">
+      <input class="input" id="chat-input" type="text" placeholder="输入消息，或 / 查看命令" autocomplete="off" aria-controls="chat-command-menu" aria-autocomplete="list" aria-expanded="false">
       <button class="btn btn-ghost" id="btn-mic" type="button" title="语音输入（浏览器）"><i class="bi bi-mic"></i></button>
       <button class="btn btn-primary" id="btn-send">发送</button>
+      </div>
     </div>
   </main>
 </div>
@@ -56,11 +88,187 @@
   var inputEl = document.getElementById("chat-input");
   var btnSend = document.getElementById("btn-send");
   var btnNew = document.getElementById("btn-new-chat");
+  var controlsPanel = document.getElementById("chat-control-panel");
+  var controlsToggle = document.getElementById("chat-control-toggle");
+  var modelSelect = document.getElementById("chat-model-select");
+  var effortSelect = document.getElementById("chat-effort-select");
+  var autoSwitch = document.getElementById("chat-auto-switch");
+  var compactButton = document.getElementById("chat-compact");
+  var statusButton = document.getElementById("chat-status");
+  var commandMenu = document.getElementById("chat-command-menu");
 
   var currentConvId = null;
   var sending = false;
+  var controlState = null;
+  var controlsRequest = 0;
+  var menuOptions = [];
+  var menuIndex = -1;
+  var effortLabels = { "default": "默认", off: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
 
   function scrollBottom() { msgList.scrollTop = msgList.scrollHeight; }
+
+  /* ---------- 会话模型与上下文 ---------- */
+  function setControlsOpen(open) {
+    controlsPanel.hidden = !open;
+    controlsToggle.setAttribute("aria-expanded", String(open));
+    if (open) hideCommandMenu();
+  }
+
+  function updateControlAvailability() {
+    var disabled = sending || !controlState;
+    modelSelect.disabled = disabled;
+    effortSelect.disabled = disabled;
+    autoSwitch.disabled = disabled;
+    compactButton.disabled = disabled || (controlState.context && controlState.context.can_compact === false);
+    statusButton.disabled = disabled;
+  }
+
+  function fillSelect(el, rows, selected) {
+    el.innerHTML = "";
+    rows.forEach(function (row) {
+      var option = document.createElement("option");
+      option.value = row.value;
+      option.textContent = row.label;
+      option.selected = row.value === selected;
+      el.appendChild(option);
+    });
+  }
+
+  function refreshControls() {
+    var id = currentConvId;
+    var sequence = ++controlsRequest;
+    controlState = null;
+    updateControlAvailability();
+    document.getElementById("chat-model-status").textContent = id == null ? "会话设置" : "正在读取设置…";
+    document.getElementById("chat-effort-status").textContent = "";
+    document.getElementById("chat-auto-status").textContent = "";
+    document.getElementById("chat-context-summary").textContent = "";
+    document.getElementById("chat-control-note").textContent = id == null ? "选择或新建一个会话后，可调整模型和上下文。" : "正在读取当前会话…";
+    if (id == null) return Promise.resolve();
+    return window.api.get("/chat/api/controls/" + encodeURIComponent(id)).then(function (res) {
+      if (sequence !== controlsRequest || String(id) !== String(currentConvId)) return;
+      if (!res || !res.ok || !res.data) throw new Error((res && res.error) || "读取失败");
+      controlState = res.data;
+      var model = controlState.model || "未配置模型";
+      var effort = controlState.reasoning_effort || "default";
+      document.getElementById("chat-model-status").textContent = model;
+      document.getElementById("chat-model-status").title = model;
+      document.getElementById("chat-effort-status").textContent = "思考 · " + (effortLabels[effort] || effort);
+      document.getElementById("chat-auto-status").textContent = controlState.auto_switch ? "AI 自动" : "手动";
+      document.getElementById("chat-control-note").textContent = "手动切换会关闭 AI 自主切换；可随时重新开启。";
+      var models = (controlState.models || []).map(function (item) { return { value: item.id, label: item.label || item.id }; });
+      if (!models.some(function (item) { return item.value === model; })) models.unshift({ value: model, label: model });
+      fillSelect(modelSelect, models, model);
+      fillSelect(effortSelect, (controlState.reasoning_levels || ["default"]).map(function (level) {
+        return { value: level, label: effortLabels[level] || level };
+      }), effort);
+      document.getElementById("chat-reasoning-hint").textContent = (controlState.reasoning_levels || []).length <= 1
+        ? "当前模型与接口仅提供默认思考模式；未确认支持的接口不会附加思考参数。"
+        : "等级由模型与接口决定。部分千问、旧版 Claude 模型的低/中/高对应 1,024/4,096/8,192 tokens 思考预算。";
+      autoSwitch.checked = !!controlState.auto_switch;
+      var ctx = controlState.context || {};
+      var details = [];
+      if (typeof ctx.active_messages === "number") details.push("当前上下文 " + ctx.active_messages + " 条消息");
+      if (typeof ctx.estimated_tokens === "number") details.push("约 " + ctx.estimated_tokens.toLocaleString() + " tokens");
+      if (ctx.summary_present || ctx.summary_characters > 0) details.push("已保留历史摘要");
+      document.getElementById("chat-context-summary").textContent = details.join(" · ");
+      updateControlAvailability();
+      renderCommandMenu();
+    }).catch(function () {
+      if (sequence !== controlsRequest || String(id) !== String(currentConvId)) return;
+      document.getElementById("chat-model-status").textContent = "设置暂不可用";
+      document.getElementById("chat-control-note").textContent = "暂时无法读取会话设置，可在消息框发送 /status 查看。";
+    });
+  }
+
+  controlsToggle.addEventListener("click", function () { setControlsOpen(controlsPanel.hidden); });
+  document.getElementById("chat-control-close").addEventListener("click", function () { setControlsOpen(false); });
+  modelSelect.addEventListener("change", function () { sendMessage("/model " + modelSelect.value); });
+  effortSelect.addEventListener("change", function () { sendMessage("/think " + effortSelect.value); });
+  autoSwitch.addEventListener("change", function () { sendMessage("/auto " + (autoSwitch.checked ? "on" : "off")); });
+  compactButton.addEventListener("click", function () { setControlsOpen(false); sendMessage("/compact"); });
+  statusButton.addEventListener("click", function () { setControlsOpen(false); sendMessage("/status"); });
+
+  /* ---------- 斜杠命令菜单 ---------- */
+  function hideCommandMenu() {
+    commandMenu.hidden = true;
+    inputEl.setAttribute("aria-expanded", "false");
+    inputEl.removeAttribute("aria-activedescendant");
+    menuIndex = -1;
+  }
+
+  function renderCommandMenu() {
+    var query = inputEl.value;
+    if (sending || query.charAt(0) !== "/") { hideCommandMenu(); return; }
+    var rows = [
+      { command: "/model ", description: "选择当前会话模型" },
+      { command: "/think ", description: "调整思考等级" },
+      { command: "/auto ", description: "开启或关闭 AI 自主切换" },
+      { command: "/compact", description: "压缩历史上下文，保留摘要与近期消息" },
+      { command: "/status", description: "查看模型、思考与上下文状态" },
+      { command: "/help", description: "查看命令帮助（飞书等入口通用）" }
+    ];
+    if (/^\/model\s/i.test(query)) {
+      rows = ((controlState && controlState.models) || []).map(function (item) {
+        return { command: "/model " + item.id, description: item.id === controlState.model ? "当前模型" : "切换到此模型" };
+      });
+    } else if (/^\/think\s/i.test(query)) {
+      rows = ((controlState && controlState.reasoning_levels) || ["default"]).map(function (level) {
+        return { command: "/think " + level, description: "思考等级：" + (effortLabels[level] || level) };
+      });
+    } else if (/^\/auto\s/i.test(query)) {
+      rows = [{ command: "/auto on", description: "允许 AI 自主切换候选模型与思考等级" }, { command: "/auto off", description: "保持手动选择" }];
+    }
+    menuOptions = rows.filter(function (row) { return row.command.toLowerCase().indexOf(query.toLowerCase()) === 0; });
+    menuIndex = -1;
+    commandMenu.innerHTML = "";
+    menuOptions.forEach(function (row, index) {
+      var option = document.createElement("button");
+      option.type = "button";
+      option.className = "chat-command-option";
+      option.id = "chat-command-option-" + index;
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", "false");
+      option.innerHTML = "<code></code><span></span>";
+      option.querySelector("code").textContent = row.command;
+      option.querySelector("span").textContent = row.description;
+      option.addEventListener("click", function () { chooseCommand(index); });
+      commandMenu.appendChild(option);
+    });
+    if (!menuOptions.length) {
+      var empty = document.createElement("div");
+      empty.className = "chat-command-empty";
+      empty.textContent = /^\/model\s/i.test(query) && !controlState ? "选中会话后可查看候选模型；也可发送 /model 获取列表。" : "回车发送命令，输入 /help 查看帮助。";
+      commandMenu.appendChild(empty);
+    }
+    commandMenu.hidden = false;
+    inputEl.setAttribute("aria-expanded", "true");
+    inputEl.removeAttribute("aria-activedescendant");
+    setControlsOpen(false);
+  }
+
+  function chooseCommand(index) {
+    if (!menuOptions[index]) return;
+    inputEl.value = menuOptions[index].command;
+    inputEl.focus();
+    if (/\s$/.test(inputEl.value)) renderCommandMenu();
+    else hideCommandMenu();
+  }
+
+  function moveCommandSelection(step) {
+    if (!menuOptions.length) return;
+    menuIndex = menuIndex < 0 ? (step > 0 ? 0 : menuOptions.length - 1) : (menuIndex + step + menuOptions.length) % menuOptions.length;
+    commandMenu.querySelectorAll("[role=option]").forEach(function (option, index) {
+      option.setAttribute("aria-selected", String(index === menuIndex));
+      if (index === menuIndex) { inputEl.setAttribute("aria-activedescendant", option.id); option.scrollIntoView({ block: "nearest" }); }
+    });
+  }
+
+  inputEl.addEventListener("input", renderCommandMenu);
+  document.addEventListener("click", function (event) {
+    if (!event.target.closest(".chat-composer")) hideCommandMenu();
+    if (!event.target.closest(".chat-control-panel, .chat-control-bar")) setControlsOpen(false);
+  });
 
   /* ---------- 会话列表 ---------- */
   function loadConversations() {
@@ -72,6 +280,8 @@
       (res.data || []).slice().reverse().forEach(function (c) { appendConvItem(c.id, c.title); });
       if (!currentConvId && res.data && res.data.length) {
         selectConversation(res.data[0].id);
+      } else if (!currentConvId) {
+        refreshControls();
       }
     });
   }
@@ -94,10 +304,14 @@
   }
 
   function selectConversation(id) {
+    if (sending) return;
     currentConvId = id;
     refreshActive();
+    refreshControls();
+    setControlsOpen(false);
     msgList.innerHTML = '<p class="empty">加载中…</p>';
     window.api.get("/chat/api/messages/" + id).then(function (res) {
+      if (String(currentConvId) !== String(id)) return;
       if (!res || !res.ok) { msgList.innerHTML = '<p class="empty">加载失败</p>'; return; }
       renderMessages(res.data || []);
     });
@@ -174,7 +388,7 @@
 
   function speakText(text) {
     if (!text || !String(text).trim()) return;
-    fetch("/chat/api/tts", {
+    fetch(window.adminUrl("/chat/api/tts"), {
       method: "POST",
       headers: (window.csrfHeaders ? window.csrfHeaders({ "Content-Type": "application/json" }) : { "Content-Type": "application/json" }),
       body: JSON.stringify({ text: String(text).trim() })
@@ -234,12 +448,15 @@
   }
 
   /* ---------- 发送 ---------- */
-  function sendMessage() {
-    var text = inputEl.value.trim();
+  function sendMessage(command) {
+    var isCommand = typeof command === "string";
+    var text = isCommand ? command : inputEl.value.trim();
     if (!text || sending) return;
     sending = true;
     btnSend.disabled = true;
-    inputEl.value = "";   // 发送后立即清空输入栏
+    updateControlAvailability();
+    hideCommandMenu();
+    if (!isCommand) inputEl.value = "";   // 控制面板操作保留尚未发送的草稿
     inputEl.focus();
 
     var doSend = function (convId) {
@@ -248,12 +465,14 @@
         '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span>');
       var bubble = assistantMsg.querySelector(".msg-bubble");
       var acc = "";
+      var finalContent = "";
       var hasError = false;
 
       function finish() {
         sending = false;
         btnSend.disabled = false;
         inputEl.disabled = false;
+        refreshControls();
       }
 
       window.streamSSE("/chat/api/send", { conversation_id: convId, message: text }, {
@@ -276,7 +495,7 @@
             try { t = JSON.parse(payload); } catch (e) {}
             appendToolChip(t.name || "工具", t.result || "", t.ok);
           } else if (evt === "title") {
-            var first = convList.querySelector(".conv-item");
+            var first = convList.querySelector('[data-conv-id="' + convId + '"]');
             if (first) {
               first.setAttribute("data-title", payload);
               first.querySelector(".conv-title").textContent = payload;
@@ -288,6 +507,7 @@
             if (hasError) {
               assistantMsg.remove();
             } else if (payload) {
+              finalContent = payload;
               bubble.innerHTML = window.mdLite(payload);
               attachSpeak(bubble);
               scrollBottom();
@@ -295,8 +515,10 @@
           }
         },
         onDone: function () {
-          if (acc) { bubble.innerHTML = window.mdLite(acc); attachSpeak(bubble); }
-          else if (!hasError) { bubble.innerHTML = ""; }
+          if (hasError) { assistantMsg.remove(); }
+          else if (finalContent) { bubble.innerHTML = window.mdLite(finalContent); attachSpeak(bubble); }
+          else if (acc) { bubble.innerHTML = window.mdLite(acc); attachSpeak(bubble); }
+          else { bubble.innerHTML = ""; }
           finish();
         }
       }).catch(function (err) {
@@ -309,7 +531,7 @@
     if (currentConvId === null) {
       // 没有选中会话：先新建
       window.api.post("/chat/api/new", {}).then(function (res) {
-        if (!res || !res.ok) { window.toast("创建会话失败", "error"); sending = false; btnSend.disabled = false; return; }
+        if (!res || !res.ok) { window.toast("创建会话失败", "error"); sending = false; btnSend.disabled = false; updateControlAvailability(); return; }
         currentConvId = res.data.id;
         msgList.innerHTML = "";
         appendConvItem(res.data.id, "新对话");
@@ -319,6 +541,7 @@
         window.toast("网络错误，请重试", "error");
         sending = false;
         btnSend.disabled = false;
+        updateControlAvailability();
       });
     } else {
       doSend(currentConvId);
@@ -327,6 +550,7 @@
 
   /* ---------- 删除会话 ---------- */
   convList.addEventListener("click", function (e) {
+    if (sending) return;
     var del = e.target.closest("[data-conv-del]");
     if (del) {
       e.stopPropagation();
@@ -359,6 +583,8 @@
       msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
       appendConvItem(res.data.id, "新对话");
       refreshActive();
+      refreshControls();
+      setControlsOpen(false);
       inputEl.value = "";
       inputEl.focus();
     }).catch(function () { window.toast("网络错误，请重试", "error"); });
@@ -369,6 +595,7 @@
 
   /* ---------- 清空所有对话 ---------- */
   document.getElementById("btn-clear-all").addEventListener("click", function () {
+    if (sending) return;
     if (!window.confirm("确定清空所有对话吗？将删除全部会话与消息（含早安简报/周报等系统会话），不可恢复。")) return;
     window.api.post("/chat/api/clear-all", {}).then(function (r) {
       if (r && r.ok) {
@@ -385,6 +612,14 @@
   });
 
   inputEl.addEventListener("keydown", function (e) {
+    if (e.isComposing) return;
+    if (e.key === "Escape") { hideCommandMenu(); setControlsOpen(false); return; }
+    if (!commandMenu.hidden && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault(); moveCommandSelection(e.key === "ArrowDown" ? 1 : -1); return;
+    }
+    if (!commandMenu.hidden && menuIndex >= 0 && (e.key === "Enter" || e.key === "Tab")) {
+      e.preventDefault(); chooseCommand(menuIndex); return;
+    }
     if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
   });
 

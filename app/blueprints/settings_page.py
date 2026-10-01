@@ -95,16 +95,25 @@ def _ai_view() -> dict:
     """AI 配置视图：只读当前用户自己的协议/地址/模型/Key，不借用别人或 .env 的 Key。"""
     from app.ai.llm import default_for_protocol, grouped_provider_presets, normalize_protocol
     from app.services.settings_service import get_own_setting
+    from app.services.model_control_service import parse_model_list
 
     protocol = normalize_protocol(get_own_setting("llm_protocol", "openai"))
     defaults = default_for_protocol(protocol)
     base_url = str(get_own_setting("llm_base_url", "") or "").strip() or defaults["base_url"]
     model = str(get_own_setting("llm_model", "") or "").strip() or defaults["model"]
+    models_raw = get_own_setting("llm_models", [])
+    try:
+        models_text = "\n".join(parse_model_list(models_raw, model))
+    except ValueError:
+        # Keep legacy or invalid saved values editable instead of breaking settings.
+        models_text = "\n".join(str(item) for item in models_raw) if isinstance(models_raw, list) else str(models_raw or "")
     key = str(get_own_setting("llm_api_key", "") or "").strip()
     return {
         "protocol": protocol,
         "base_url": base_url,
         "model": model,
+        "models_text": models_text,
+        "reasoning_effort": str(get_own_setting("llm_reasoning_effort", "default") or "default"),
         "api_key_configured": bool(key),
         "api_key_tail": key[-4:] if len(key) >= 4 else (key or "****"),
         "preset_groups": grouped_provider_presets(),
@@ -190,14 +199,15 @@ def index():
         "channel": get_setting_from("backup_channel", None, "inapp"),
         "files": files,
     }
-    from app.services.page_service import page_port_configured, page_site_base_url
+    from app.services.page_service import page_port_configured, page_public_base_url_configured, page_site_base_url
     from app.services.page_site_server import status as page_site_status
 
     port_val = page_port_configured()
     site_pages = {
         "admin_entry": str(get_setting_from("admin_entry", "ADMIN_ENTRY", "", user_id=0) or ""),
-        "page_port": str(port_val or get_setting_from("page_port", "PAGE_PORT", "") or ""),
+        "page_port": str(port_val or get_setting_from("page_port", "PAGE_PORT", "", user_id=0) or ""),
         "page_host": str(get_setting_from("page_host", "PAGE_HOST", "", user_id=0) or ""),
+        "page_public_base_url": page_public_base_url_configured(),
         "page_base_url": page_site_base_url(),
         "page_site": page_site_status(),
     }
@@ -401,6 +411,8 @@ def delete_group():
 def ai():
     """保存当前用户的 AI 模型配置（协议 / BaseURL / Model / API Key），立即生效。"""
     from app.ai.llm import normalize_protocol
+    from app.ai.reasoning import validate_reasoning
+    from app.services.model_control_service import parse_model_list
 
     protocol = normalize_protocol(request.form.get("llm_protocol"))
     base_url = (request.form.get("llm_base_url") or "").strip().rstrip("/")
@@ -415,15 +427,27 @@ def ai():
         flash("模型名不能为空", "error")
         return redirect(url_for("settings_page.index"))
 
+    try:
+        models = parse_model_list(request.form.get("llm_models", get_own_setting("llm_models", [])), model)
+        reasoning_effort = validate_reasoning(
+            request.form.get("llm_reasoning_effort", get_own_setting("llm_reasoning_effort", "default")),
+            protocol, base_url, model,
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("settings_page.index", tab="ai"))
+
     set_setting("llm_protocol", protocol)
     set_setting("llm_base_url", base_url)
     set_setting("llm_model", model)
+    set_setting("llm_models", models)
+    set_setting("llm_reasoning_effort", reasoning_effort)
     if clear_key:
         set_setting("llm_api_key", "")
     elif api_key:
         set_setting("llm_api_key", api_key)
     flash("AI 配置已保存到你的账号，立即生效", "success")
-    return redirect(url_for("settings_page.index"))
+    return redirect(url_for("settings_page.index", tab="ai"))
 
 
 @bp.route("/persona", methods=["POST"])
@@ -755,11 +779,21 @@ def briefing():
 @bp.route("/pages-domain", methods=["POST"])
 @login_required
 def pages_domain():
-    """保存网页站点（短入口 + 可选独立端口；仅管理员）。"""
+    """保存网页站点的入口、内部端口和公网访问地址（仅管理员）。"""
     import re
 
     if not _is_admin():
         return _admin_denied()
+    from app.services.page_service import normalize_page_public_base_url, page_port_configured
+
+    public_url_submitted = "page_public_base_url" in request.form
+    public_base_url = ""
+    if public_url_submitted:
+        try:
+            public_base_url = normalize_page_public_base_url(request.form.get("page_public_base_url"))
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("settings_page.index", tab="pages-domain"))
     entry = (request.form.get("admin_entry") or "").strip().strip("/")
     host = (request.form.get("page_host") or "").strip()
     host = host.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
@@ -787,13 +821,28 @@ def pages_domain():
         if entry.lower() in reserved:
             flash("此后台短入口与系统路径冲突，请换一个", "error")
             return redirect(url_for("settings_page.index") + "?tab=pages-domain")
+    # url_for 在当前请求中仍使用旧 SCRIPT_NAME；保存入口后须跳往新路径。
+    old_entry = str(current_app.config.get("ADMIN_ENTRY") or "").strip().strip("/")
+    mount_path = request.script_root.rstrip("/")
+    if old_entry and mount_path.endswith(f"/{old_entry}"):
+        mount_path = mount_path[:-(len(old_entry) + 1)]
+    settings_path = url_for("settings_page.index", tab="pages-domain")
+    if request.script_root:
+        settings_path = settings_path[len(request.script_root):]
+    new_prefix = f"/{entry}" if entry else ""
+    redirect_target = f"{mount_path}{new_prefix}{settings_path}"
+    old_port = page_port_configured()
     set_setting("admin_entry", entry, user_id=0)
     set_setting("page_port", port, user_id=0)
     set_setting("page_host", host, user_id=0)
+    if public_url_submitted:
+        set_setting("page_public_base_url", public_base_url, user_id=0)
     current_app.config["ADMIN_ENTRY"] = entry
     current_app.config["SESSION_COOKIE_PATH"] = f"/{entry}" if entry else "/"
     current_app.config["PAGE_PORT"] = port
     current_app.config["PAGE_HOST"] = host
+    if public_url_submitted:
+        current_app.config["PAGE_PUBLIC_BASE_URL"] = public_base_url
     try:
         from dotenv import set_key as _dotenv_set_key
 
@@ -803,21 +852,26 @@ def pages_domain():
         _dotenv_set_key(ENV_PATH, "ADMIN_ENTRY", entry, quote_mode="always")
         _dotenv_set_key(ENV_PATH, "PAGE_PORT", str(port or ""), quote_mode="never")
         _dotenv_set_key(ENV_PATH, "PAGE_HOST", host, quote_mode="never")
+        if public_url_submitted:
+            _dotenv_set_key(ENV_PATH, "PAGE_PUBLIC_BASE_URL", public_base_url, quote_mode="always")
     except Exception:  # noqa: BLE001
         current_app.logger.warning("网页站点设置已写入数据库，但写回 .env 失败")
-    try:
-        from app.services.page_site_server import restart as restart_page_site
+    from app.utils.netinfo import clear_page_reachability_cache
 
-        restart_page_site(current_app)
+    clear_page_reachability_cache()
+    try:
+        from app.services.page_site_server import restart as restart_page_site, start_if_needed, status
+
+        if old_port != port:
+            restart_page_site(current_app)
+        elif port and not status().get("running"):
+            start_if_needed(current_app)
     except Exception:  # noqa: BLE001
         current_app.logger.exception("网页站点端口启停失败")
         flash("设置已保存，但网页端口启动失败，请换一个端口或重启应用", "error")
-        return redirect(url_for("settings_page.index") + "?tab=pages-domain")
-    if port:
-        flash(f"已保存：公开页 http 端口 {port}/webs/html/<slug>", "success")
-    else:
-        flash("已保存：公开页走后台端口 /webs/html/<slug>（局域网 IP 可直达）", "success")
-    return redirect(url_for("settings_page.index") + "?tab=pages-domain")
+        return redirect(redirect_target)
+    flash("网页站点设置已保存", "success")
+    return redirect(redirect_target)
 
 
 @bp.route("/image", methods=["POST"])

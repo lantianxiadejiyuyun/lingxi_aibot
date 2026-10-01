@@ -2,6 +2,10 @@
 {% block title %}仪表盘{% endblock %}
 {% block page_title %}仪表盘{% endblock %}
 {% block content %}
+<div class="dashboard-intro">
+  <h1>把今天安排得更从容</h1>
+  <p>查看日程与待办，随时记录新的想法。</p>
+</div>
 <div class="stats-row">
   <div class="stat-card stat-indigo">
     <div class="stat-icon"><i class="bi bi-calendar3"></i></div>
@@ -25,8 +29,8 @@
   </div>
 </div>
 
-<div class="grid grid-3">
-  <section class="card col-span-2">
+<div class="grid grid-3 dashboard-grid">
+  <section class="card col-span-2 dashboard-schedule">
     <div class="card-head">
       <h2><i class="bi bi-calendar3"></i> 今日日程</h2>
       <a class="btn btn-sm btn-primary" href="{{ url_for('calendar.index') }}">去日历</a>
@@ -47,7 +51,7 @@
     {% endif %}
   </section>
 
-  <section class="card">
+  <section class="card dashboard-tasks">
     <div class="card-head">
       <h2><i class="bi bi-list-check"></i> 待办任务</h2>
       <a class="btn btn-sm btn-primary" href="{{ url_for('tasks.index') }}">去任务</a>
@@ -67,7 +71,7 @@
     {% endif %}
   </section>
 
-  <section class="card col-span-3">
+  <section class="card col-span-3 dashboard-shortcuts">
     <div class="card-head"><h2><i class="bi bi-lightning"></i> 快捷操作</h2></div>
     <div class="quick-actions">
       <a class="quick-action" href="{{ url_for('calendar.index') }}">
@@ -105,7 +109,7 @@
     </div>
   </section>
 
-  <section class="card col-span-3">
+  <section class="card col-span-3 dashboard-assistant">
     <div class="card-head"><h2><i class="bi bi-robot"></i> AI 助手</h2></div>
     <p class="muted">需要帮忙安排日程、记账或规划出行？直接对 AI 说：</p>
     <div class="prompt-chips" style="margin-top:10px">

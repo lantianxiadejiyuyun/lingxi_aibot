@@ -87,6 +87,17 @@ def api_messages(conv_id):
     return _json_ok(data)
 
 
+@bp.route('/api/controls/<int:conv_id>', methods=['GET'])
+@login_required
+def api_controls(conv_id):
+    conv = _owned_conversation(conv_id)
+    if conv is None:
+        return _json_err('会话不存在', 404)
+    from app.services.model_control_service import chat_controls
+
+    return _json_ok(chat_controls(conv, current_user))
+
+
 @bp.route("/api/send", methods=["POST"])
 @login_required
 def api_send():
@@ -128,11 +139,6 @@ def api_send():
                 yield _sse("error", "用户不存在")
                 yield _sse("done", "")
                 return
-            # 未配置 LLM：直接返回 error 事件
-            if not LLMClient().is_configured:
-                yield _sse("error", "未配置 API Key。每位用户需在「设置 → 模型与人设」填写自己的 Key（支持 OpenAI 兼容 / Anthropic）")
-                yield _sse("done", "")
-                return
             try:
                 for ev in run_chat(conv, message, user):
                     kind, payload = ev
@@ -143,6 +149,8 @@ def api_send():
                         yield _sse("delta", payload + "\n\n")
                     elif kind == "tool":
                         yield _sse("tool", json.dumps(payload, ensure_ascii=False))
+                    elif kind == 'notice':
+                        yield _sse('tool', json.dumps({'name': '会话控制', 'result': payload, 'ok': True}, ensure_ascii=False))
                     elif kind == "title":
                         yield _sse("title", payload)
                     elif kind == "done":

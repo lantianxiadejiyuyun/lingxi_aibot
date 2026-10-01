@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 
+from app.ai.reasoning import request_options, requires_streaming
+
 logger = logging.getLogger(__name__)
 
 PROTOCOL_OPENAI = "openai"
@@ -29,7 +31,7 @@ PROVIDER_PRESETS: list[dict[str, str]] = [
         "id": "deepseek", "label": "DeepSeek", "group": "国内",
         "protocol": PROTOCOL_OPENAI,
         "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
+        "model": "deepseek-flash",
         "hint": "深度求索 · OpenAI 兼容",
     },
     {
@@ -209,7 +211,10 @@ def default_for_protocol(protocol: str) -> dict[str, str]:
         p = next(x for x in PROVIDER_PRESETS if x["id"] == "anthropic")
     else:
         p = next(x for x in PROVIDER_PRESETS if x["id"] == "deepseek")
-    return {"protocol": p["protocol"], "base_url": p["base_url"], "model": p["model"]}
+    # A newer quick-fill preset must not silently migrate existing installations
+    # that rely on the legacy empty-setting fallback. Saved models also win.
+    model = "deepseek-chat" if proto == PROTOCOL_OPENAI else p["model"]
+    return {"protocol": p["protocol"], "base_url": p["base_url"], "model": model}
 
 
 def anthropic_messages_url(base_url: str) -> str:
@@ -280,6 +285,12 @@ def to_anthropic_payload(messages: list, tools: list | None = None) -> dict:
             _merge_anthropic_message(out, "user", m.get("content") or "")
             continue
         if role == "assistant":
+            # Native blocks contain signed thinking and must be replayed exactly
+            # during tool continuations (including interleaved/redacted blocks).
+            native = m.get("anthropic_content")
+            if isinstance(native, list) and native:
+                _merge_anthropic_message(out, "assistant", native)
+                continue
             blocks: list[dict] = []
             text = m.get("content") or ""
             if text:
@@ -349,57 +360,81 @@ def parse_anthropic_content(content) -> tuple[str, list[dict]]:
     return "".join(texts), calls
 
 
-def iter_anthropic_sse(events) -> list:
-    """把 Anthropic SSE 事件（dict 或 JSON 字符串）收成与 chat_stream 相同的 yield 列表。
+class _AnthropicAccumulator:
+    """One parser for real SSE and offline tests; never expose thinking as text."""
 
-    供测试与流式解析共用。返回 ["delta"/tool_calls 事件...]。
-    """
-    text_parts: list[str] = []
-    acc: dict[int, dict] = {}
-    out: list[dict] = []
-    for ev in events:
-        if isinstance(ev, str):
-            raw = ev.strip()
-            if not raw or raw == "[DONE]":
-                continue
-            try:
-                ev = json.loads(raw)
-            except ValueError:
-                continue
-        if not isinstance(ev, dict):
-            continue
+    def __init__(self):
+        self.blocks: dict[int, dict] = {}
+        self.arguments: dict[int, str] = {}
+
+    def feed(self, ev):
         etype = ev.get("type")
+        if etype == "error":
+            err = ev.get("error") or {}
+            raise LLMError(str(err.get("message") or err or "Anthropic 流式错误")[:300])
         if etype == "content_block_start":
             idx = int(ev.get("index") or 0)
-            block = ev.get("content_block") or {}
+            block = dict(ev.get("content_block") or {})
+            self.blocks[idx] = block
             if block.get("type") == "tool_use":
-                acc[idx] = {
-                    "id": block.get("id") or "",
-                    "name": block.get("name") or "",
-                    "arguments": "",
-                }
+                self.arguments[idx] = ""
+            elif block.get("type") == "text" and block.get("text"):
+                return {"type": "delta", "text": str(block["text"])}
         elif etype == "content_block_delta":
             idx = int(ev.get("index") or 0)
             delta = ev.get("delta") or {}
             dtype = delta.get("type")
             if dtype == "text_delta":
                 piece = str(delta.get("text") or "")
+                block = self.blocks.setdefault(idx, {"type": "text", "text": ""})
+                block["text"] = block.get("text", "") + piece
                 if piece:
-                    text_parts.append(piece)
-                    out.append({"type": "delta", "text": piece})
+                    return {"type": "delta", "text": piece}
             elif dtype == "input_json_delta":
-                slot = acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-                slot["arguments"] += str(delta.get("partial_json") or "")
-        elif etype == "content_block_stop":
+                self.arguments[idx] = self.arguments.get(idx, "") + str(delta.get("partial_json") or "")
+            elif dtype in {"thinking_delta", "signature_delta"}:
+                key = "thinking" if dtype == "thinking_delta" else "signature"
+                block = self.blocks.setdefault(idx, {"type": "thinking", "thinking": ""})
+                block[key] = block.get(key, "") + str(delta.get(key) or "")
+        return None
+
+    def finish(self):
+        blocks = []
+        calls = []
+        for idx, block in sorted(self.blocks.items()):
+            block = dict(block)
+            if block.get("type") == "tool_use":
+                raw = self.arguments.get(idx) or json.dumps(block.get("input") or {}, ensure_ascii=False)
+                try:
+                    block["input"] = json.loads(raw)
+                except ValueError as e:
+                    raise LLMError("Anthropic 返回了不完整的工具参数，请重试") from e
+                calls.append({"id": block.get("id", ""), "name": block.get("name", ""), "arguments": raw})
+            blocks.append(block)
+        events = []
+        if blocks:
+            events.append({"type": "assistant_meta", "data": {"anthropic_content": blocks}})
+        if calls:
+            events.append({"type": "tool_calls", "calls": calls})
+        return events
+
+
+def iter_anthropic_sse(events) -> list:
+    """供测试与流式解析共用，保留签名思考块用于内部工具续轮。"""
+    parser = _AnthropicAccumulator()
+    out = []
+    for ev in events:
+        if isinstance(ev, str):
+            try:
+                ev = json.loads(ev)
+            except ValueError:
+                continue
+        if not isinstance(ev, dict):
             continue
-    calls = [
-        {"id": slot["id"], "name": slot["name"], "arguments": slot["arguments"] or "{}"}
-        for _, slot in sorted(acc.items())
-        if slot.get("name")
-    ]
-    if calls:
-        out.append({"type": "tool_calls", "calls": calls})
-    return out
+        event = parser.feed(ev)
+        if event:
+            out.append(event)
+    return out + parser.finish()
 
 
 def _attr(obj, key, default=None):
@@ -427,8 +462,12 @@ def _http_error_message(resp) -> str:
 
 
 class LLMClient:
-    def __init__(self, app=None):
+    def __init__(self, app=None, conversation=None, overrides=None):
         self.app = app
+        self.conversation = conversation
+        self.overrides = {k: v for k, v in (overrides or {}).items()
+                          if k in {"model", "reasoning_effort"}}
+        self.last_assistant_meta = {}
         self._client = None
         self._sig = None
         self.protocol = PROTOCOL_OPENAI
@@ -453,13 +492,20 @@ class LLMClient:
             timeout = float(get_own_setting("llm_timeout", DEFAULT_TIMEOUT) or DEFAULT_TIMEOUT)
         except (TypeError, ValueError):
             timeout = float(DEFAULT_TIMEOUT)
-        return {
+        cfg = {
             "protocol": protocol,
             "base_url": base,
             "api_key": key,
             "model": model,
             "timeout": timeout,
+            "reasoning_effort": get_own_setting("llm_reasoning_effort", "default") or "default",
         }
+        if self.conversation is not None:
+            from app.services.model_control_service import resolve_llm_config
+
+            cfg = resolve_llm_config(self.conversation, cfg)
+        cfg.update(self.overrides)
+        return cfg
 
     @property
     def is_configured(self) -> bool:
@@ -478,11 +524,44 @@ class LLMClient:
         self.model = cfg["model"]
         self.timeout = cfg["timeout"]
 
+    @staticmethod
+    def _message_signature(cfg):
+        return [cfg["protocol"], cfg["base_url"].rstrip("/"), cfg["model"],
+                cfg.get("reasoning_effort") or "default"]
+
+    def _prepare_messages(self, cfg, messages):
+        """Keep wire metadata only for the exact model that generated it."""
+        signature = self._message_signature(cfg)
+        prepared = []
+        for msg in messages:
+            clean = {k: v for k, v in msg.items()
+                     if k in {"role", "content", "name", "tool_calls", "tool_call_id", "refusal", "audio"}}
+            if msg.get("role") == "assistant" and msg.get("_llm_signature") == signature:
+                key = "anthropic_content" if cfg["protocol"] == PROTOCOL_ANTHROPIC else "reasoning_content"
+                if key in msg:
+                    clean[key] = msg[key]
+            prepared.append(clean)
+        return prepared
+
+    def _options(self, cfg, tools):
+        try:
+            return request_options(cfg, tools=bool(tools))
+        except ValueError as e:
+            raise LLMError(str(e)) from e
+
+    def _meta(self, cfg, data):
+        self.last_assistant_meta = {"_llm_signature": self._message_signature(cfg), **data}
+        return {"type": "assistant_meta", "data": self.last_assistant_meta}
+
     @property
     def client(self):
         """OpenAI SDK 客户端（仅 OpenAI 协议）。Anthropic 走 HTTP，不使用此属性。"""
         cfg = self._read_config()
         self._apply(cfg)
+        return self._client_for(cfg)
+
+    def _client_for(self, cfg):
+        """Use one configuration snapshot throughout a request."""
         if cfg["protocol"] != PROTOCOL_OPENAI:
             return None
         sig = (cfg["protocol"], cfg["base_url"], cfg["api_key"], cfg["model"], cfg["timeout"])
@@ -514,22 +593,25 @@ class LLMClient:
         yield 字典：
           {"type": "delta", "text": str}
           {"type": "tool_calls", "calls": [...]}   # {id,name,arguments}
+          {"type": "assistant_meta", "data": {...}}  # 内部续轮，不能发送到浏览器/飞书
         """
         cfg = self._read_config()
         self._apply(cfg)
         self._require_key(cfg)
+        self.last_assistant_meta = {}
         if cfg["protocol"] == PROTOCOL_ANTHROPIC:
             yield from self._anthropic_stream(cfg, messages, tools)
             return
         try:
-            stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
+            stream = self._client_for(cfg).chat.completions.create(
+                model=cfg["model"],
+                messages=self._prepare_messages(cfg, messages),
                 tools=tools or None,
                 stream=True,
-                temperature=0.7,
+                **self._options(cfg, tools),
             )
             acc: dict[int, dict] = {}
+            reasoning_parts: list[str] = []
             for chunk in stream:
                 choices = _attr(chunk, "choices") or []
                 if not choices:
@@ -540,6 +622,9 @@ class LLMClient:
                 content = _attr(delta, "content")
                 if content:
                     yield {"type": "delta", "text": str(content)}
+                reasoning = _attr(delta, "reasoning_content")
+                if reasoning:
+                    reasoning_parts.append(str(reasoning))
                 for tc in _attr(delta, "tool_calls") or []:
                     idx = _attr(tc, "index", 0)
                     if idx is None:
@@ -561,6 +646,8 @@ class LLMClient:
                 for _, slot in sorted(acc.items())
                 if slot.get("name")
             ]
+            if reasoning_parts:
+                yield self._meta(cfg, {"reasoning_content": "".join(reasoning_parts)})
             if calls:
                 yield {"type": "tool_calls", "calls": calls}
         except LLMError:
@@ -573,21 +660,33 @@ class LLMClient:
         cfg = self._read_config()
         self._apply(cfg)
         self._require_key(cfg)
+        self.last_assistant_meta = {}
+        if requires_streaming(cfg):
+            parts, calls = [], []
+            for event in self.chat_stream(messages, tools):
+                if event["type"] == "delta":
+                    parts.append(event["text"])
+                elif event["type"] == "tool_calls":
+                    calls = event["calls"]
+            return "".join(parts), calls
         if cfg["protocol"] == PROTOCOL_ANTHROPIC:
             return self._anthropic_chat(cfg, messages, tools)
         try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
+            resp = self._client_for(cfg).chat.completions.create(
+                model=cfg["model"],
+                messages=self._prepare_messages(cfg, messages),
                 tools=tools or None,
                 stream=False,
-                temperature=0.7,
+                **self._options(cfg, tools),
             )
             choices = _attr(resp, "choices") or []
             if not choices:
                 return "", []
             msg = _attr(choices[0], "message")
             content = _attr(msg, "content") or ""
+            reasoning = _attr(msg, "reasoning_content")
+            if reasoning:
+                self._meta(cfg, {"reasoning_content": str(reasoning)})
             tool_calls = []
             for tc in _attr(msg, "tool_calls") or []:
                 fn = _attr(tc, "function")
@@ -613,11 +712,11 @@ class LLMClient:
         }
 
     def _anthropic_body(self, cfg: dict, messages, tools, stream: bool) -> dict:
-        body = to_anthropic_payload(messages, tools)
+        body = to_anthropic_payload(self._prepare_messages(cfg, messages), tools)
         body["model"] = cfg["model"]
         body["max_tokens"] = ANTHROPIC_MAX_TOKENS
-        body["temperature"] = 0.7
         body["stream"] = stream
+        body.update(self._options(cfg, tools))
         return body
 
     def _anthropic_chat(self, cfg: dict, messages, tools) -> tuple[str, list[dict]]:
@@ -639,7 +738,10 @@ class LLMClient:
             data = resp.json()
         except ValueError as e:
             raise LLMError("Anthropic 返回了无法解析的响应") from e
-        return parse_anthropic_content(data.get("content"))
+        content = data.get("content")
+        if isinstance(content, list):
+            self._meta(cfg, {"anthropic_content": content})
+        return parse_anthropic_content(content)
 
     def _anthropic_stream(self, cfg: dict, messages, tools):
         import requests
@@ -659,7 +761,7 @@ class LLMClient:
         if resp.status_code >= 400:
             raise LLMError(_http_error_message(resp))
 
-        acc: dict[int, dict] = {}
+        parser = _AnthropicAccumulator()
         try:
             for raw in resp.iter_lines(decode_unicode=True):
                 if not raw:
@@ -676,30 +778,10 @@ class LLMClient:
                     ev = json.loads(payload)
                 except ValueError:
                     continue
-                etype = ev.get("type")
-                if etype == "error":
-                    err = ev.get("error") or {}
-                    raise LLMError(str(err.get("message") or err or "Anthropic 流式错误")[:300])
-                if etype == "content_block_start":
-                    idx = int(ev.get("index") or 0)
-                    block = ev.get("content_block") or {}
-                    if block.get("type") == "tool_use":
-                        acc[idx] = {
-                            "id": block.get("id") or "",
-                            "name": block.get("name") or "",
-                            "arguments": "",
-                        }
-                elif etype == "content_block_delta":
-                    delta = ev.get("delta") or {}
-                    dtype = delta.get("type")
-                    if dtype == "text_delta":
-                        piece = str(delta.get("text") or "")
-                        if piece:
-                            yield {"type": "delta", "text": piece}
-                    elif dtype == "input_json_delta":
-                        idx = int(ev.get("index") or 0)
-                        slot = acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-                        slot["arguments"] += str(delta.get("partial_json") or "")
+                if isinstance(ev, dict):
+                    event = parser.feed(ev)
+                    if event:
+                        yield event
         except LLMError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -707,10 +789,8 @@ class LLMClient:
         finally:
             resp.close()
 
-        calls = [
-            {"id": slot["id"], "name": slot["name"], "arguments": slot["arguments"] or "{}"}
-            for _, slot in sorted(acc.items())
-            if slot.get("name")
-        ]
-        if calls:
-            yield {"type": "tool_calls", "calls": calls}
+        for event in parser.finish():
+            if event["type"] == "assistant_meta":
+                yield self._meta(cfg, event["data"])
+            else:
+                yield event

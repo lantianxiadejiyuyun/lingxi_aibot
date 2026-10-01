@@ -348,7 +348,7 @@
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | `users` | username, password_hash, timezone, is_admin, feishu_open_id, api_token, prefs | 管理员可在设置页创建用户；飞书 `open_id` 用于消息归属；`api_token` 为 App REST 用户级鉴权；`prefs.theme` 为 light/dark/system |
-| `events` | user_id, title, start_utc, end_utc, all_day, rrule, reminder_minutes, location, deleted_at | 重复事件存 RFC5545 rrule，查询时按日期范围展开 |
+| `events` | user_id, title, start_utc, end_utc, all_day, rrule, reminder_minutes, last_reminded_occurrence_utc, location, deleted_at | 重复事件按日期范围展开；记录已提醒的发生时间以持久化去重 |
 | `tasks` | user_id, title, notes, due_utc, priority(1-3), status(open/done/cancelled), project, tags(JSON), completed_at, deleted_at | |
 | `notes` | user_id, title, content, tags(JSON), deleted_at | AI 长期记忆素材 |
 | `webpages` | user_id, title, slug(unique), description, content(HTML), is_public, enabled, deleted_at | 网页生成器；软删除时 slug 改写为 `<原>-d<id>` 释放 |
@@ -434,7 +434,7 @@ class MyChannel(BaseChannel):
 
 | job_key | 说明 | 默认 |
 |---|---|---|
-| `event_reminder_scan` | 事件提醒扫描（未来 60 分钟内的提醒） | interval:1 |
+| `event_reminder_scan` | 发送已到期且未发送的提醒，默认补发最近 60 分钟错过的扫描 | interval:1 |
 | `task_due_scan` | 任务到期扫描（30 分钟内到期） | interval:10 |
 | `morning_briefing` | 早安简报（对话式引导） | `0 7 * * *` |
 | `noon_briefing` | 午间简报 | `0 12 * * *` |

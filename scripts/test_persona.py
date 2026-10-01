@@ -164,8 +164,9 @@ with app.app_context():
     from app.ai.executor import run_chat
     from app.models.conversation import Conversation
 
-    with patch("app.ai.executor.LLMClient") as MockLLM, \
+    with app.test_request_context("/"), patch("app.ai.executor.LLMClient") as MockLLM, \
             patch("app.ai.executor.registry") as mock_reg:
+        login_user(user)
         mock_llm = MockLLM.return_value
         mock_llm.chat_stream.return_value = iter([{"type": "delta", "text": "明天有会。"}])
         mock_reg.openai_tools.return_value = []
@@ -185,8 +186,9 @@ with app.app_context():
     with app.test_request_context("/"):
         login_user(user)
         set_setting("ai_persona_ack_enabled", False, user_id=user.id)
-    with patch("app.ai.executor.LLMClient") as MockLLM, \
+    with app.test_request_context("/"), patch("app.ai.executor.LLMClient") as MockLLM, \
             patch("app.ai.executor.registry") as mock_reg:
+        login_user(user)
         mock_llm = MockLLM.return_value
         mock_llm.chat_stream.return_value = iter([{"type": "delta", "text": "明天有会。"}])
         mock_reg.openai_tools.return_value = []

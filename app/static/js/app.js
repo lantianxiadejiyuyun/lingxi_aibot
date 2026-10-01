@@ -70,10 +70,19 @@
     return h;
   };
 
+  /* ---------- 后台地址（含短入口 / 反代挂载路径） ---------- */
+  window.adminUrl = function (url) {
+    var root = (document.documentElement.getAttribute("data-script-root") || "").replace(/\/+$/, "");
+    // 调用方传应用根路径；即使入口与蓝图同名（如 /chat），也须加前缀。
+    // 外部 URL、协议相对 URL 与相对地址保持原样。
+    if (!root || typeof url !== "string" || url.charAt(0) !== "/" || url.indexOf("//") === 0) return url;
+    return root + url;
+  };
+
   /* ---------- JSON API ---------- */
   window.api = {
     post: function (url, data) {
-      return fetch(url, {
+      return fetch(window.adminUrl(url), {
         method: "POST",
         headers: window.csrfHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(data || {}),
@@ -84,7 +93,7 @@
       });
     },
     get: function (url) {
-      return fetch(url, { headers: window.csrfHeaders() }).then(function (r) {
+      return fetch(window.adminUrl(url), { headers: window.csrfHeaders() }).then(function (r) {
         return r.json().catch(function () {
           throw new Error("HTTP " + r.status + (r.status === 401 ? "（登录已失效，请重新登录）" : ""));
         });
@@ -95,7 +104,7 @@
   /* ---------- SSE 流式（fetch + POST）---------- */
   window.streamSSE = function (url, body, handlers) {
     handlers = handlers || {};
-    return fetch(url, {
+    return fetch(window.adminUrl(url), {
       method: "POST",
       headers: window.csrfHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body || {}),

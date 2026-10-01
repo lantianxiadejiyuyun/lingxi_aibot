@@ -294,7 +294,18 @@ def set_public(asset: ImageAsset, is_public: bool) -> ImageAsset:
 
 
 def asset_url(asset: ImageAsset) -> str:
-    """图片绝对访问地址（/img/<文件名>）。"""
+    """公开图片走 /img；私有图片带后台入口，以便浏览器发送登录 Cookie。"""
     from flask import request
+    from app.services.page_service import page_public_base_url_configured
 
-    return f"{request.host_url.rstrip('/')}/img/{asset.file_path}"
+    path = f"/img/{asset.file_path}"
+    public_base = page_public_base_url_configured()
+    if asset.is_public and public_base:
+        return f"{public_base}{path}"
+    if not asset.is_public:
+        prefix = request.script_root.rstrip("/")
+        entry = str(current_app.config.get("ADMIN_ENTRY") or "").strip().strip("/")
+        if entry and not prefix.endswith(f"/{entry}"):
+            prefix += f"/{entry}"
+        path = prefix + path
+    return f"{request.host_url.rstrip('/')}{path}"

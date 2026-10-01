@@ -54,6 +54,8 @@ def main() -> None:
     app = Flask(__name__)
     app.config.from_object(Config)
     db.init_app(app)
+    # 任务变更由调用方主进程在技能结束后同步；子进程不启动调度线程。
+    app.scheduler = None
 
     from app.services.skill_service import compile_skill_fn
     from app.utils.scoping import set_current_user_id

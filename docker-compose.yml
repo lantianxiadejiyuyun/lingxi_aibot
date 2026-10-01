@@ -6,7 +6,8 @@
 #   有域名 + Caddy HTTPS：   先改 docker/Caddyfile，再 docker compose up -d --build
 #                           （会同时启动 app 与 caddy；无域名请只启动 app）
 #
-# .env 必须存在（cp .env.example .env）。容器内连库：
+# .env 必须存在（cp .env.example .env），首启导入 data/.env 作为运行配置。
+# 后续安装向导或手动修改运行配置均使用 data/.env。容器内连库：
 #   宿主机 MySQL → MYSQL_HOST=host.docker.internal
 #   本文件 db 服务 → MYSQL_HOST=db   （不要写 127.0.0.1）
 
@@ -20,14 +21,15 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
-      # 只挂载 .env，由应用 load_dotenv 读取。不要再用 env_file：
-      # 容器环境变量会遮蔽文件内 SECRET_KEY（override=False），占位符会变成临时密钥。
-      - ./.env:/app/.env
+      # 根 .env 仅作首启导入源；运行配置位于可写 data/.env，支持原子替换。
+      # 不使用 env_file，避免进程环境遮蔽安装向导保存的值。
+      - ./.env:/app/.env:ro
     # gunicorn 监听 8000；Caddy 走内部网络，一般不必映射。
     # 不用 Caddy、直接 IP 访问后台时：
     #   ports: ["8000:8000"]
-    # 独立网页端口须与 .env 的 PAGE_PORT 一致（不要用 8080 兜底）：
-    #   ports: ["${PAGE_PORT}:${PAGE_PORT}"]
+    # 独立网页端口须与 data/.env / 设置页的 PAGE_PORT 一致：
+    #   ports: ["8000:8000", "8080:8080"]
+    # 镜像默认 PAGE_BIND=0.0.0.0，容器端口映射才可达。
     restart: unless-stopped
     networks: [aibot]
     depends_on:
@@ -64,8 +66,10 @@ services:
     environment:
       MYSQL_DATABASE: ${MYSQL_DB:-ai_bot}
       MYSQL_USER: ${MYSQL_USER:-ai_bot}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 设置 MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 设置 MYSQL_ROOT_PASSWORD}
+      # 不在全文件插值阶段强制密码，未启用 mysql profile 时只运行 app 无需 root 密码。
+      # 启用 db 时必须在根 .env 填写两项密码；MySQL 镜像会拒绝空 root 密码。
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql

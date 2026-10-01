@@ -3,7 +3,7 @@
 - 可视化安装向导：①配置数据库 → ②初始化数据库（可重置/DROP 全部表） → ③创建管理员 → ④基础配置
 - 四步严格按点击前进，不因库里已有表/管理员而跳步或跳转离开
 - 每次打开都从第①步开始；写操作一律校验安装令牌（data/setup_token.txt）
-- 数据库连接信息直接在网页上填写，保存后写入项目 .env（无需手动编辑、无需重启）
+- 数据库连接信息直接在网页上填写，保存后写入运行 .env（无需手动编辑、无需重启）
 - 所有探测均容错：数据库不可用时页面仍可正常渲染引导内容
 """
 from __future__ import annotations
@@ -249,7 +249,7 @@ def api_db_save():
         save_db_config(d["host"], d["port"], d["user"], d["password"], d["db"])
         apply_runtime_db_config(d["host"], d["port"], d["user"], d["password"], d["db"])
     except PermissionError:
-        return jsonify(ok=False, error="无法写入项目 .env 文件（权限不足），"
+        return jsonify(ok=False, error="无法写入运行配置 .env 文件（权限不足），"
                                        "请在服务器上执行 chown/chmod 后重试")
     except Exception as e:  # noqa: BLE001
         db.session.rollback()
@@ -355,7 +355,7 @@ def api_extra_save():
     try:
         saved = save_extra_config(data)
     except PermissionError:
-        return jsonify(ok=False, error="无法写入项目 .env 文件（权限不足）"), 500
+        return jsonify(ok=False, error="无法写入运行配置 .env 文件（权限不足）"), 500
     except Exception as e:  # noqa: BLE001
         return jsonify(ok=False, error=f"保存失败：{e}"), 500
     session.pop("setup_wizard", None)
@@ -381,7 +381,7 @@ def api_finish():
         try:
             save_extra_config({"admin_entry": entry})
         except PermissionError:
-            return jsonify(ok=False, error="无法写入项目 .env 文件（权限不足）"), 500
+            return jsonify(ok=False, error="无法写入运行配置 .env 文件（权限不足）"), 500
         except Exception as e:  # noqa: BLE001
             return jsonify(ok=False, error=f"保存失败：{e}"), 500
     session.pop("setup_wizard", None)

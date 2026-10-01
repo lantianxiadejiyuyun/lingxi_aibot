@@ -1,6 +1,6 @@
 """记忆服务：会话摘要 + 全局长期记忆 + 上下文注入 + 定时梳理动作。
 
-- 会话摘要：长对话（>12 条）压缩为 conv.summary，保留最近 8 条原文
+- 会话摘要：长对话压缩为 conv.summary，按摘要边界选上下文，完整聊天记录始终保留
 - 长期记忆：跨对话抽取事实/偏好存 memories 表（source=auto 每次梳理整体替换，
   source=manual 由用户/AI 手动记录、不被自动覆盖）；每条带重要度 1-5 与过期时间
 - 上下文注入：build_messages 注入 全局记忆（过滤过期、按重要度排序）+ 会话摘要 + 最近消息
@@ -71,45 +71,14 @@ def delete_expired(user_id: Optional[int] = None) -> int:
 # ---------- 会话摘要 ----------
 
 def consolidate_conversation(conv: Conversation, user) -> bool:
-    """把长对话压缩为摘要写入 conv.summary，保留最近 KEEP_RECENT 条原文。"""
-    msgs = [m for m in conv.messages if m.role in ("user", "assistant") and m.content]
-    if len(msgs) <= CONSOLIDATE_MIN:
-        return False
-    older = msgs[:-KEEP_RECENT]
-    if not older:
-        return False
-    transcript = "\n".join(
-        f"{'用户' if m.role == 'user' else '助手'}: {m.content[:500]}" for m in older)
+    """保留定时梳理的 >12 条门槛，摘要与边界由统一服务原子更新。"""
+    from app.services import context_service
 
-    from app.ai.llm import LLMClient, LLMError
-    from app.ai.prompts import build_system_prompt, summarize_prompt
-
-    llm = LLMClient()
-    if not llm.is_configured:
-        return False
-    try:
-        summary, _ = llm.chat([
-            {"role": "system", "content": build_system_prompt(user)},
-            {"role": "user", "content": summarize_prompt(transcript)},
-        ])
-    except LLMError as e:
-        logger.warning("会话 %s 摘要失败：%s", conv.id, e)
-        return False
-    summary = (summary or "").strip()
-    if summary:
-        conv.summary = summary
-        # 真正压缩：删除已被摘要的旧消息，仅保留最近 KEEP_RECENT 条原文
-        # （否则 transcript 无限增长，反复全量摘要最终超 token 失效）
-        keep_ids = [m.id for m in msgs[-KEEP_RECENT:]]
-        from app.models.conversation import Message
-
-        Message.query.filter(
-            Message.conversation_id == conv.id,
-            Message.id.notin_(keep_ids),
-        ).delete(synchronize_session=False)
-        db.session.commit()
-        return True
-    return False
+    with context_service.conversation_lock(conv.id):
+        msgs = context_service.active_messages(conv, user)
+        if len(msgs) <= CONSOLIDATE_MIN:
+            return False
+        return context_service.compact_conversation(conv, user, force=True)["changed"]
 
 
 # ---------- 长期记忆抽取 ----------

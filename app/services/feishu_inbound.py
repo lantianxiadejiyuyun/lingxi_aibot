@@ -152,8 +152,10 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
                 conv = None
                 if mapping.get(chat_id):
                     conv = db.session.get(Conversation, mapping[chat_id])
+                    if conv is not None and conv.user_id != user.id:
+                        conv = None
                 if conv is None:
-                    conv = Conversation(title=f"飞书-{chat_id[:12]}")
+                    conv = Conversation(title=f"飞书-{chat_id[:12]}", user_id=user.id)
                     db.session.add(conv)
                     db.session.commit()
                     mapping[chat_id] = conv.id
@@ -161,13 +163,11 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
 
                     set_setting("feishu_chat_map", mapping)
 
-                if not LLMClient().is_configured:
-                    send_text(chat_id, "🤖 灵犀：你的账号尚未配置 AI。请打开网页「设置 → 模型与人设」，填写你自己的 API Key（OpenAI 兼容或 Anthropic）。")
-                    return
-
                 image_ids: list[int] = []
                 final_text, err, ack_text = "", "", ""
-                for ev in run_chat(conv, text, user):
+                # Feishu group messages can prefix slash commands with bot mentions.
+                command_text = re.sub(r'^\s*(?:@_user_\d+\s*)+', '', text)
+                for ev in run_chat(conv, command_text, user):
                     if ev[0] == "ack":
                         ack_text = ev[1]
                         send_text(chat_id, ack_text)
@@ -175,6 +175,8 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
                         final_text = ev[1]
                     elif ev[0] == "error":
                         err = ev[1]
+                    elif ev[0] == 'notice':
+                        send_text(chat_id, ev[1])
                     elif ev[0] == "tool" and ev[1].get("name") in ("generate_image", "edit_image"):
                         m = re.search(r'"id"\s*:\s*(\d+)', ev[1].get("result") or "")
                         if m:

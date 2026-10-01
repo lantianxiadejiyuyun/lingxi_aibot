@@ -71,7 +71,8 @@ def validate_name(name: str) -> str:
 def _scan_forbidden(code: str) -> None:
     for pat in _FORBIDDEN:
         if re.search(pat, code):
-            raise SkillError(f"技能代码包含被禁止的特征：{pat.strip('\\\\b')}")
+            feature = pat.replace(r"\b", "")
+            raise SkillError(f"技能代码包含被禁止的特征：{feature}")
     # 字符串常量拼接归一化后再扫一遍（防 "{0.__glo"+"bals__}" 切开黑名单子串）
     _scan_folded_strings(code)
     _scan_format_templates(code)
@@ -126,15 +127,17 @@ def _scan_folded_strings(code: str) -> None:
         ))
         for pat in _FORBIDDEN:
             if re.search(pat, node.value):
+                feature = pat.replace(r"\b", "")
                 raise SkillError(
-                    f"技能代码字符串常量包含被禁止的特征：{pat.strip('\\\\b')}")
+                    f"技能代码字符串常量包含被禁止的特征：{feature}")
     # 按源码位置拼接全部字符串常量："{0.__glo"+"bals__}" 会拼回 __globals__
     joined = "".join(p[2] for p in sorted(pieces))
     if joined:
         for pat in _FORBIDDEN:
             if re.search(pat, joined):
+                feature = pat.replace(r"\b", "")
                 raise SkillError(
-                    f"技能代码字符串常量拼接后包含被禁止的特征：{pat.strip('\\\\b')}")
+                    f"技能代码字符串常量拼接后包含被禁止的特征：{feature}")
 
 
 def _check_format_template(template: str) -> None:
@@ -358,17 +361,19 @@ def compile_skill_fn(name: str, parameters: dict, code: str) -> Callable:
 
     import keyword
 
-    args = []
+    required_args = []
+    optional_args = []
     for pname in props.keys():
         pname = str(pname)
         # 参数名会拼进函数签名：必须校验为合法标识符，防签名注入
         if not pname.isidentifier() or keyword.iskeyword(pname):
             raise SkillError(f"参数名非法（必须为合法 Python 标识符）：{pname}")
         if pname in required:
-            args.append(pname)
+            required_args.append(pname)
         else:
-            args.append(f"{pname}=None")
-    sig = ", ".join(args)
+            optional_args.append(f"{pname}=None")
+    # JSON Schema 属性顺序不决定必填性，Python 签名必须先放必填参数。
+    sig = ", ".join(required_args + optional_args)
     body = textwrap.indent(code.strip("\n"), "    ")
     src = f"def _skill_fn({sig}):\n{body}\n"
     _scan_forbidden(src)  # 签名拼接后再整体扫一遍（纵深防御）
@@ -423,6 +428,15 @@ def _run_in_subprocess(skill: Skill, args: dict):
         )
     except subprocess.TimeoutExpired:
         raise SkillError(f"技能执行超时（>{SKILL_TIMEOUT}s），已强制终止") from None
+    finally:
+        # 子进程内业务服务可能已经提交任务增删改，即使技能随后失败或超时，
+        # 主调度器也必须读取这些变更；无需额外的后台轮询。
+        try:
+            from app.services.job_service import reschedule
+
+            reschedule()
+        except Exception:  # noqa: BLE001 —— 保留技能本身的结果/异常
+            logger.exception("技能执行后同步定时任务失败：%s", skill.name)
     if proc.returncode != 0:
         err = (proc.stderr or b"").decode("utf-8", "replace")[:200]
         raise SkillError(f"技能执行失败（exit {proc.returncode}）：{err}")

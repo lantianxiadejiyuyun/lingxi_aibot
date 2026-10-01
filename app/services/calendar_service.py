@@ -14,7 +14,7 @@ from flask import current_app
 from app.extensions import db
 from app.models.event import Event
 from app.scheduler import register_action
-from app.utils.timeutil import expand_rrule, fmt_dt, utcnow
+from app.utils.timeutil import expand_rrule, fmt_dt, user_tz, utcnow
 
 # 前端/AI 的 repeat 取值 → RFC5545 规则字符串
 REPEAT_MAP: dict[str, str] = {
@@ -46,7 +46,7 @@ def _app_tz() -> ZoneInfo:
 
 def list_events(start_naive: datetime, end_naive: datetime,
                 user_id: Optional[int] = None, include_deleted: bool = False) -> list[Event]:
-    """返回某用户与 [start_naive, end_naive) 时间重叠的事件，按开始时间排序。"""
+    """返回区间内的候选事件；重复事件须由调用方展开后过滤具体发生时间。"""
     query = Event.query
     if user_id is not None:
         query = query.filter(Event.user_id == user_id)
@@ -61,7 +61,9 @@ def list_events(start_naive: datetime, end_naive: datetime,
         & (Event.start_utc < end_naive)
         & (Event.end_utc > start_naive)
     )
-    return query.filter(overlap).order_by(Event.start_utc).all()
+    # 重复事件的首个 start/end 可能早于当前窗口，不能在展开规则前排除。
+    recurring = (Event.rrule != "") & (Event.start_utc < end_naive)
+    return query.filter(overlap | recurring).order_by(Event.start_utc).all()
 
 
 def get_event(event_id: int, user_id: Optional[int] = None) -> Optional[Event]:
@@ -106,6 +108,9 @@ _UPDATABLE_FIELDS = (
 
 def update_event(event: Event, **fields) -> Event:
     """更新事件字段（只接受白名单字段，忽略其他），commit 后返回对象。"""
+    if any(key in fields and fields[key] != getattr(event, key)
+           for key in ("start_utc", "rrule", "reminder_minutes")):
+        event.last_reminded_occurrence_utc = None
     for key in _UPDATABLE_FIELDS:
         if key in fields:
             setattr(event, key, fields[key])
@@ -119,18 +124,8 @@ def soft_delete_event(event: Event) -> None:
     db.session.commit()
 
 
-def upcoming_reminders(user_id: Optional[int] = None, now_naive: Optional[datetime] = None,
-                       horizon_minutes: int = 60) -> list[tuple[Event, datetime]]:
-    """返回未来 (now, now+horizon] 内需要提醒的事件。
-
-    返回 [(event, 发生时间), ...]：发生时间由重复规则展开得到（应用时区），
-    提醒触发时间 = 发生时间 - reminder_minutes。
-    """
-    now = now_naive or utcnow()
-    horizon_end = now + timedelta(minutes=horizon_minutes)
-    scan_end = now + timedelta(hours=24)
-    tz = _app_tz()
-
+def _reminders_between(user_id, start, end, tz) -> list[tuple[Event, datetime]]:
+    """按提醒时间的 [start, end) 区间查询，而非按事件开始时间查询。"""
     q = Event.query.filter(
         Event.deleted_at.is_(None),
         Event.reminder_minutes.isnot(None),
@@ -141,21 +136,41 @@ def upcoming_reminders(user_id: Optional[int] = None, now_naive: Optional[dateti
 
     results: list[tuple[Event, datetime]] = []
     for ev in events:
+        offset = timedelta(minutes=ev.reminder_minutes)
         if ev.rrule:
-            occurrences = expand_rrule(ev.rrule, ev.start_utc, now, scan_end, tz)
+            occurrences = expand_rrule(ev.rrule, ev.start_utc, start + offset, end + offset, tz)
         else:
             occurrences = [ev.start_utc]
         for occ in occurrences:
-            remind = occ - timedelta(minutes=ev.reminder_minutes)
-            if now < remind <= horizon_end:
+            remind = occ - offset
+            if start <= remind < end:
                 results.append((ev, occ))
     results.sort(key=lambda pair: pair[1] - timedelta(minutes=pair[0].reminder_minutes))
     return results
 
 
+def upcoming_reminders(user_id: Optional[int] = None, now_naive: Optional[datetime] = None,
+                       horizon_minutes: int = 60) -> list[tuple[Event, datetime]]:
+    """预览未来 (now, now+horizon] 的提醒；调度发送使用 due_reminders。"""
+    now = now_naive or utcnow()
+    tick = timedelta(microseconds=1)
+    return _reminders_between(user_id, now + tick,
+                              now + timedelta(minutes=horizon_minutes) + tick, _app_tz())
+
+
+def due_reminders(user_id: int, now_naive: Optional[datetime] = None,
+                  lookback_minutes: int = 60, tz=None) -> list[tuple[Event, datetime]]:
+    """返回已到提醒时间且尚未发送的发生，允许补发最近一小时错过的扫描。"""
+    now = now_naive or utcnow()
+    rows = _reminders_between(user_id, now - timedelta(minutes=lookback_minutes),
+                              now + timedelta(microseconds=1), tz or _app_tz())
+    return [(ev, occ) for ev, occ in rows
+            if ev.last_reminded_occurrence_utc is None or ev.last_reminded_occurrence_utc < occ]
+
+
 @register_action(
     "event_reminder_scan",
-    description="扫描即将到来的日程提醒并发送通知（参数：horizon_minutes 提前量分钟数）",
+    description="发送已到期且未发送的日程提醒（lookback_minutes：补发窗口，默认 60 分钟）",
 )
 def scan_event_reminders(user, params: Optional[dict] = None) -> None:
     """调度动作：对该用户的每个到期提醒按场景渠道发送通知。"""
@@ -163,14 +178,23 @@ def scan_event_reminders(user, params: Optional[dict] = None) -> None:
 
     params = params or {}
     try:
-        horizon = int(params.get("horizon_minutes") or 60)
+        lookback = int(params.get("lookback_minutes", params.get("horizon_minutes")) or 60)
     except (TypeError, ValueError):
-        horizon = 60
-    if horizon < 1:
-        horizon = 60
+        lookback = 60
+    if lookback < 1:
+        lookback = 60
 
-    tz = _app_tz()
-    for ev, occ in upcoming_reminders(user.id, horizon_minutes=horizon):
+    tz = user_tz(user)
+    for ev, occ in due_reminders(user.id, lookback_minutes=lookback, tz=tz):
+        # 先持久化领取结果：并发扫描与重启均不会再次发送同一次发生。
+        # 外部渠道的失败仍由通知中心记录，避免自动重试导致部分成功的渠道重复推送。
+        claimed = Event.query.filter(
+            Event.id == ev.id, Event.user_id == user.id, Event.deleted_at.is_(None),
+            Event.last_reminded_occurrence_utc.is_(None) | (Event.last_reminded_occurrence_utc < occ),
+        ).update({Event.last_reminded_occurrence_utc: occ}, synchronize_session=False)
+        db.session.commit()
+        if not claimed:
+            continue
         parts = [f"时间：{fmt_dt(occ, tz)}"]
         if ev.location:
             parts.append(f"地点：{ev.location}")

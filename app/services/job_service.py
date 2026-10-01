@@ -81,8 +81,9 @@ def delete_job(job: ScheduledJob) -> None:
 
 def reschedule() -> None:
     """调度器可用时重新同步任务。"""
-    if current_app.scheduler:
-        current_app.scheduler.reschedule()
+    scheduler = getattr(current_app, "scheduler", None)
+    if scheduler is not None:
+        scheduler.reschedule()
 
 
 @register_action("custom_reminder", description="用户自定义定时提醒（参数：title/body/channels）")

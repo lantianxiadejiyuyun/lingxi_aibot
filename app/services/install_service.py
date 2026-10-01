@@ -1,7 +1,7 @@
 """安装服务：网页安装向导的核心逻辑。
 
 - probe_db：直接探测 MySQL 连通性（区分"没启动/地址错""账号密码错""库不存在"等）
-- save_db_config：把数据库配置写入项目根 .env（供网页向导保存）
+- save_db_config：把数据库配置写入运行 .env（供网页向导保存）
 - rebuild_engine：热重建 SQLAlchemy 引擎（改配置后无需重启进程）
 - initialize_database：建表 + 补列 + 管理员 + 内置任务（幂等，CLI 与网页共用）
 - drop_all_tables：DROP 当前库全部数据表（安装向导重置用，不删库、不改 .env）
@@ -17,18 +17,19 @@ from urllib.parse import quote
 import pymysql
 from dotenv import dotenv_values, set_key
 
+from app.config import ENV_PATH
 from app.extensions import db
 
 logger = logging.getLogger(__name__)
 
 # 项目根目录（app/services/install_service.py → 上三级）
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-ENV_PATH = BASE_DIR / ".env"
 
 
 def _ensure_env_file() -> None:
     """.env 不存在时创建空文件（set_key 需要目标文件存在）。"""
     if not ENV_PATH.exists():
+        ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
         ENV_PATH.touch()
 
 
@@ -63,7 +64,7 @@ def probe_db(host: str, port, user: str, password: str, db_name: str,
 # ---------- 配置保存与热重建 ----------
 
 def save_db_config(host: str, port, user: str, password: str, db_name: str) -> str:
-    """把数据库配置写入项目根 .env。返回提示消息。"""
+    """把数据库配置写入 ENV_PATH 指定的运行配置。返回提示消息。"""
     _ensure_env_file()
     values = {
         "MYSQL_HOST": (host or "127.0.0.1").strip(),
@@ -74,7 +75,7 @@ def save_db_config(host: str, port, user: str, password: str, db_name: str) -> s
     }
     for key, value in values.items():
         set_key(ENV_PATH, key, value, quote_mode="always")
-    return f"已保存到项目 {ENV_PATH.name}"
+    return f"已保存到运行配置 {ENV_PATH.name}"
 
 
 def apply_runtime_db_config(host: str, port, user: str, password: str, db_name: str) -> None:
@@ -228,6 +229,13 @@ def ensure_schema(messages: list[str] | None = None) -> None:
     from sqlalchemy import inspect, text
 
     insp = inspect(db.engine)
+    if "events" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("events")}
+        if "last_reminded_occurrence_utc" not in cols:
+            db.session.execute(text(
+                "ALTER TABLE events ADD COLUMN last_reminded_occurrence_utc DATETIME NULL"))
+            if messages is not None:
+                messages.append("✓ 已为 events 表补充日程提醒去重字段")
     if "conversations" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("conversations")}
         if "summary" not in cols:

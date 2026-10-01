@@ -31,6 +31,7 @@ ROOT_FILES = (
     "requirements.txt",
     "Dockerfile",
     "docker-compose.yml",
+    ".dockerignore",
     ".env.example",
     "README.md",
     "LICENSE",

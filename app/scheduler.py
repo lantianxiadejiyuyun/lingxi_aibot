@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -41,7 +42,7 @@ def trigger_from_cron(cron: str, tz_name: str):
     cron = (cron or "").strip()
     if cron.startswith("interval:"):
         minutes = max(1, int(cron.split(":", 1)[1]))
-        return IntervalTrigger(minutes=minutes)
+        return IntervalTrigger(minutes=minutes, timezone=tz_name)
     return CronTrigger.from_crontab(cron, timezone=tz_name)
 
 
@@ -92,6 +93,8 @@ class SchedulerService:
         tz = app.config.get("SCHEDULER_TIMEZONE") or "Asia/Shanghai"
         self.scheduler = BackgroundScheduler(timezone=tz, daemon=True)
         self._last_signature: Optional[str] = None
+        self._plan_signatures: dict[str, tuple[str, str]] = {}
+        self._sync_lock = threading.RLock()
 
     # ---------- 生命周期 ----------
     def start(self):
@@ -128,35 +131,35 @@ class SchedulerService:
     def sync(self):
         from apscheduler.jobstores.base import JobLookupError
 
-        desired = self._desired_jobs()
-        existing = {j.id: j for j in self.scheduler.get_jobs()}
-        # 删除多余（并发 reschedule 时 job 可能已被移除，忽略）
-        for jid in set(existing) - set(desired):
-            try:
-                self.scheduler.remove_job(jid)
-            except JobLookupError:
-                pass
-            logger.info("移除调度任务 %s", jid)
-        # 添加/更新
-        for jid, (row_id, _cron, trig) in desired.items():
-            kwargs = {
-                "id": jid,
-                "func": _job_func,
-                "args": [row_id, self.app],
-                "trigger": trig,
-                "replace_existing": True,
-                "coalesce": True,
-                "max_instances": 1,
-                "misfire_grace_time": 300,
-            }
-            if jid in existing:
-                # 用 reschedule_job 而非 modify_job：modify_job 改 trigger 时不会重算
-                # next_run_time，导致改完时间后仍按旧时间触发（首跑错点/看似不触发）。
-                self.scheduler.reschedule_job(jid, trigger=trig)
-            else:
-                self.scheduler.add_job(**kwargs)
-        self._last_signature = self._signature(desired)
-        logger.info("调度同步完成，共 %d 个任务", len(desired))
+        # 请求线程和技能完成后的同步可能同时发生，串行更新计划与缓存。
+        with self._sync_lock:
+            desired = self._desired_jobs()
+            existing = {j.id: j for j in self.scheduler.get_jobs()}
+            tz_name = self.app.config.get("SCHEDULER_TIMEZONE") or "Asia/Shanghai"
+            # 删除多余任务
+            for jid in set(existing) - set(desired):
+                try:
+                    self.scheduler.remove_job(jid)
+                except JobLookupError:
+                    pass
+                logger.info("移除调度任务 %s", jid)
+            # 仅计划变化时重排；重新构造 interval trigger 会把起点重置到 now。
+            signatures = {}
+            for jid, (row_id, cron, trig) in desired.items():
+                signature = (cron.strip(), tz_name)
+                signatures[jid] = signature
+                if jid in existing:
+                    if self._plan_signatures.get(jid) != signature:
+                        self.scheduler.reschedule_job(jid, trigger=trig)
+                else:
+                    self.scheduler.add_job(
+                        id=jid, func=_job_func, args=[row_id, self.app],
+                        trigger=trig, replace_existing=True, coalesce=True,
+                        max_instances=1, misfire_grace_time=300,
+                    )
+            self._plan_signatures = signatures
+            self._last_signature = self._signature(desired)
+            logger.info("调度同步完成，共 %d 个任务", len(desired))
 
     def reschedule(self):
         """任务增删改后调用。"""

@@ -6,9 +6,12 @@
 """
 from __future__ import annotations
 
+import ipaddress
+import logging
 import re
 import uuid
 from typing import Optional
+from urllib.parse import urlsplit
 
 from sqlalchemy.exc import IntegrityError
 
@@ -257,16 +260,70 @@ def page_port_configured() -> int:
     return 0
 
 
-def page_access_host() -> str:
+def normalize_page_public_base_url(value) -> str:
+    """校验分享链接的 HTTP(S) 根地址；此值不改变站点监听地址或端口。"""
+    error = "公网访问地址须为完整 HTTP(S) 根地址，例如 http://203.0.113.10:30079；不能包含账号、路径、查询参数或片段"
+    if value is None:
+        return ""
+    if not isinstance(value, str) or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+        raise ValueError(error)
+    value = value.strip()
+    if not value:
+        return ""
+    if len(value) > 2048 or any(c.isspace() for c in value) or any(c in value for c in "\\?#"):
+        raise ValueError(error)
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or \
+                parsed.username is not None or parsed.password is not None or parsed.path not in ("", "/"):
+            raise ValueError(error)
+        host = parsed.hostname
+        port = parsed.port
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError(error)
+        # urlsplit accepts a trailing colon and text after a closing IPv6 bracket.
+        authority_pattern = r"\[[^\]]+\](?::[0-9]+)?" if parsed.netloc.startswith("[") else r"[^:]+(?::[0-9]+)?"
+        if not re.fullmatch(authority_pattern, parsed.netloc) or "%" in host:
+            raise ValueError(error)
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            host = host.rstrip(".").encode("idna").decode("ascii").lower()
+            labels = host.split(".")
+            if len(host) > 253 or re.fullmatch(r"[0-9.]+", host) or any(
+                    not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                    for label in labels):
+                raise ValueError(error)
+        else:
+            host = f"[{address.compressed}]" if address.version == 6 else str(address)
+        suffix = f":{port}" if port is not None else ""
+        return f"{parsed.scheme}://{host}{suffix}"
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError(error) from exc
+
+
+def page_public_base_url_configured() -> str:
+    """分享链接的全局公网根地址；空配置沿用旧的主机/端口规则。"""
+    raw = get_setting_from("page_public_base_url", "PAGE_PUBLIC_BASE_URL", "", user_id=0)
+    try:
+        return normalize_page_public_base_url(raw)
+    except ValueError:
+        # 手工编辑旧数据库或环境变量时，不让坏配置中断整个后台。
+        logging.getLogger(__name__).warning("忽略格式无效的 PAGE_PUBLIC_BASE_URL 配置")
+        return ""
+
+
+def page_access_host(local_ipv4: Optional[str] = None) -> str:
     """生成网页链接用的主机名/IP：设置 PAGE_HOST，否则用本机出口 IPv4，再退回请求 Host。"""
     host = str(get_setting_from("page_host", "PAGE_HOST", "", user_id=0) or "").strip()
     host = host.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
     if host:
         return host
     try:
-        from app.utils.netinfo import diagnose_page_reachability
+        from app.utils.netinfo import _probe_local_ipv4
 
-        ip = (diagnose_page_reachability().get("local_ipv4") or "").strip()
+        ip = (local_ipv4 if local_ipv4 is not None else _probe_local_ipv4()[1]) or ""
+        ip = ip.strip()
         if ip and ip not in ("127.0.0.1", "::1"):
             return ip
     except Exception:  # noqa: BLE001
@@ -285,7 +342,10 @@ def page_access_host() -> str:
 
 
 def page_site_base_url() -> str:
-    """独立网页站点根 URL（http，不配证书）。未开端口返回空串。"""
+    """公开分享根地址优先用公网配置，兼容原独立端口地址；不影响监听。"""
+    public_base = page_public_base_url_configured()
+    if public_base:
+        return public_base
     port = page_port_configured()
     if not port:
         return ""
@@ -303,16 +363,17 @@ def _admin_entry_prefix() -> str:
 def page_public_url(page: WebPage) -> str:
     """页面访问地址。
 
-    公开页优先独立网页端口 → http://主机:端口/webs/html/<slug>（局域网 IP 可直达）
+    公开页优先完整公网根地址，其次独立网页端口 → http://主机:端口/webs/html/<slug>
     否则当前主机 /webs/html/<slug>（不带后台短入口）
     私有页：当前主机 /<短入口>/webs/html/<slug>
     """
     from flask import has_request_context, request
 
     path = page_url_path(page.slug)
-    port_base = page_site_base_url()
-    if port_base and page.is_public:
-        return f"{port_base}{path}"
+    if page.is_public:
+        public_base = page_site_base_url()
+        if public_base:
+            return f"{public_base}{path}"
 
     entry = "" if page.is_public else _admin_entry_prefix()
     if has_request_context():

@@ -8,6 +8,11 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+# Docker 使用可写目录中的运行配置；本地部署仍默认使用项目根 .env。
+_env_location = (os.getenv("AIBOT_ENV_FILE") or "").strip()
+ENV_PATH = Path(_env_location).expanduser() if _env_location else BASE_DIR / ".env"
+if not ENV_PATH.is_absolute():
+    ENV_PATH = BASE_DIR / ENV_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +24,26 @@ _WEAK_SECRET_KEYS = {
 
 
 def _ensure_env_file() -> Path:
-    """项目根缺少 .env 时自动生成（复制 .env.example 并填入随机 SECRET_KEY）。
+    """缺少运行配置时自动生成，或首次导入项目根 .env。
 
     部署时无需手动创建 .env：没有也能启动，安装向导（/setup）接管数据库等配置。
-    - 复制 .env.example（不存在则写最小模板）
+    - AIBOT_ENV_FILE 指定其它路径时，优先导入项目根 .env，之后只使用新路径
+    - 没有旧配置时复制 .env.example（不存在则写最小模板）
     - SECRET_KEY 替换为随机值（避免占位符当密钥）
     - .env 已存在但 SECRET_KEY 为占位符/缺失时同样替换为随机值
     - SESSION_COOKIE_SECURE 默认 0：HTTP/局域网阶段可正常登录，上线 HTTPS 后改 1
     - 目录不可写时静默失败（应用照常启动，仍走安装向导）
     """
-    env_path = BASE_DIR / ".env"
+    env_path = ENV_PATH
+    legacy_path = BASE_DIR / ".env"
+    if env_path != legacy_path and not env_path.exists() and legacy_path.is_file():
+        try:
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            env_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
+            env_path.chmod(0o600)
+        except OSError:
+            logger.warning("无法导入运行配置 %s，请检查目录权限", env_path)
+            return env_path
     if env_path.exists():
         # 文件已存在：若 SECRET_KEY 是占位符/缺失，替换为随机值并写回
         try:
@@ -76,7 +91,9 @@ def _ensure_env_file() -> Path:
                 out_lines.append("SESSION_COOKIE_SECURE=0")
             else:
                 out_lines.append(line)
+        env_path.parent.mkdir(parents=True, exist_ok=True)
         env_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        env_path.chmod(0o600)
     except OSError:
         pass  # 目录不可写：不阻断启动
     return env_path
@@ -196,6 +213,7 @@ class Config:
     # 独立网页 HTTP 端口（可选）：如 8080 → http://IP:8080/webs/html/<slug>；0/空 = 走后台端口同一路径
     PAGE_PORT = _int("PAGE_PORT", 0)
     PAGE_HOST = os.getenv("PAGE_HOST", "").strip()  # 链接里显示的主机，留空则自动用局域网 IPv4
+    PAGE_PUBLIC_BASE_URL = os.getenv("PAGE_PUBLIC_BASE_URL", "")  # 完整公网根地址，仅用于公开分享链接
     # 网页站点监听地址：默认 127.0.0.1；局域网访问独立端口可改为 0.0.0.0
     PAGE_BIND = os.getenv("PAGE_BIND", "127.0.0.1").strip() or "127.0.0.1"
     MAIN_PORT = _int("PORT", 5000)

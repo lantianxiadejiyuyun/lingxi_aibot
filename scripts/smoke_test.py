@@ -114,9 +114,11 @@ check("手动执行早安简报", run_ok)
 r = s.get(BASE + "/notifications")
 check("简报产生站内通知", "早安简报" in r.text, "")
 
-# ---- 调度器：等待事件提醒扫描命中（最多 100 秒）----
+# ---- 调度器：等到提醒时间，再预留一个扫描周期及少量执行余量 ----
 hit = False
-for _ in range(50):
+until_due = max(0, (datetime.strptime(T_REMIND, "%Y-%m-%d %H:%M") - datetime.now()).total_seconds())
+deadline = time.monotonic() + until_due + 75
+while time.monotonic() < deadline:
     time.sleep(2)
     r = s.get(BASE + "/notifications")
     if "调度器提醒测试" in r.text:

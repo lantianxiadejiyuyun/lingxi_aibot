@@ -22,6 +22,8 @@ class Event(db.Model):
     all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     rrule: Mapped[str] = mapped_column(String(255), nullable=False, default="")  # RFC5545，空=不重复
     reminder_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # None=不提醒
+    # 记录已领取提醒的发生时间；重复扫描/进程重启后同一次发生只发送一次。
+    last_reminded_occurrence_utc: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     location: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 软删除
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)

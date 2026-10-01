@@ -2,7 +2,7 @@
 {% block title %}设置{% endblock %}
 {% block page_title %}设置{% endblock %}
 {% block content %}
-<div data-tabs-scope>
+<div class="settings-page" data-tabs-scope>
   <div class="tabs-wrap">
     <div class="tabs-group">
       <span class="tabs-group-label">账户</span>
@@ -167,8 +167,24 @@
             <p class="cron-hint">OpenAI 兼容一般带 <code>/v1</code>；Anthropic 官方填 <code>https://api.anthropic.com</code>。</p>
           </div>
           <div class="form-group">
-            <label for="llm_model">模型名</label>
+            <label for="llm_model">默认模型</label>
             <input class="input" type="text" id="llm_model" name="llm_model" value="{{ ai.model }}" placeholder="deepseek-chat">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="llm_models">可切换的候选模型</label>
+            <textarea class="input" id="llm_models" name="llm_models" rows="4" spellcheck="false" placeholder="每行填写一个模型 ID">{{ ai.models_text }}</textarea>
+            <p class="cron-hint">填写当前接口地址和 Key 可用的模型，每行一个；默认模型会自动加入。AI 自主切换和 <code>/model</code> 仅在此列表中选择。</p>
+          </div>
+          <div class="form-group">
+            <label for="llm_reasoning_effort">新会话默认思考等级</label>
+            <select class="select" id="llm_reasoning_effort" name="llm_reasoning_effort">
+              {% for value, label in [('default', '模型默认'), ('off', '关闭思考'), ('low', '低'), ('medium', '中'), ('high', '高'), ('max', '最高（支持此等级的模型）')] %}
+              <option value="{{ value }}" {% if ai.reasoning_effort == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            <p class="cron-hint">可用等级由模型与接口决定，不支持的等级会在保存时提示；未确认支持的接口仅使用默认模式。部分千问、旧版 Claude 模型的低/中/高对应 1,024/4,096/8,192 tokens 思考预算。会话内可用 <code>/think</code> 单独调整。</p>
           </div>
         </div>
         <div class="form-group">
@@ -440,7 +456,7 @@
         </div>
         <div class="form-group" id="feishu-callback-hint">
           <label>事件回调地址（HTTP 回调模式：在飞书开放平台「事件订阅」中填写）</label>
-          <code style="display:block;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px 12px;word-break:break-all">{{ feishu_app.callback_url }}</code>
+          <code style="display:block;background:var(--surface-muted);border:1px solid var(--border);border-radius:8px;padding:8px 12px;word-break:break-all">{{ feishu_app.callback_url }}</code>
           <p class="cron-hint">
             ① 开放平台创建自建应用 → 应用能力开启「机器人」→ 权限管理添加 <code>im:message</code> 相关权限并发布版本<br>
             ② 事件订阅 → 添加事件 <code>im.message.receive_v1</code>，订阅方式选「将事件发送至开发者服务器」，填写上方回调地址与验证令牌/加密密钥<br>
@@ -679,16 +695,17 @@
     </div>
   </div>
 
-  <!-- ===== 网页站点（端口，无需 HTTPS） ===== -->
+  <!-- ===== 网页站点 ===== -->
   <div class="tab-panel" data-panel="pages-domain">
     <div class="card">
       <div class="card-head"><h2>网页站点</h2></div>
       <p class="muted" style="margin-top:0">
-        不再使用独立后台域名 / 网页域名。后台走<strong>短入口</strong>，生成的网页走
-        <code>/webs/html/页面slug</code>，局域网 IP 可直接访问。
+        生成的公开网页通过 <code>/webs/html/页面slug</code> 分享。配置公网访问地址后，飞书等入口返回的公开链接会优先使用该地址。
       </p>
+      {% if not is_admin %}<p class="cron-hint">网页站点设置由管理员统一管理。</p>{% endif %}
       <form method="post" action="{{ url_for('settings_page.pages_domain') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <fieldset {% if not is_admin %}disabled{% endif %} style="border:0;padding:0;margin:0;min-width:0">
         <div class="form-group">
           <label for="admin_entry">后台短入口</label>
           <div class="form-inline">
@@ -699,34 +716,41 @@
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label for="page_port">网页独立端口（可选）</label>
+            <label for="page_port">内部网页端口（可选）</label>
             <input class="input" type="number" id="page_port" name="page_port" min="1" max="65535"
                    value="{{ site_pages.page_port }}" placeholder="如 8080，留空则与后台同端口">
-            <p class="cron-hint">与后台端口不要相同。留空时公开页走后台端口 <code>/webs/html/&lt;slug&gt;</code>（局域网 IP 可直达）。独立端口若要给局域网访问，请在 .env 设 <code>PAGE_BIND=0.0.0.0</code>。</p>
+            <p class="cron-hint">网页服务在服务器内部监听的端口，不能与后台端口相同。留空时公开页使用后台端口。公网映射到内部 <code>8080</code> 时，此处仍填 <code>8080</code>。</p>
           </div>
           <div class="form-group">
-            <label for="page_host">链接里的主机（可选）</label>
+            <label for="page_host">内网访问主机（可选）</label>
             <input class="input" type="text" id="page_host" name="page_host" value="{{ site_pages.page_host }}"
                    placeholder="留空则自动用本机局域网 IPv4">
             <p class="cron-hint">例如 <code>192.168.1.8</code> 或内网主机名。不要填 http://。</p>
           </div>
         </div>
+        <div class="form-group">
+          <label for="page_public_base_url">公网访问地址</label>
+          <input class="input" type="url" id="page_public_base_url" name="page_public_base_url"
+                 value="{{ site_pages.page_public_base_url }}" placeholder="如 https://pages.example.com 或 http://公网IP:外部端口">
+          <p class="cron-hint">填写已配置的完整 <code>http://</code> 或 <code>https://</code> 根地址，可带外部端口。AI 生成与分享公开网页、公开图片时优先使用此地址；留空恢复内网地址。无需修改上面的内部网页端口。</p>
+        </div>
         {% if site_pages.page_base_url %}
         <p>
-          当前公开页地址：<code>{{ site_pages.page_base_url }}/webs/html/&lt;slug&gt;</code>
+          当前公开页地址：<code style="overflow-wrap:anywhere">{{ site_pages.page_base_url }}/webs/html/&lt;slug&gt;</code>
           {% if site_pages.page_site.running %}
-          <span class="tag tag-green">端口已监听</span>
+          <span class="tag tag-green">内部端口已监听</span>
           {% elif site_pages.page_site.error %}
           <span class="tag tag-red">{{ site_pages.page_site.error }}</span>
           {% else %}
-          <span class="tag tag-yellow">未监听</span>
+          <span class="tag tag-yellow">独立端口未监听</span>
           {% endif %}
         </p>
         {% endif %}
         <p class="cron-hint">
-          局域网用 IP 访问即可。飞书等外网要打开页面时，把该端口映射到公网，或把 PAGE_HOST 填成公网 IP。
+          保存地址用于生成链接；公网能否打开取决于实际端口映射或反向代理配置。
         </p>
         <button class="btn btn-primary" type="submit">保存网页站点</button>
+        </fieldset>
       </form>
     </div>
   </div>
@@ -982,7 +1006,7 @@
     var box = document.getElementById("feishu-ws-status");
     var sdk = document.querySelector('input[name="feishu_receive_mode"][value="sdk"]');
     if (!box || !sdk || !sdk.checked) return;
-    fetch("/settings/api/feishu-ws-status").then(function (r) { return r.json(); }).then(function (r) {
+    window.api.get("/settings/api/feishu-ws-status").then(function (r) {
       if (!r || !r.ok || !r.data) return;
       var d = r.data;
       var html = "";
@@ -996,7 +1020,7 @@
   setInterval(function () {
     var sdk = document.querySelector('input[name="feishu_receive_mode"][value="sdk"]');
     if (sdk && sdk.checked) {
-      fetch("/settings/api/feishu-ws-status").then(function (r) { return r.json(); }).then(function (r) {
+      window.api.get("/settings/api/feishu-ws-status").then(function (r) {
         var box = document.getElementById("feishu-ws-status");
         if (!box || !r || !r.ok || !r.data) return;
         var d = r.data;

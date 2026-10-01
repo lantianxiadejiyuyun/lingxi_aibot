@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme-pref="{{ ui_theme|default('') }}" data-theme="{{ ui_theme if ui_theme in ('light', 'dark') else 'light' }}">
+<html lang="zh-CN" data-script-root="{{ request.script_root }}" data-theme-pref="{{ ui_theme|default('') }}" data-theme="{{ ui_theme if ui_theme in ('light', 'dark') else 'light' }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -26,12 +26,11 @@
   </script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E%F0%9F%A4%96%3C/text%3E%3C/svg%3E">
   <title>{% block title %}灵犀{% endblock %} · 灵犀 个人 AI 助理</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='20260823c') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='20261001a') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css', v='1.11.3') }}">
-  <script src="{{ url_for('static', filename='js/app.js', v='20260823d') }}" defer></script>
   {% block head %}{% endblock %}
 </head>
-<body data-auth="{{ '1' if current_user.is_authenticated else '0' }}">
+<body class="page-{{ (request.endpoint or 'unknown').split('.')[0] }}" data-auth="{{ '1' if current_user.is_authenticated else '0' }}">
 {% if current_user.is_authenticated %}
 {% set ns = namespace(title_icon='') %}
 <div class="layout">
@@ -72,7 +71,7 @@
           <a class="btn btn-primary btn-sm topbar-ai" href="{{ url_for('chat.index') }}"><i class="bi bi-robot"></i> AI 助手</a>
           {% endif %}
           {% include '_theme_switch.html' %}
-          <span class="user-chip"><span class="user-avatar">{{ (current_user.username or '?')[0]|upper }}</span>{{ current_user.username }}</span>
+          <span class="user-chip"><span class="user-avatar">{{ (current_user.username or '?')[0]|upper }}</span><span class="user-name">{{ current_user.username }}</span></span>
           <a class="btn btn-ghost btn-sm" href="{{ url_for('auth.logout') }}">退出</a>
         </div>
       </div>
@@ -88,6 +87,7 @@
   {% block fullpage %}{% endblock %}
 {% endif %}
 <div id="toast-container"></div>
+<script src="{{ url_for('static', filename='js/app.js', v='20260930a') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

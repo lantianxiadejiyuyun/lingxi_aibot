@@ -1,7 +1,9 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 PIP_NO_CACHE_DIR=1 TZ=Asia/Shanghai FLASK_APP=wsgi:app
+ENV PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Shanghai FLASK_APP=wsgi:app FLASK_SKIP_DOTENV=1 PORT=8000 \
+    AIBOT_ENV_FILE=/app/data/.env PAGE_BIND=0.0.0.0
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt gunicorn

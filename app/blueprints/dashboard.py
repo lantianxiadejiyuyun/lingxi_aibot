@@ -1,4 +1,4 @@
-"""仪表盘：今日概览。直接查询模型，不依赖其他服务模块。"""
+"""仪表盘：今日概览。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,9 +6,8 @@ from datetime import datetime
 from flask import Blueprint, render_template
 from flask_login import current_user, login_required
 
-from app.extensions import db
-from app.models.event import Event
 from app.models.task import STATUS_OPEN, Task
+from app.services import calendar_service
 from app.utils.timeutil import day_bounds, expand_rrule, to_user, user_tz
 
 bp = Blueprint("dashboard", __name__)
@@ -21,12 +20,7 @@ def index():
     # “今天”按用户本地时区日期计算（UTC 日期在本地凌晨会差一天）
     start, end = day_bounds(datetime.now(tz).date(), tz)  # 今天 00:00 → 明天 00:00
 
-    events = Event.query.filter(
-        Event.user_id == current_user.id,
-        Event.deleted_at.is_(None),
-        ((Event.end_utc.is_(None)) & (Event.start_utc >= start) & (Event.start_utc < end))
-        | ((Event.end_utc.isnot(None)) & (Event.start_utc < end) & (Event.end_utc > start)),
-    ).order_by(Event.start_utc).all()
+    events = calendar_service.list_events(start, end, current_user.id)
 
     # 展开今日事件（含重复事件发生），发生时间转用户时区供模板直接展示
     today_events = []

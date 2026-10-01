@@ -20,6 +20,7 @@ def _page_json(page, include_content: bool = True) -> dict:
         "id": page.id,
         "title": page.title,
         "slug": page.slug,
+        "url": page_service.page_public_url(page),
         "description": page.description,
         "is_public": page.is_public,
         "enabled": page.enabled,
@@ -45,7 +46,7 @@ def _find_page(page_id):
     name="list_pages",
     description=(
         "列出所有已创建的网页。返回每个页面的 id、标题、slug（访问地址标识）、"
-        "简介、是否公开（is_public）、是否显示（enabled）与更新时间。"
+        "访问地址 url、简介、是否公开（is_public）、是否显示（enabled）与更新时间。"
         "适合回答“我有哪些网页”“网页 xxx 在哪个地址”类问题。"
     ),
     parameters={"type": "object", "properties": {}, "required": []},
@@ -163,7 +164,7 @@ def update_page(page_id: int, title: str | None = None, content: str | None = No
         raise ValueError(str(e)) from e
     return (f"已更新网页 [id={page.id}]：「{page.title}」（slug={page.slug}，"
             f"{'公开' if page.is_public else '仅登录可见'}，"
-            f"{'显示中' if page.enabled else '已隐藏'}）")
+            f"{'显示中' if page.enabled else '已隐藏'}）。访问地址：{page_service.page_public_url(page)}")
 
 
 @register_tool(
@@ -177,8 +178,9 @@ def update_page(page_id: int, title: str | None = None, content: str | None = No
 )
 def duplicate_page(page_id: int):
     page = _find_page(page_id)
-    new_page = page_service.duplicate_page(page)
-    return f"已复制网页 [id={page.id}] → 新网页 [id={new_page.id}]「{new_page.title}」（slug={new_page.slug}）"
+    new_page = page_service.duplicate_page(current_user.id, page)
+    return (f"已复制网页 [id={page.id}] → 新网页 [id={new_page.id}]「{new_page.title}」（slug={new_page.slug}）。"
+            f"访问地址：{page_service.page_public_url(new_page)}")
 
 
 @register_tool(

@@ -64,7 +64,7 @@ $env:FLASK_APP = "run:app"
 # 终端维护（项目根，先 $env:FLASK_APP = "run:app"）
 .\.venv\Scripts\python -m flask reset-admin-password --username admin
 .\.venv\Scripts\python -m flask reset-db --yes</code></pre>
-  <p class="ok">默认管理员：<code>admin / admin123</code> —— <strong>登录后请立即到「设置 → 账号」修改密码</strong>。忘记密码用上面的 <code>reset-admin-password</code>（省略 <code>--password</code> 会打印一次随机密码）。<code>reset-db</code> 会 DROP 全部数据表，不加 <code>--yes</code> 只列出表名。</p>
+  <p class="ok">默认管理员用户名为 <code>admin</code>；<code>ADMIN_PASSWORD</code> 留空时初始化命令会生成并打印一次随机初始密码，也可通过安装向导自行创建账号。<strong>登录后请立即到「设置 → 账号」修改密码</strong>。忘记密码用上面的 <code>reset-admin-password</code>（省略 <code>--password</code> 会打印一次随机密码）。<code>reset-db</code> 会 DROP 全部数据表，不加 <code>--yes</code> 只列出表名。</p>
 </div>
 
 <!-- 功能一览 -->
@@ -241,16 +241,21 @@ Authorization: Bearer 你的Token</code></pre>
     <li>不要用 uvicorn。MySQL 库要先建好，字符集 utf8mb4。</li>
     <li>公开网页推荐只填端口（设置 → 网页站点），<strong>不必配 HTTPS / 域名</strong>；云安全组要放行该端口。</li>
     <li>Docker 里连宿主机 MySQL 填 <code>MYSQL_HOST=host.docker.internal</code>，不要填 127.0.0.1。</li>
+    <li>Docker 首启将根 <code>.env</code> 导入持久化的 <code>data/.env</code>，后续运行配置请修改后者。直接 IP 访问需在 compose 给 app 添加 <code>ports: ["8000:8000", "8080:8080"]</code>，网页映射端口与设置一致；镜像默认监听 <code>PAGE_BIND=0.0.0.0</code>。完整步骤见 <a href="部署.md">部署教程</a>。</li>
     <li>安装打开 <code>/setup</code>，令牌在服务器 <code>data/setup_token.txt</code>。每次从第①步开始，保存连接后才到第②步；有数据表也不会自动跳过。可「开始初始化」继续，或先「重置数据库」（DROP 全部表，需令牌和二次确认，不改 <code>.env</code>）。用户名已存在则第③步报错，需换名或先重置。</li>
     <li>AI 对话走 SSE：若前面有 Nginx，必须 <code>proxy_buffering off</code>。</li>
   </ul>
   <pre><code># Docker 接已有 MySQL（无域名）
 cp .env.example .env          # 填 MYSQL_* / LLM_API_KEY / PAGE_PORT
+mkdir -p data
+sudo chown -R 1000:1000 data
+sudo chown 1000:1000 .env
+sudo chmod 600 .env
 docker compose up -d --build app
 docker compose exec app python -m flask init-db
 
 # Docker 自带 MySQL 8
-# .env 里 MYSQL_HOST=db
+# 根 .env 里 MYSQL_HOST=db，并设置 MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD
 docker compose --profile mysql up -d --build app db
 docker compose exec app python -m flask init-db</code></pre>
 </div>
@@ -273,7 +278,7 @@ docker compose exec app python -m flask init-db</code></pre>
 <div class="card" id="security">
   <h2>🔒 安全提示（公网部署必读）</h2>
   <ul>
-    <li>务必修改默认密码 <code>admin/admin123</code>；<code>SECRET_KEY</code> 改成随机长字符串</li>
+    <li>管理员使用自己的强密码；<code>SECRET_KEY</code> 改成随机长字符串</li>
     <li><code>SESSION_COOKIE_SECURE=1</code>（HTTPS 下）；登录接口已限流（10 次/分钟）+ CSRF 防护 + 密码哈希存储</li>
     <li>所有业务数据软删除可回滚；每日自动备份</li>
     <li>技能启用前人工审查代码；生成网页/图片公开前确认内容合规</li>
