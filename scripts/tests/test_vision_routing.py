@@ -102,8 +102,9 @@ class VisionRoutingTests(IsolatedAppTestCase):
         with patch.object(LLMClient, "_build_openai", return_value=sdk):
             self.assertEqual(vision_service.describe_image(image_bytes(), conversation=self.conv), "红色背景")
 
-    def test_text_only_model_uses_selected_fallback(self):
+    def test_explicit_text_only_model_uses_selected_fallback(self):
         set_setting("llm_model", "private-text-model")
+        set_setting("llm_vision_capability", "off")
         fallback_cfg = config("private-vision-model")
         sdk = fake_sdk("备用图片描述")
         with patch.object(vision_service, "_read_config", return_value=fallback_cfg) as fallback, \
@@ -116,8 +117,26 @@ class VisionRoutingTests(IsolatedAppTestCase):
         set_setting("llm_vision_capability", "off")
         self.assertIsNone(vision_service._native_config(self.conv))
 
+    def test_auto_mode_tries_deepseek_and_private_alias_without_backup(self):
+        for model in ("deepseek-flash", "deepseek-v4-pro", "provider/private-vision-alias"):
+            with self.subTest(model=model):
+                set_setting("llm_model", model)
+                set_setting("llm_vision_capability", "auto")
+                sdk = fake_sdk("当前会话模型看到了红色")
+                with patch.object(vision_service, "_read_config", return_value={}) as fallback, \
+                        patch.object(LLMClient, "_build_openai", return_value=sdk):
+                    self.assertTrue(vision_service.is_configured(self.conv))
+                    result = vision_service.describe_image(image_bytes(), conversation=self.conv)
+                fallback.assert_not_called()
+                self.assertEqual(result, "当前会话模型看到了红色")
+                request = sdk.chat.completions.create.call_args.kwargs
+                self.assertEqual(request["model"], model)
+                encoded = request["messages"][-1]["content"][0]["image_url"]["url"].split(",", 1)[1]
+                self.assertEqual(base64.b64decode(encoded), image_bytes())
+
     def test_conversation_vision_group_overrides_account_default(self):
         set_setting("llm_model", "text-only")
+        set_setting("llm_vision_capability", "off")
         set_setting("model_profiles:vision", {"active_id": "default-vlm", "items": [
             {"id": "default-vlm", "name": "默认视觉", "config": config("default-model")},
             {"id": "selected-vlm", "name": "本会话视觉", "config": config("selected-model")},
@@ -134,14 +153,49 @@ class VisionRoutingTests(IsolatedAppTestCase):
         self.assertEqual(vision_service._native_config(self.conv)["model"], "my-vision-alias")
 
     def test_native_failure_falls_back_with_visible_notice(self):
+        set_setting("llm_model", "deepseek-flash")
+        set_setting("llm_vision_capability", "auto")
+        # A manual model lock controls AI choice tools, not automatic recovery
+        # when the configured primary rejects a user's image.
+        state = {"auto_switch": False, "profile_id": "legacy", "vision_profile_id": "legacy"}
+        set_setting(f"chat_llm:{self.conv.id}", state)
         sdk = fake_sdk()
         sdk.chat.completions.create.side_effect = [LLMError("native unavailable"),
                                                   {"choices": [{"message": {"content": "备用描述"}}]}]
+        data = image_bytes("JPEG")
         with patch.object(vision_service, "_read_config", return_value=config("backup-vlm")), \
                 patch.object(LLMClient, "_build_openai", return_value=sdk):
-            answer = vision_service.describe_image(image_bytes(), conversation=self.conv)
+            answer = vision_service.describe_image(data, prompt="照片里是什么颜色？", conversation=self.conv)
         self.assertIn("当前对话模型识图失败", answer)
         self.assertIn("备用描述", answer)
+        self.assertEqual([call.kwargs["model"] for call in sdk.chat.completions.create.call_args_list],
+                         ["deepseek-flash", "backup-vlm"])
+        contents = [call.kwargs["messages"][-1]["content"]
+                    for call in sdk.chat.completions.create.call_args_list]
+        self.assertEqual(contents[0], contents[1])
+        self.assertEqual(contents[0][1]["text"], "照片里是什么颜色？")
+        self.assertEqual(base64.b64decode(contents[0][0]["image_url"]["url"].split(",", 1)[1]), data)
+        self.assertEqual(get_own_setting(f"chat_llm:{self.conv.id}"), state)
+
+    def test_auto_primary_failure_without_backup_reports_attempted_model(self):
+        set_setting("llm_model", "private-unknown-alias")
+        sdk = fake_sdk()
+        sdk.chat.completions.create.side_effect = LLMError("image input unsupported")
+        with patch.object(vision_service, "_read_config", return_value={}), \
+                patch.object(LLMClient, "_build_openai", return_value=sdk):
+            with self.assertRaisesRegex(vision_service.VisionError,
+                                        "已尝试将原图交给当前会话模型 private-unknown-alias.*识图失败.*尚未配置备用"):
+                vision_service.describe_image(image_bytes(), conversation=self.conv)
+        self.assertEqual(sdk.chat.completions.create.call_count, 1)
+        self.assertEqual(sdk.chat.completions.create.call_args.kwargs["model"], "private-unknown-alias")
+
+    def test_primary_and_backup_failure_do_not_return_a_success_notice(self):
+        sdk = fake_sdk()
+        sdk.chat.completions.create.side_effect = [LLMError("unsupported image"), LLMError("backup failed")]
+        with patch.object(vision_service, "_read_config", return_value=config("backup-vlm")), \
+                patch.object(LLMClient, "_build_openai", return_value=sdk):
+            with self.assertRaisesRegex(vision_service.VisionError, "当前对话模型和备用视觉模型识图均失败"):
+                vision_service.describe_image(image_bytes(), conversation=self.conv)
         self.assertEqual([call.kwargs["model"] for call in sdk.chat.completions.create.call_args_list],
                          ["gpt-4o", "backup-vlm"])
 
@@ -230,6 +284,51 @@ class IncomingImageTests(IsolatedAppTestCase):
         self.assertIn("背景是什么颜色", messages[0].content)
         self.assertIn("有红色背景", messages[1].content)
 
+    def test_web_upload_auto_model_receives_image_with_empty_legacy_backup(self):
+        for name, value in {"llm_model": "deepseek-flash", "llm_base_url": "https://example.com/v1",
+                            "llm_api_key": "isolated-primary-key", "llm_vision_capability": "auto"}.items():
+            set_setting(name, value, user_id=self.user.id)
+        set_setting(f"chat_llm:{self.conv.id}", {"auto_switch": False}, user_id=self.user.id)
+        sdk = fake_sdk("这是红色背景")
+        with patch.object(LLMClient, "_build_openai", return_value=sdk), \
+                patch("app.utils.urlsafety.check_provider_url", side_effect=lambda url: url), \
+                patch.object(vision_service, "_read_config", return_value={}) as fallback:
+            response = self.post_image(conversation_id=str(self.conv.id), prompt="这是什么颜色？")
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()["data"]
+        self.assertTrue(result["recognized"])
+        self.assertIn("这是红色背景", result["reply"])
+        fallback.assert_not_called()
+        request = sdk.chat.completions.create.call_args.kwargs
+        self.assertEqual(request["model"], "deepseek-flash")
+        content = request["messages"][-1]["content"]
+        self.assertEqual(base64.b64decode(content[0]["image_url"]["url"].split(",", 1)[1]), image_bytes())
+        self.assertEqual(content[1]["text"], "这是什么颜色？")
+        self.assertEqual(Message.query.filter_by(conversation_id=self.conv.id).count(), 2)
+
+    def test_web_primary_rejection_and_empty_backup_keeps_image_and_failure_history(self):
+        for name, value in {"llm_model": "unknown-model-alias", "llm_base_url": "https://example.com/v1",
+                            "llm_api_key": "isolated-primary-key", "llm_vision_capability": "auto"}.items():
+            set_setting(name, value, user_id=self.user.id)
+        sdk = fake_sdk()
+        sdk.chat.completions.create.side_effect = LLMError("image input unsupported")
+        with patch.object(LLMClient, "_build_openai", return_value=sdk), \
+                patch("app.utils.urlsafety.check_provider_url", side_effect=lambda url: url), \
+                patch.object(vision_service, "_read_config", return_value={}):
+            response = self.post_image(conversation_id=str(self.conv.id))
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()["data"]
+        self.assertFalse(result["recognized"])
+        self.assertIn("已尝试将原图交给当前会话模型 unknown-model-alias", result["reply"])
+        self.assertIn("识图失败", result["reply"])
+        self.assertIn("尚未配置备用视觉模型", result["reply"])
+        self.assertNotIn("识别结果", result["reply"])
+        self.assertEqual(sdk.chat.completions.create.call_count, 1)
+        self.assertEqual(ImageAsset.query.count(), 1)
+        messages = Message.query.filter_by(conversation_id=self.conv.id).order_by(Message.id).all()
+        self.assertEqual([message.role for message in messages], ["user", "assistant"])
+        self.assertEqual(messages[1].content, result["reply"])
+
     def test_missing_vision_configuration_still_saves_image_and_explains(self):
         with patch.object(vision_service, "is_configured", return_value=False):
             response = self.post_image()
@@ -307,6 +406,32 @@ class IncomingImageTests(IsolatedAppTestCase):
         self.assertNotEqual(mapping["oc_same_chat"], self.conv.id)
         self.assertEqual(ImageAsset.query.filter_by(user_id=self.user.id).count(), 1)
         self.assertEqual(ImageAsset.query.filter_by(user_id=other.id).count(), 1)
+        self.assertEqual(current_user_id(), 0)
+
+    def test_feishu_auto_model_receives_original_image_without_backup(self):
+        from app.services.feishu_inbound import _process_image
+
+        for name, value in {"llm_model": "deepseek-flash", "llm_base_url": "https://example.com/v1",
+                            "llm_api_key": "isolated-primary-key", "llm_vision_capability": "auto"}.items():
+            set_setting(name, value, user_id=self.user.id)
+        set_setting("feishu_chat_map", {"oc_vision": self.conv.id}, user_id=self.user.id)
+        set_setting(f"chat_llm:{self.conv.id}", {"auto_switch": False}, user_id=self.user.id)
+        sdk = fake_sdk("原图是红色")
+        data = image_bytes("JPEG")
+        with patch("app.services.channels.feishu_app.download_image_resource", return_value=data), \
+                patch("app.services.channels.feishu_app.send_text") as send, \
+                patch("app.utils.urlsafety.check_provider_url", side_effect=lambda url: url), \
+                patch.object(LLMClient, "_build_openai", return_value=sdk), \
+                patch.object(vision_service, "_read_config", return_value={}) as fallback:
+            _process_image(self.app, "oc_vision", "message-image", "image-key", self.user.feishu_open_id)
+        fallback.assert_not_called()
+        request = sdk.chat.completions.create.call_args.kwargs
+        self.assertEqual(request["model"], "deepseek-flash")
+        encoded = request["messages"][-1]["content"][0]["image_url"]["url"].split(",", 1)[1]
+        self.assertEqual(base64.b64decode(encoded), data)
+        self.assertIn("原图是红色", send.call_args.args[1])
+        self.assertEqual(ImageAsset.query.filter_by(user_id=self.user.id).count(), 1)
+        self.assertEqual(Message.query.filter_by(conversation_id=self.conv.id).count(), 2)
         self.assertEqual(current_user_id(), 0)
 
     def test_unbound_feishu_sender_does_not_download_or_save(self):

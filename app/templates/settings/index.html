@@ -213,7 +213,7 @@
           <div class="form-group">
             <label for="llm_models">可切换的候选模型</label>
             <textarea class="input" id="llm_models" name="llm_models" rows="4" spellcheck="false" placeholder="每行填写一个模型 ID">{{ ai.models_text }}</textarea>
-            <p class="cron-hint">候选模型共用当前接口和 Key，AI 自主切换和 <code>/model</code> 仅在此列表中选择。切到非默认模型时，容量恢复未指定、读图能力自动识别；容量或视觉能力不同的模型请保存为独立组，通过 <code>/profile</code> 切换。</p>
+            <p class="cron-hint">候选模型共用当前接口和 Key，AI 自主切换和 <code>/model</code> 仅在此列表中选择。切到非默认模型时，容量恢复未指定、读图恢复先尝试会话模型；容量或读图设置不同的模型请保存为独立组，通过 <code>/profile</code> 切换。</p>
           </div>
           <div class="form-group">
             <label for="llm_reasoning_effort">新会话默认思考等级</label>
@@ -246,11 +246,11 @@
           <div class="form-group">
             <label for="llm_vision_capability">模型读图能力</label>
             <select class="select" id="llm_vision_capability" name="llm_vision_capability">
-              {% for value, label in [('auto', '自动识别'), ('on', '支持原生读图'), ('off', '不支持读图')] %}
+              {% for value, label in [('auto', '自动：先尝试会话模型'), ('on', '启用原生读图'), ('off', '跳过会话模型，使用备用')] %}
               <option value="{{ value }}" {% if (ai.vision_capability|default('auto')) == value %}selected{% endif %}>{{ label }}</option>
               {% endfor %}
             </select>
-            <p class="cron-hint">支持时优先让当前聊天模型直接读图；不支持时使用「视觉」中选中的配置组。未知模型可手动指定。</p>
+            <p class="cron-hint">默认先把原图发给当前会话模型（包含未知模型及中转别名），请求失败或未返回识别结果时再用备用视觉组。只有明确选择「跳过」才直接使用备用；关闭 AI 自主切换不影响此回退流程。</p>
           </div>
         </div>
         <div class="form-group">
@@ -909,7 +909,7 @@
   <div class="tab-panel" data-panel="vision">
     <div class="card">
       <div class="card-head"><h2>视觉模型（多模态识图）</h2></div>
-      <p class="muted" style="margin-top:0">聊天模型支持读图时优先使用它的原生能力；不支持时，由这里选中的备用视觉组识别并回答。</p>
+      <p class="muted" style="margin-top:0">先尝试当前会话模型直接读取原图；识图失败或明确跳过时，再由这里选中的备用视觉组识别并回答。主模型读图成功时无需配置备用组。</p>
       {{ profile_switcher('vision', '视觉配置') }}
       <form method="post" action="{{ url_for('settings_page.profile_save', kind='vision') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

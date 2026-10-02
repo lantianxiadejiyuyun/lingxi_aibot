@@ -214,6 +214,10 @@ def build_system_prompt(user, conversation=None) -> str:
         "保存为笔记（tags 加“调研”），笔记会自动进入语义检索知识库。"
         "网页生成、修改、复制或查询后，原样使用工具返回的完整访问地址（url）；"
         "不要自行用局域网 IP、聊天入口或内部端口拼接链接。私有网页须注明仅登录可见。\n"
+        "   读图使用 read_image：list_images / get_image 只返回元数据，不能据此声称看过画面。"
+        "读图先尝试当前会话模型，失败后由程序自动调用已配置的备用视觉模型；"
+        "此回退不会切换会话配置，不受 AI 自主切换开关限制。只依据实际识别结果回答，"
+        "失败时如实说明，不得仅根据模型名或配置组 ID 推断未执行过的管线或报错原因。\n"
         "6. " + VERBOSITY_HINTS[p["verbosity"]]
     )
     if p.get("ack_enabled", DEFAULT_ACK_ENABLED):

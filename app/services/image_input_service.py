@@ -86,7 +86,7 @@ def receive_image(user, data: bytes, conversation=None, prompt="", *, on_identif
                     recognized = True
                 else:
                     reply = (f"🖼️ 已收到图片并保存到图片库（ID #{asset.id}）。"
-                             "当前模型未启用视觉能力，也未配置备用视觉模型，暂无法识图。")
+                             "当前会话模型已跳过读图或接口未配置完整，且未配置备用视觉模型，暂无法识图。")
             except Exception as e:  # noqa: BLE001 —— 识别失败仍保留用户图片和失败记录
                 logger.warning("视觉识别失败 conversation=%s: %s", conversation.id, type(e).__name__)
                 reply = f"🖼️ 已保存图片（ID #{asset.id}），但识别失败：{str(e)[:180]}"

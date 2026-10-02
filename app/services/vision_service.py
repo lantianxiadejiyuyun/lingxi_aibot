@@ -25,10 +25,10 @@ def _complete(cfg: dict) -> bool:
 
 
 def _native_config(conversation=None) -> dict | None:
-    from app.services.vision_capabilities import supports_native_vision
+    from app.services.vision_capabilities import should_try_native_vision
 
     cfg = LLMClient(conversation=conversation)._read_config()
-    return cfg if _complete(cfg) and supports_native_vision(cfg) else None
+    return cfg if _complete(cfg) and should_try_native_vision(cfg) else None
 
 
 def is_configured(conversation=None) -> bool:
@@ -111,8 +111,11 @@ def describe_image(image_bytes: bytes, prompt: str = "请用简洁的中文描�
     cfg = _read_config(conversation)
     if not _complete(cfg):
         if native_error:
-            raise VisionError("当前对话模型识图失败，且尚未配置备用视觉模型；请重试或切换模型") from native_error
-        raise VisionError("当前对话模型未启用视觉能力，请在「设置 → 视觉」选择并配置一组视觉模型")
+            raise VisionError(
+                f"已尝试将原图交给当前会话模型 {native_cfg['model']}，识图失败；"
+                "尚未配置备用视觉模型。请检查当前模型 ID、接口及读图支持，或配置备用视觉组。"
+            ) from native_error
+        raise VisionError("当前会话模型已跳过读图或接口未配置完整，且未配置备用视觉模型")
     try:
         text = _describe(cfg, content)
     except (LLMError, VisionError, ContextWindowError) as e:

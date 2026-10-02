@@ -40,7 +40,7 @@
         <div class="chat-profile-field"><label for="chat-image-select">图片生成</label><select class="select" id="chat-image-select" disabled><option>加载中…</option></select></div>
         <div class="chat-profile-field"><label for="chat-vision-select">备用识图</label><select class="select" id="chat-vision-select" disabled><option>加载中…</option></select></div>
       </div>
-      <p class="chat-control-note">优先使用聊天模型的原生读图能力；不支持时使用备用识图配置。</p>
+      <p class="chat-control-note">先用当前会话模型读取原图；失败后使用备用识图配置，不受 AI 自主切换开关影响。</p>
       <label for="chat-model-select">当前组内模型</label>
       <select class="select" id="chat-model-select" disabled><option>加载中…</option></select>
       <label for="chat-effort-select">思考等级</label>

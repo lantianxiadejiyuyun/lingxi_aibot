@@ -213,24 +213,16 @@ class ModelProfileTests(IsolatedAppTestCase):
         self.assertEqual(fallback["context_window_tokens"], 2000000)
         self.assertEqual(fallback["vision_capability"], "off")
 
-    def test_native_vision_auto_recognizes_verified_families_and_respects_explicit_modes(self):
-        from app.services.vision_capabilities import supports_native_vision
+    def test_native_vision_attempts_auto_and_on_without_model_name_allowlist(self):
+        from app.services.vision_capabilities import should_try_native_vision
 
-        recognized = (
-            "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-2025-08-07",
-            "gpt-5.1", "gpt-5.1-2025-11-13", "openai/gpt-5.1",
-            "qwen-vl-max", "qwen-vl-plus-latest", "qwen-vl-max-2025-01-25",
-            "qwen3-vl-plus", "qwen3-vl-flash-latest",
-            "Qwen/Qwen2.5-VL-72B-Instruct", "Qwen/Qwen3-VL-235B-A22B-Thinking",
-        )
-        for model in recognized:
+        for model in ("gpt-5.1", "Qwen/Qwen3-VL-235B-A22B-Thinking", "deepseek-flash",
+                      "deepseek-v4-pro", "unknown-private-model", "provider/private-vision-alias"):
             with self.subTest(model=model):
-                self.assertTrue(supports_native_vision({"model": model, "vision_capability": "auto"}))
-                self.assertFalse(supports_native_vision({"model": model, "vision_capability": "off"}))
-        for model in ("", "unknown-private-model", "gpt-5-unverified-vision", "qwen3-custom-vl-alias"):
-            with self.subTest(model=model):
-                self.assertFalse(supports_native_vision({"model": model}))
-                self.assertTrue(supports_native_vision({"model": model, "vision_capability": "on"}))
+                self.assertTrue(should_try_native_vision({"model": model}))
+                self.assertTrue(should_try_native_vision({"model": model, "vision_capability": "auto"}))
+                self.assertTrue(should_try_native_vision({"model": model, "vision_capability": "on"}))
+                self.assertFalse(should_try_native_vision({"model": model, "vision_capability": "off"}))
 
     def test_manual_lock_blocks_ai_and_two_switch_limit_is_shared_between_kinds(self):
         first = self.save()
