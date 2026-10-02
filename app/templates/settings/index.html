@@ -1,6 +1,41 @@
 {% extends 'base.html' %}
 {% block title %}设置{% endblock %}
 {% block page_title %}设置{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/profiles.css', v='20261002a') }}">
+{% endblock %}
+{% macro profile_switcher(kind, label) %}
+{% set group = profiles[kind] %}
+<div class="profile-switcher">
+  <form method="post" action="{{ url_for('settings_page.profile_activate', kind=kind) }}" class="profile-switch-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="{{ kind }}-profile-select">已存{{ label }}</label>
+    <div class="profile-switch-row">
+      <select class="select" id="{{ kind }}-profile-select" name="profile_id">
+        {% for item in group['items'] %}
+        <option value="{{ item.id }}" {% if item.id == group.active_id %}selected{% endif %}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn-ghost" type="submit">切换</button>
+    </div>
+  </form>
+  {% if group.active_id != 'legacy' %}
+  <form method="post" action="{{ url_for('settings_page.profile_delete', kind=kind) }}" class="profile-delete-form" data-confirm="确定删除当前配置组「{{ group.current.name }}」？">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="profile_id" value="{{ group.active_id }}">
+    <button class="btn btn-ghost" type="submit">删除当前组</button>
+  </form>
+  {% endif %}
+</div>
+{% endmacro %}
+{% macro profile_name(kind, placeholder) %}
+<input type="hidden" name="profile_id" value="{{ profiles[kind].active_id }}">
+<div class="form-group">
+  <label for="{{ kind }}-profile-name">配置组名称</label>
+  <input class="input" id="{{ kind }}-profile-name" name="profile_name" value="{{ profiles[kind].current.name }}" maxlength="60" placeholder="{{ placeholder }}" required>
+  <p class="cron-hint">修改后保存当前组；填写新名称并点击「保存为新组」，即可保留多套配置。</p>
+</div>
+{% endmacro %}
 {% block content %}
 <div class="settings-page" data-tabs-scope>
   <div class="tabs-wrap">
@@ -121,8 +156,10 @@
         <strong>OpenAI 兼容</strong>（DeepSeek / 通义 / Kimi / 智谱 / 豆包 / OpenAI / Grok 等）和
         <strong>Anthropic</strong>（Claude 官方 Messages API）。点下方厂商即可填入官方 Base URL。
       </p>
-      <form method="post" action="{{ url_for('settings_page.ai') }}" id="llm-config-form">
+      {{ profile_switcher('chat', '模型配置') }}
+      <form method="post" action="{{ url_for('settings_page.profile_save', kind='chat') }}" id="llm-config-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ profile_name('chat', '例如：日常助理 / Claude 长文 / 工作模型') }}
         <div class="form-group">
           <label>接口协议</label>
           <div>
@@ -168,6 +205,7 @@
           </div>
           <div class="form-group">
             <label for="llm_model">默认模型</label>
+            <select class="select" id="llm-model-choice" aria-label="从候选中选择默认模型"></select>
             <input class="input" type="text" id="llm_model" name="llm_model" value="{{ ai.model }}" placeholder="deepseek-chat">
           </div>
         </div>
@@ -175,7 +213,7 @@
           <div class="form-group">
             <label for="llm_models">可切换的候选模型</label>
             <textarea class="input" id="llm_models" name="llm_models" rows="4" spellcheck="false" placeholder="每行填写一个模型 ID">{{ ai.models_text }}</textarea>
-            <p class="cron-hint">填写当前接口地址和 Key 可用的模型，每行一个；默认模型会自动加入。AI 自主切换和 <code>/model</code> 仅在此列表中选择。</p>
+            <p class="cron-hint">候选模型共用当前接口和 Key，AI 自主切换和 <code>/model</code> 仅在此列表中选择。切到非默认模型时，容量恢复未指定、读图能力自动识别；容量或视觉能力不同的模型请保存为独立组，通过 <code>/profile</code> 切换。</p>
           </div>
           <div class="form-group">
             <label for="llm_reasoning_effort">新会话默认思考等级</label>
@@ -185,6 +223,34 @@
               {% endfor %}
             </select>
             <p class="cron-hint">可用等级由模型与接口决定，不支持的等级会在保存时提示；未确认支持的接口仅使用默认模式。部分千问、旧版 Claude 模型的低/中/高对应 1,024/4,096/8,192 tokens 思考预算。会话内可用 <code>/think</code> 单独调整。</p>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="llm_context_window_tokens">模型上下文容量</label>
+            {% set context_tokens = ai.context_window_tokens|default(0)|int %}
+            {% set context_presets = [0, 32000, 64000, 128000, 256000, 512000, 1000000, 2000000] %}
+            <select class="select" id="llm_context_window_tokens" name="llm_context_window_tokens">
+              {% for value, label in [(0, '沿用原设置（未指定容量）'), (32000, '32K tokens'), (64000, '64K tokens'), (128000, '128K tokens'), (256000, '256K tokens'), (512000, '512K tokens'), (1000000, '100 万 tokens（1M）'), (2000000, '200 万 tokens（2M）')] %}
+              <option value="{{ value }}" {% if context_tokens == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+              <option value="custom" {% if context_tokens not in context_presets %}selected{% endif %}>自定义容量</option>
+            </select>
+            <div id="llm-context-custom-group" {% if context_tokens in context_presets %}hidden{% endif %}>
+              <label for="llm_context_window_custom">容量（tokens）</label>
+              <input class="input" type="number" id="llm_context_window_custom" name="llm_context_window_custom" min="32000" max="10000000" step="1" value="{{ context_tokens if context_tokens not in context_presets else '' }}" {% if context_tokens in context_presets %}disabled{% else %}required{% endif %}>
+              <p class="cron-hint">支持 32,000–10,000,000 tokens。</p>
+            </div>
+            <p class="cron-hint">填写模型及接口实际支持的容量，系统据此管理上下文与自动压缩。同一接口中容量不同的模型，请分别保存为配置组。</p>
+          </div>
+          <div class="form-group">
+            <label for="llm_vision_capability">模型读图能力</label>
+            <select class="select" id="llm_vision_capability" name="llm_vision_capability">
+              {% for value, label in [('auto', '自动识别'), ('on', '支持原生读图'), ('off', '不支持读图')] %}
+              <option value="{{ value }}" {% if (ai.vision_capability|default('auto')) == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            <p class="cron-hint">支持时优先让当前聊天模型直接读图；不支持时使用「视觉」中选中的配置组。未知模型可手动指定。</p>
           </div>
         </div>
         <div class="form-group">
@@ -201,7 +267,8 @@
           {% endif %}
         </div>
         <div class="form-inline">
-          <button class="btn btn-primary" type="submit">保存 AI 配置</button>
+          <button class="btn btn-primary" type="submit">保存当前组</button>
+          <button class="btn btn-ghost" type="submit" name="save_as_new" value="1">保存为新组</button>
           <button class="btn btn-ghost" type="button" data-test-llm>测试连接</button>
           <span class="muted">保存后立即生效，无需重启。</span>
         </div>
@@ -209,12 +276,14 @@
     </div>
 
     <div class="card" id="persona" style="margin-top:16px">
-      <div class="card-head"><h2>对话人设</h2></div>
+      <div class="card-head"><h2>对话人设与提示词</h2></div>
       <p class="muted" style="margin-top:0">
         决定 AI 怎么自称、用什么语气说话。工具调用规则不会被改掉。保存后下一轮对话生效。
       </p>
-      <form method="post" action="{{ url_for('settings_page.persona') }}">
+      {{ profile_switcher('prompt', '提示词') }}
+      <form method="post" action="{{ url_for('settings_page.profile_save', kind='prompt') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ profile_name('prompt', '例如：日常助理 / 写作伙伴 / 编程助手') }}
         <div class="form-row">
           <div class="form-group">
             <label for="ai_persona_name">名字</label>
@@ -265,13 +334,14 @@
           <p class="cron-hint">消息一到立刻发出这一句，正式回答随后跟上。可用 {message} 用户原话（过长截断）、{name} 助手名、{address} 对你的称呼。</p>
         </div>
         <div class="form-group">
-          <label for="ai_persona_extra">补充说明</label>
+          <label for="ai_persona_extra">补充提示词</label>
           <textarea class="textarea" id="ai_persona_extra" name="ai_persona_extra" rows="5"
-                    maxlength="2000" placeholder="例如：用口语、少用表情、先给结论；提到工作默认按北京时间。选择「自定义」时必填。">{{ persona.extra }}</textarea>
-          <p class="cron-hint">最多 2000 字。会写进系统提示词，但不能覆盖查日程/记账等工具规则。</p>
+                    maxlength="20000" placeholder="例如：用口语、少用表情、先给结论；提到工作默认按北京时间。选择「自定义」时必填。">{{ persona.extra }}</textarea>
+          <p class="cron-hint">最多 20000 字。会写进系统提示词，但不能覆盖查日程/记账等工具规则。</p>
         </div>
         <div class="form-inline">
-          <button class="btn btn-primary" type="submit">保存人设</button>
+          <button class="btn btn-primary" type="submit">保存当前组</button>
+          <button class="btn btn-ghost" type="submit" name="save_as_new" value="1">保存为新组</button>
           <button class="btn btn-ghost" type="submit" name="reset_persona" value="1"
                   onclick="return confirm('恢复默认人设（灵犀 / 默认助理）？')">恢复默认</button>
         </div>
@@ -790,9 +860,12 @@
   <!-- ===== 图片生成 ===== -->
   <div class="tab-panel" data-panel="image">
     <div class="card">
-      <div class="card-head"><h2>图片生成（OpenAI 兼容 images 接口）</h2></div>
-      <form method="post" action="{{ url_for('settings_page.image') }}">
+      <div class="card-head"><h2>图片生成</h2></div>
+      <p class="muted" style="margin-top:0">保存多家图片服务，在这里或聊天中快速切换；与聊天模型、读图模型分别选择。</p>
+      {{ profile_switcher('image', '图片生成配置') }}
+      <form method="post" action="{{ url_for('settings_page.profile_save', kind='image') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ profile_name('image', '例如：日常配图 / 精细绘图') }}
         <div class="form-row">
           <div class="form-group">
             <label for="image_base_url">IMAGE_BASE_URL（接口地址）</label>
@@ -823,7 +896,8 @@
           </div>
         </div>
         <div class="form-inline">
-          <button class="btn btn-primary" type="submit">保存图片配置</button>
+          <button class="btn btn-primary" type="submit">保存当前组</button>
+          <button class="btn btn-ghost" type="submit" name="save_as_new" value="1">保存为新组</button>
           <button class="btn btn-ghost" type="button" data-test-image>测试生成</button>
           <span class="muted">保存后立即生效；AI 助手可直接说「帮我画一张 …」。</span>
         </div>
@@ -835,9 +909,18 @@
   <div class="tab-panel" data-panel="vision">
     <div class="card">
       <div class="card-head"><h2>视觉模型（多模态识图）</h2></div>
-      <form method="post" action="{{ url_for('settings_page.vision') }}">
+      <p class="muted" style="margin-top:0">聊天模型支持读图时优先使用它的原生能力；不支持时，由这里选中的备用视觉组识别并回答。</p>
+      {{ profile_switcher('vision', '视觉配置') }}
+      <form method="post" action="{{ url_for('settings_page.profile_save', kind='vision') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <p class="muted" style="margin-top:0">独立的多模态模型，用于识别图片内容（如飞书里给机器人发图后自动描述）。与「沟通模型」「图片生成模型」互不影响。</p>
+        {{ profile_name('vision', '例如：通用识图 / 文档识别') }}
+        <div class="form-group">
+          <label for="vision_protocol">接口协议</label>
+          <select class="select" id="vision_protocol" name="vision_protocol">
+            <option value="openai" {% if vision.protocol|default('openai') != 'anthropic' %}selected{% endif %}>OpenAI 兼容</option>
+            <option value="anthropic" {% if vision.protocol|default('openai') == 'anthropic' %}selected{% endif %}>Anthropic（Claude）</option>
+          </select>
+        </div>
         <div class="form-row">
           <div class="form-group">
             <label for="vision_base_url">VISION_BASE_URL（接口地址）</label>
@@ -856,12 +939,13 @@
             <label class="chip"><input type="checkbox" name="clear_vision_key" value="1"> 清除 Key</label>
           </div>
           {% else %}
-          <input class="input" type="password" id="vision_api_key" name="vision_api_key" value="" placeholder="sk-…（未配置，收到图片仅保存不识别）" autocomplete="off">
+          <input class="input" type="password" id="vision_api_key" name="vision_api_key" value="" placeholder="sk-…（配置独立识图服务时填写）" autocomplete="off">
           {% endif %}
         </div>
         <div class="form-inline">
-          <button class="btn btn-primary" type="submit">保存视觉模型配置</button>
-          <span class="muted">保存后立即生效；飞书收图将自动调用该模型识别。</span>
+          <button class="btn btn-primary" type="submit">保存当前组</button>
+          <button class="btn btn-ghost" type="submit" name="save_as_new" value="1">保存为新组</button>
+          <span class="muted">保存后立即生效；支持网页与飞书的图片识别。</span>
         </div>
       </form>
     </div>
@@ -1009,6 +1093,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/profiles.js', v='20261002a') }}"></script>
 <script>
 (function () {
   "use strict";

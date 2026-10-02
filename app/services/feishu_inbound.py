@@ -10,12 +10,13 @@ from pathlib import Path
 
 from flask import current_app
 
-from app.services.settings_service import get_setting
+from app.services.settings_service import get_own_setting
 
 logger = logging.getLogger(__name__)
 
 _seen: deque = deque(maxlen=200)
 _seen_lock = threading.Lock()
+_conversation_map_lock = threading.Lock()
 
 
 def parse_message(payload: dict) -> dict | None:
@@ -128,13 +129,30 @@ def _unbound_reply(chat_id: str, open_id: str) -> None:
     )
 
 
-def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
+def _get_or_create_conversation(user, chat_id: str):
+    """Text and images use the same user-owned chat mapping."""
     from app.extensions import db
     from app.models.conversation import Conversation
+    from app.services.settings_service import set_setting
 
+    with _conversation_map_lock:
+        mapping = get_own_setting("feishu_chat_map", {}, user_id=user.id)
+        mapping = dict(mapping) if isinstance(mapping, dict) else {}
+        conv_id = mapping.get(chat_id)
+        conv = db.session.get(Conversation, conv_id) if isinstance(conv_id, int) else None
+        if conv is not None and conv.user_id == user.id:
+            return conv
+        conv = Conversation(title=f"飞书-{chat_id[:12]}", user_id=user.id)
+        db.session.add(conv)
+        db.session.commit()
+        mapping[chat_id] = conv.id
+        set_setting("feishu_chat_map", mapping, user_id=user.id)
+        return conv
+
+
+def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
     with app.app_context():
         from app.ai.executor import run_chat
-        from app.ai.llm import LLMClient
         from app.services.channels.feishu_app import send_text
 
         try:
@@ -148,20 +166,7 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
                     return
                 login_user(user)
 
-                mapping = get_setting("feishu_chat_map", {}) or {}
-                conv = None
-                if mapping.get(chat_id):
-                    conv = db.session.get(Conversation, mapping[chat_id])
-                    if conv is not None and conv.user_id != user.id:
-                        conv = None
-                if conv is None:
-                    conv = Conversation(title=f"飞书-{chat_id[:12]}", user_id=user.id)
-                    db.session.add(conv)
-                    db.session.commit()
-                    mapping[chat_id] = conv.id
-                    from app.services.settings_service import set_setting
-
-                    set_setting("feishu_chat_map", mapping)
+                conv = _get_or_create_conversation(user, chat_id)
 
                 image_ids: list[int] = []
                 final_text, err, ack_text = "", "", ""
@@ -208,10 +213,9 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
 
 
 def _process_image(app, chat_id: str, message_id: str, image_key: str, open_id: str = "") -> None:
-    from app.extensions import db
-    from app.models.image import ImageAsset
-    from app.services import image_service, vision_service
     from app.services.channels.feishu_app import download_image_resource, send_text
+    from app.services.image_input_service import receive_image
+    from app.utils.scoping import user_scope
 
     with app.app_context():
         try:
@@ -225,24 +229,13 @@ def _process_image(app, chat_id: str, message_id: str, image_key: str, open_id: 
                     return
                 login_user(user)
 
-            data = download_image_resource(message_id, image_key)
-            fname = image_service.save_bytes(data)
-            asset = ImageAsset(user_id=user.id, prompt="（飞书收到的图片）", file_path=fname)
-            db.session.add(asset)
-            db.session.commit()
-
-            if vision_service.is_configured():
-                send_text(chat_id, "🔍 正在识别图片…")
-                try:
-                    desc = vision_service.describe_image(data)
-                    reply = f"🖼️ 已收到图片并保存（ID #{asset.id}）。识别结果：\n{desc}"
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("视觉识别失败 chat=%s: %s", chat_id, e)
-                    reply = (f"🖼️ 已保存图片（ID #{asset.id}），但识别失败：{str(e)[:150]}")
-            else:
-                reply = (f"🖼️ 已收到图片并保存到图片库（ID #{asset.id}）。"
-                         f"尚未配置视觉模型，暂无法识图。")
-            send_text(chat_id, reply)
+                # Keep the sender's scope for credentials, active model and history.
+                with user_scope(user.id):
+                    conv = _get_or_create_conversation(user, chat_id)
+                    data = download_image_resource(message_id, image_key)
+                    result = receive_image(user, data, conversation=conv,
+                                           on_identify=lambda: send_text(chat_id, "🔍 正在识别图片…"))
+                    send_text(chat_id, result["reply"])
         except Exception as e:  # noqa: BLE001
             logger.exception("飞书图片处理失败 chat=%s", chat_id)
             try:

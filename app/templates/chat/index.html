@@ -3,6 +3,7 @@
 {% block page_title %}AI 助手{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/chat-controls.css', v='20261001a') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/profiles.css', v='20261002a') }}">
 {% endblock %}
 {% block content %}
 <div class="chat-layout">
@@ -33,7 +34,14 @@
     <section class="chat-control-panel" id="chat-control-panel" aria-label="当前会话设置" hidden>
       <div class="chat-control-panel-head"><strong>当前会话</strong><button type="button" class="chat-control-close" id="chat-control-close" aria-label="收起会话设置">×</button></div>
       <p class="chat-control-note" id="chat-control-note" role="status">选择或新建一个会话后，可调整模型和上下文。</p>
-      <label for="chat-model-select">模型</label>
+      <div class="chat-profile-grid">
+        <div class="chat-profile-field"><label for="chat-profile-select">模型配置组</label><select class="select" id="chat-profile-select" disabled><option>加载中…</option></select></div>
+        <div class="chat-profile-field"><label for="chat-prompt-select">提示词</label><select class="select" id="chat-prompt-select" disabled><option>加载中…</option></select></div>
+        <div class="chat-profile-field"><label for="chat-image-select">图片生成</label><select class="select" id="chat-image-select" disabled><option>加载中…</option></select></div>
+        <div class="chat-profile-field"><label for="chat-vision-select">备用识图</label><select class="select" id="chat-vision-select" disabled><option>加载中…</option></select></div>
+      </div>
+      <p class="chat-control-note">优先使用聊天模型的原生读图能力；不支持时使用备用识图配置。</p>
+      <label for="chat-model-select">当前组内模型</label>
       <select class="select" id="chat-model-select" disabled><option>加载中…</option></select>
       <label for="chat-effort-select">思考等级</label>
       <select class="select" id="chat-effort-select" disabled><option>默认</option></select>
@@ -45,7 +53,7 @@
         <button type="button" class="btn btn-ghost" id="chat-status" disabled>查看状态</button>
       </div>
       <p class="chat-control-note">压缩会保留摘要和近期消息。飞书等聊天入口也可发送 <code>/</code> 查看命令。</p>
-      <a class="chat-settings-link" href="{{ url_for('settings_page.index', tab='ai') }}">管理候选模型与默认配置 <i class="bi bi-arrow-up-right"></i></a>
+      <a class="chat-settings-link" href="{{ url_for('settings_page.index', tab='ai') }}">管理模型、上下文容量与提示词 <i class="bi bi-arrow-up-right"></i></a>
     </section>
     <div class="msg-list" id="msg-list">
       <p class="empty">开始和 {{ persona_name }} 对话吧，例如：“帮我看看今天有什么安排”
@@ -54,8 +62,11 @@
     </div>
     <div class="chat-composer">
       <div class="chat-command-menu" id="chat-command-menu" role="listbox" aria-label="聊天命令" hidden></div>
+      <div class="chat-image-status" id="chat-image-status" role="status" hidden></div>
       <div class="chat-input-row">
       <input class="input" id="chat-input" type="text" placeholder="输入消息，或 / 查看命令" autocomplete="off" aria-controls="chat-command-menu" aria-autocomplete="list" aria-expanded="false">
+      <input type="file" id="chat-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      <button class="btn btn-ghost" id="btn-upload-image" type="button" title="上传图片（PNG、JPEG、WebP、GIF，最大 8 MiB）" aria-label="上传图片"><i class="bi bi-image"></i><span class="chat-upload-label"> 上传图片</span></button>
       <button class="btn btn-ghost" id="btn-mic" type="button" title="语音输入（浏览器）"><i class="bi bi-mic"></i></button>
       <button class="btn btn-primary" id="btn-send">发送</button>
       </div>
@@ -88,9 +99,18 @@
   var inputEl = document.getElementById("chat-input");
   var btnSend = document.getElementById("btn-send");
   var btnNew = document.getElementById("btn-new-chat");
+  var uploadButton = document.getElementById("btn-upload-image");
+  var imageFile = document.getElementById("chat-image-file");
+  var imageStatus = document.getElementById("chat-image-status");
   var controlsPanel = document.getElementById("chat-control-panel");
   var controlsToggle = document.getElementById("chat-control-toggle");
   var modelSelect = document.getElementById("chat-model-select");
+  var profileFields = [
+    { element: document.getElementById("chat-profile-select"), command: "profile", list: "profiles", selected: "profile_id" },
+    { element: document.getElementById("chat-prompt-select"), command: "prompt", list: "prompt_profiles", selected: "prompt_profile_id" },
+    { element: document.getElementById("chat-image-select"), command: "image", list: "image_profiles", selected: "image_profile_id" },
+    { element: document.getElementById("chat-vision-select"), command: "vision", list: "vision_profiles", selected: "vision_profile_id" }
+  ];
   var effortSelect = document.getElementById("chat-effort-select");
   var autoSwitch = document.getElementById("chat-auto-switch");
   var compactButton = document.getElementById("chat-compact");
@@ -116,7 +136,9 @@
 
   function updateControlAvailability() {
     var disabled = sending || !controlState;
+    uploadButton.disabled = sending;
     modelSelect.disabled = disabled;
+    profileFields.forEach(function (field) { field.element.disabled = disabled; });
     effortSelect.disabled = disabled;
     autoSwitch.disabled = disabled;
     compactButton.disabled = disabled || (controlState.context && controlState.context.can_compact === false);
@@ -159,6 +181,14 @@
       var models = (controlState.models || []).map(function (item) { return { value: item.id, label: item.label || item.id }; });
       if (!models.some(function (item) { return item.value === model; })) models.unshift({ value: model, label: model });
       fillSelect(modelSelect, models, model);
+      profileFields.forEach(function (field) {
+        var selected = controlState[field.selected] || "legacy";
+        var rows = (controlState[field.list] || []).map(function (item) {
+          return { value: item.id, label: item.name || item.id };
+        });
+        if (!rows.length) rows.push({ value: "legacy", label: "当前配置" });
+        fillSelect(field.element, rows, selected);
+      });
       fillSelect(effortSelect, (controlState.reasoning_levels || ["default"]).map(function (level) {
         return { value: level, label: effortLabels[level] || level };
       }), effort);
@@ -168,6 +198,8 @@
       autoSwitch.checked = !!controlState.auto_switch;
       var ctx = controlState.context || {};
       var details = [];
+      if (ctx.legacy_context_policy) details.push("模型容量未指定");
+      else if (ctx.context_window_tokens > 0) details.push("模型容量 " + Number(ctx.context_window_tokens).toLocaleString() + " tokens");
       if (typeof ctx.active_messages === "number") details.push("当前上下文 " + ctx.active_messages + " 条消息");
       if (typeof ctx.estimated_tokens === "number") details.push("约 " + ctx.estimated_tokens.toLocaleString() + " tokens");
       if (ctx.summary_present || ctx.summary_characters > 0) details.push("已保留历史摘要");
@@ -184,6 +216,9 @@
   controlsToggle.addEventListener("click", function () { setControlsOpen(controlsPanel.hidden); });
   document.getElementById("chat-control-close").addEventListener("click", function () { setControlsOpen(false); });
   modelSelect.addEventListener("change", function () { sendMessage("/model " + modelSelect.value); });
+  profileFields.forEach(function (field) {
+    field.element.addEventListener("change", function () { sendMessage("/" + field.command + " " + field.element.value); });
+  });
   effortSelect.addEventListener("change", function () { sendMessage("/think " + effortSelect.value); });
   autoSwitch.addEventListener("change", function () { sendMessage("/auto " + (autoSwitch.checked ? "on" : "off")); });
   compactButton.addEventListener("click", function () { setControlsOpen(false); sendMessage("/compact"); });
@@ -201,6 +236,10 @@
     var query = inputEl.value;
     if (sending || query.charAt(0) !== "/") { hideCommandMenu(); return; }
     var rows = [
+      { command: "/profile ", description: "切换模型配置组（服务商、模型与容量）" },
+      { command: "/prompt ", description: "切换提示词与人设" },
+      { command: "/image ", description: "切换图片生成配置" },
+      { command: "/vision ", description: "切换备用识图配置" },
       { command: "/model ", description: "选择当前会话模型" },
       { command: "/think ", description: "调整思考等级" },
       { command: "/auto ", description: "开启或关闭 AI 自主切换" },
@@ -208,7 +247,14 @@
       { command: "/status", description: "查看模型、思考与上下文状态" },
       { command: "/help", description: "查看命令帮助（飞书等入口通用）" }
     ];
-    if (/^\/model\s/i.test(query)) {
+    var matchingProfile = profileFields.filter(function (field) {
+      return query.toLowerCase().indexOf("/" + field.command + " ") === 0;
+    })[0];
+    if (matchingProfile) {
+      rows = ((controlState && controlState[matchingProfile.list]) || []).map(function (item) {
+        return { command: "/" + matchingProfile.command + " " + item.id, description: item.name || item.id };
+      });
+    } else if (/^\/model\s/i.test(query)) {
       rows = ((controlState && controlState.models) || []).map(function (item) {
         return { command: "/model " + item.id, description: item.id === controlState.model ? "当前模型" : "切换到此模型" };
       });
@@ -448,6 +494,71 @@
   }
 
   /* ---------- 发送 ---------- */
+  function sendImage(file) {
+    if (!file || sending) return;
+    var prompt = inputEl.value.trim();
+    if (prompt.length > 4000) {
+      window.toast("读图问题最多 4000 字，请缩短后重试", "error");
+      return;
+    }
+    if (["image/png", "image/jpeg", "image/webp", "image/gif"].indexOf(file.type) < 0) {
+      window.toast("请选择 PNG、JPEG、WebP 或 GIF 图片", "error");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      window.toast("图片不能超过 8 MiB，请缩小后重试", "error");
+      return;
+    }
+    sending = true;
+    btnSend.disabled = true;
+    updateControlAvailability();
+    hideCommandMenu();
+    imageStatus.hidden = false;
+    imageStatus.textContent = "正在上传并识别：" + file.name;
+    var body = new FormData();
+    body.append("file", file);
+    body.append("prompt", prompt);
+    if (currentConvId !== null) body.append("conversation_id", currentConvId);
+    fetch(window.adminUrl("/chat/api/image"), {
+      method: "POST",
+      headers: window.csrfHeaders ? window.csrfHeaders() : {},
+      body: body
+    }).then(function (response) {
+      return response.json().then(function (result) {
+        if (!response.ok || !result || !result.ok || !result.data) {
+          throw new Error((result && result.error) || "上传失败，请重试");
+        }
+        return result.data;
+      });
+    }).then(function (data) {
+      sending = false;
+      btnSend.disabled = false;
+      imageStatus.hidden = true;
+      if (data.recognized !== false && inputEl.value.trim() === prompt) inputEl.value = "";
+      if (data.conversation_id != null) {
+        currentConvId = data.conversation_id;
+        loadConversations();
+        selectConversation(currentConvId);
+      } else {
+        refreshControls();
+      }
+      window.toast(data.recognized === false ? "图片已保存，请查看识图提示" : "图片识别完成", data.recognized === false ? "info" : "success");
+    }).catch(function (error) {
+      sending = false;
+      btnSend.disabled = false;
+      imageStatus.hidden = true;
+      updateControlAvailability();
+      window.toast(error.message || "图片识别失败，请重试", "error");
+    });
+  }
+
+  uploadButton.addEventListener("click", function () { if (!sending) imageFile.click(); });
+  imageFile.addEventListener("change", function () {
+    var file = imageFile.files && imageFile.files[0];
+    imageFile.value = "";
+    sendImage(file);
+  });
+
   function sendMessage(command) {
     var isCommand = typeof command === "string";
     var text = isCommand ? command : inputEl.value.trim();

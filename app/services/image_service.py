@@ -39,11 +39,9 @@ class ImageError(Exception):
 # ---------- 配置 ----------
 
 def _read_config() -> dict:
-    base = str(get_setting_from("image_base_url", "IMAGE_BASE_URL", "") or "").strip().rstrip("/")
-    key = str(get_setting_from("image_api_key", "IMAGE_API_KEY", "") or "").strip()
-    model = str(get_setting_from("image_model", "IMAGE_MODEL", "") or "").strip()
-    size = str(get_setting_from("image_size", "IMAGE_SIZE", DEFAULT_SIZE) or "").strip()
-    return {"base_url": base, "api_key": key, "model": model, "size": size or DEFAULT_SIZE}
+    from app.services.profile_service import resolve_profile_config
+
+    return resolve_profile_config("image")
 
 
 def is_configured() -> bool:
@@ -82,11 +80,11 @@ def save_bytes(data: bytes) -> str:
     return fname
 
 
-def _download(url: str) -> bytes:
+def _download(url: str, cfg=None) -> bytes:
     """下载端点返回的图片 URL（相对路径补全 base；仅允许公网地址，防 SSRF）。"""
     from app.utils.urlsafety import safe_get, validate_public_url
 
-    base = _read_config()["base_url"]
+    base = (cfg if cfg is not None else _read_config())["base_url"]
     if url.startswith("/") and base:
         url = base + url
     try:
@@ -107,8 +105,8 @@ def _download(url: str) -> bytes:
 
 # ---------- API 调用 ----------
 
-def _api_headers() -> dict:
-    return {"Authorization": f"Bearer {_read_config()['api_key']}"}
+def _api_headers(cfg=None) -> dict:
+    return {"Authorization": f"Bearer {(cfg if cfg is not None else _read_config())['api_key']}"}
 
 
 def _parse_item(resp: requests.Response) -> dict:
@@ -136,19 +134,19 @@ def _safe_base(cfg: dict) -> str:
         raise ImageError(f"图片接口地址不安全：{e}") from e
 
 
-def _generate_bytes(prompt: str, size: str, model: str) -> bytes:
+def _generate_bytes(prompt: str, size: str, model: str, cfg=None) -> bytes:
     """调用 generations 接口生成图片字节。优先 b64_json，兼容仅 url 端点。"""
-    cfg = _read_config()
+    cfg = dict(cfg if cfg is not None else _read_config())
     cfg["base_url"] = _safe_base(cfg)
     payload = {"model": model, "prompt": prompt, "size": size, "n": 1,
                "response_format": "b64_json"}
     resp = requests.post(f"{cfg['base_url']}/images/generations",
-                         json=payload, headers=_api_headers(), timeout=_TIMEOUT)
+                         json=payload, headers=_api_headers(cfg), timeout=_TIMEOUT)
     # 端点不支持 b64_json（部分兼容实现）→ 降级重试 url 模式
     if resp.status_code == 400 and "b64" in resp.text.lower():
         payload.pop("response_format", None)
         resp = requests.post(f"{cfg['base_url']}/images/generations",
-                             json=payload, headers=_api_headers(), timeout=_TIMEOUT)
+                             json=payload, headers=_api_headers(cfg), timeout=_TIMEOUT)
     item = _parse_item(resp)
     if item.get("b64_json"):
         try:
@@ -156,15 +154,15 @@ def _generate_bytes(prompt: str, size: str, model: str) -> bytes:
         except (ValueError, TypeError):
             raise ImageError("接口返回的 b64_json 无法解码") from None
     if item.get("url"):
-        return _download(item["url"])
+        return _download(item["url"], cfg)
     raise ImageError("接口返回中既无 b64_json 也无 url")
 
 
 def generate(user_id: int, prompt: str, size: Optional[str] = None,
-             model: Optional[str] = None) -> ImageAsset:
+             model: Optional[str] = None, *, _config=None) -> ImageAsset:
     """生成图片：调 API → 落盘 → 入库，返回 ImageAsset。"""
-    cfg = _read_config()
-    if not is_configured():
+    cfg = dict(_config if _config is not None else _read_config())
+    if not (cfg.get("base_url") and cfg.get("api_key") and cfg.get("model")):
         raise ImageError("图片生成未配置：请先在「设置 → 图片生成」填入 BaseURL / API Key / 模型")
     prompt = (prompt or "").strip()
     if not prompt:
@@ -174,7 +172,7 @@ def generate(user_id: int, prompt: str, size: Optional[str] = None,
         raise ImageError("size 格式不正确，应为 宽x高，如 1024x1024")
     model = (model or cfg["model"]).strip()
 
-    data = _generate_bytes(prompt, size, model)
+    data = _generate_bytes(prompt, size, model, cfg)
     fname = save_bytes(data)
     asset = ImageAsset(user_id=user_id, prompt=prompt, model=model, size=size, file_path=fname)
     db.session.add(asset)
@@ -188,17 +186,17 @@ def edit(asset: ImageAsset, instruction: str) -> ImageAsset:
     两种路径都会生成一张新图（parent_id 指向原图，instruction 记录修改要求）。
     """
     cfg = _read_config()
-    if not is_configured():
+    if not (cfg.get("base_url") and cfg.get("api_key") and cfg.get("model")):
         raise ImageError("图片生成未配置：请先在「设置 → 图片生成」填入 BaseURL / API Key / 模型")
     instruction = (instruction or "").strip()
     if not instruction:
         raise ImageError("修改要求不能为空")
 
-    edited = _try_edit(asset, instruction)
+    edited = _try_edit(asset, instruction, cfg)
     if edited is None:
         # 降级：原提示词 + 修改要求，重新生成新图
         prompt = f"{instruction}。参考原图生成提示词：{asset.prompt or '（无）'}"
-        new_asset = generate(asset.user_id, prompt, size=asset.size)
+        new_asset = generate(asset.user_id, prompt, size=asset.size, _config=cfg)
         new_asset.instruction = instruction
         new_asset.parent_id = asset.id
         db.session.commit()
@@ -206,9 +204,9 @@ def edit(asset: ImageAsset, instruction: str) -> ImageAsset:
     return edited
 
 
-def _try_edit(asset: ImageAsset, instruction: str) -> Optional[ImageAsset]:
+def _try_edit(asset: ImageAsset, instruction: str, cfg=None) -> Optional[ImageAsset]:
     """调用 /images/edits（multipart）。端点不存在/不支持时返回 None（触发降级）。"""
-    cfg = _read_config()
+    cfg = dict(cfg if cfg is not None else _read_config())
     cfg["base_url"] = _safe_base(cfg)
     path = _image_dir() / asset.file_path
     if not path.exists():
@@ -219,7 +217,7 @@ def _try_edit(asset: ImageAsset, instruction: str) -> Optional[ImageAsset]:
                 f"{cfg['base_url']}/images/edits",
                 data={"model": cfg["model"], "prompt": instruction, "size": asset.size or cfg["size"]},
                 files={"image": (asset.file_path, fh, "image/png")},
-                headers=_api_headers(),
+                headers=_api_headers(cfg),
                 timeout=_TIMEOUT,
             )
     except requests.RequestException as e:
@@ -237,7 +235,7 @@ def _try_edit(asset: ImageAsset, instruction: str) -> Optional[ImageAsset]:
         if item.get("b64_json"):
             data = base64.b64decode(item["b64_json"])
         elif item.get("url"):
-            data = _download(item["url"])
+            data = _download(item["url"], cfg)
     except (ValueError, TypeError):
         data = b""
     if not data:

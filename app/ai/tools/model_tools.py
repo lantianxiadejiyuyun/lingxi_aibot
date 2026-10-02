@@ -32,3 +32,16 @@ def switch_chat_model(reason: str, model=None, reasoning_effort=None):
 def compact_chat_context():
     from app.services.context_service import compact_conversation
     return compact_conversation(*controls.current_conversation(), force=True)
+
+
+@register_tool(name='switch_chat_profile',
+               description='切换当前会话的预存聊天模型/提示词/图片生成/备用视觉配置组。必须使用 get_chat_controls 返回的ID；AI自主切换关闭时禁止修改。不能自行提供接口或密钥。',
+               parameters={'type': 'object', 'properties': {
+                   'kind': {'type': 'string', 'enum': ['chat', 'prompt', 'image', 'vision']},
+                   'profile_id': {'type': 'string', 'description': '当前用户已保存配置组ID'},
+                   'reason': {'type': 'string', 'description': '本次切换的简短原因'}},
+                   'required': ['kind', 'profile_id', 'reason']})
+def switch_chat_profile(kind, profile_id, reason):
+    if not str(reason or '').strip() or len(str(reason)) > 300:
+        raise ValueError('请提供 1–300 字的切换原因')
+    return controls.update_chat_profile(*controls.current_conversation(), kind, profile_id, by_ai=True)

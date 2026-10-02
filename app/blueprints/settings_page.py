@@ -90,29 +90,29 @@ def _api_token_view() -> dict:
 
 def _ai_view() -> dict:
     """AI 配置视图：只读当前用户自己的协议/地址/模型/Key，不借用别人或 .env 的 Key。"""
-    from app.ai.llm import default_for_protocol, grouped_provider_presets, normalize_protocol
-    from app.services.settings_service import get_own_setting
+    from app.ai.llm import grouped_provider_presets
+    from app.services.profile_service import resolve_profile_config
     from app.services.model_control_service import parse_model_list
 
-    protocol = normalize_protocol(get_own_setting("llm_protocol", "openai"))
-    defaults = default_for_protocol(protocol)
-    base_url = str(get_own_setting("llm_base_url", "") or "").strip() or defaults["base_url"]
-    model = str(get_own_setting("llm_model", "") or "").strip() or defaults["model"]
-    models_raw = get_own_setting("llm_models", [])
+    cfg = resolve_profile_config("chat")
+    protocol, base_url, model = cfg["protocol"], cfg["base_url"], cfg["model"]
+    models_raw = cfg.get("models", [])
     try:
         models_text = "\n".join(parse_model_list(models_raw, model))
     except ValueError:
         # Keep legacy or invalid saved values editable instead of breaking settings.
         models_text = "\n".join(str(item) for item in models_raw) if isinstance(models_raw, list) else str(models_raw or "")
-    key = str(get_own_setting("llm_api_key", "") or "").strip()
+    key = str(cfg.get("api_key") or "")
     return {
         "protocol": protocol,
         "base_url": base_url,
         "model": model,
         "models_text": models_text,
-        "reasoning_effort": str(get_own_setting("llm_reasoning_effort", "default") or "default"),
+        "reasoning_effort": cfg.get("reasoning_effort", "default"),
+        "context_window_tokens": cfg.get("context_window_tokens", 0),
+        "vision_capability": cfg.get("vision_capability", "auto"),
         "api_key_configured": bool(key),
-        "api_key_tail": key[-4:] if len(key) >= 4 else (key or "****"),
+        "api_key_tail": key[-4:] if len(key) > 4 else "****",
         "preset_groups": grouped_provider_presets(),
     }
 
@@ -220,21 +220,15 @@ def index():
         "serper_key": _secret_view("serper_api_key", "SERPER_API_KEY"),
         "tavily_key": _secret_view("tavily_api_key", "TAVILY_API_KEY"),
     }
-    img_key = str(get_own_setting("image_api_key", "") or "").strip()
-    image = {
-        "base_url": str(get_setting_from("image_base_url", "IMAGE_BASE_URL", "") or ""),
-        "model": str(get_setting_from("image_model", "IMAGE_MODEL", "") or ""),
-        "size": str(get_setting_from("image_size", "IMAGE_SIZE", "1024x1024") or ""),
-        "api_key_configured": bool(img_key),
-        "api_key_tail": img_key[-4:] if len(img_key) >= 4 else (img_key or "****"),
-    }
-    vision_key = str(get_own_setting("vision_api_key", "") or "").strip()
-    vision = {
-        "base_url": str(get_setting_from("vision_base_url", "VISION_BASE_URL", "") or ""),
-        "model": str(get_setting_from("vision_model", "VISION_MODEL", "") or ""),
-        "api_key_configured": bool(vision_key),
-        "api_key_tail": vision_key[-4:] if len(vision_key) >= 4 else (vision_key or "****"),
-    }
+    from app.services.profile_service import profiles_view, resolve_profile_config
+
+    def media_view(kind):
+        cfg = resolve_profile_config(kind)
+        key = cfg.pop("api_key", "")
+        return {**cfg, "api_key_configured": bool(key),
+                "api_key_tail": key[-4:] if len(key) > 4 else "****"}
+
+    image, vision = media_view("image"), media_view("vision")
     # 用户管理（仅管理员）
     users_list = []
     if getattr(current_user, "is_admin", False):
@@ -249,6 +243,7 @@ def index():
     return render_template(
         "settings/index.html",
         form=form, ai=ai, channels=channels, briefing=briefing,
+        profiles=profiles_view(),
         feishu_app=feishu_app, backup=backup, site_pages=site_pages, image=image,
         voice=voice, search_cfg=search_cfg, scene_cfg=scene_cfg, vision=vision,
         channel_options=_CHANNEL_OPTIONS,
@@ -492,6 +487,82 @@ def persona():
         set_setting("ai_persona_ack_enabled", ack_enabled)
     flash("人设已保存，下一轮对话立即生效", "success")
     return redirect(url_for("settings_page.index") + "?tab=ai")
+
+
+def _profile_redirect(kind):
+    return redirect(url_for("settings_page.index", tab={"chat": "ai", "prompt": "ai", "image": "image", "vision": "vision"}.get(kind, "ai")))
+
+
+@bp.route("/profiles/<kind>/save", methods=["POST"])
+@login_required
+def profile_save(kind):
+    from app.services.profile_service import KINDS, save_profile
+    from flask import abort
+
+    if kind not in KINDS:
+        abort(404)
+    form = request.form
+    if kind == "prompt":
+        cfg = {key: form.get(f"ai_persona_{key}", default) for key, default in {
+            "name": DEFAULT_PERSONA_NAME, "preset": DEFAULT_PERSONA_PRESET,
+            "verbosity": DEFAULT_PERSONA_VERBOSITY, "address": "", "extra": "",
+        }.items()}
+        cfg.update(ack_template=form.get("ai_persona_ack", DEFAULT_ACK_TEMPLATE),
+                   ack_enabled=form.get("ai_persona_ack_enabled") == "1")
+        if form.get("reset_persona"):
+            cfg = {"name": DEFAULT_PERSONA_NAME, "preset": DEFAULT_PERSONA_PRESET,
+                   "verbosity": DEFAULT_PERSONA_VERBOSITY, "address": "", "extra": "",
+                   "ack_template": DEFAULT_ACK_TEMPLATE, "ack_enabled": DEFAULT_ACK_ENABLED}
+        clear_key = False
+    else:
+        prefix = "llm" if kind == "chat" else kind
+        cfg = {key: (form.get(f"{prefix}_{key}") or "").strip()
+               for key in ("base_url", "model", "api_key")}
+        cfg.update(protocol=form.get(f"{prefix}_protocol", "openai"), timeout=90,
+                   reasoning_effort="default")
+        clear_key = bool(form.get("clear_api_key" if kind == "chat" else f"clear_{kind}_key"))
+        if kind == "chat":
+            window = form.get("llm_context_window_tokens", "0")
+            cfg.update(models=form.get("llm_models", ""),
+                       reasoning_effort=form.get("llm_reasoning_effort", "default"),
+                       context_window_tokens=form.get("llm_context_window_custom") if window == "custom" else window,
+                       vision_capability=form.get("llm_vision_capability", "auto"))
+        if kind == "image":
+            cfg["size"] = form.get("image_size", "1024x1024")
+    try:
+        save_profile(kind, form.get("profile_name"), cfg,
+                     profile_id=form.get("profile_id", "legacy"),
+                     save_as_new=form.get("save_as_new") == "1", clear_key=clear_key)
+        flash("配置组已保存并设为默认；已单独选择配置组的会话保持自己的选择", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return _profile_redirect(kind)
+
+
+@bp.route("/profiles/<kind>/activate", methods=["POST"])
+@login_required
+def profile_activate(kind):
+    from app.services.profile_service import activate_profile
+
+    try:
+        activate_profile(kind, request.form.get("profile_id"))
+        flash("已切换默认配置组，下次调用生效；会话内可单独快速切换", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return _profile_redirect(kind)
+
+
+@bp.route("/profiles/<kind>/delete", methods=["POST"])
+@login_required
+def profile_delete(kind):
+    from app.services.profile_service import delete_profile
+
+    try:
+        delete_profile(kind, request.form.get("profile_id"))
+        flash("已删除配置组，引用它的会话将使用账号当前默认组", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return _profile_redirect(kind)
 
 
 @bp.route("/feishu-app", methods=["POST"])

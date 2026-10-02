@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 HELP = """当前会话命令（网页、飞书通用）：
+/profile [序号或ID] — 查看/切换聊天模型配置组（接口、Key、容量一起切换）
+/prompt [序号或ID] — 查看/切换提示词组
+/image [序号或ID] — 查看/切换图片生成组
+/vision [序号或ID] — 查看/切换备用视觉组
 /model — 查看候选模型和当前模型
 /model 模型ID或序号 — 切换模型
 /think — 查看当前模型支持的思考等级
@@ -11,7 +15,7 @@ HELP = """当前会话命令（网页、飞书通用）：
 /context 或 /status — 查看模型和上下文状态
 /help 或 / — 显示帮助
 手动选择模型或思考等级后会锁定选择；/auto on 可重新允许 AI 自主切换。
-候选模型在「设置 → 模型与人设」配置，使用该账号当前接口和 API Key。"""
+候选模型使用所选配置组的接口和 API Key；各类配置组在设置中管理。"""
 
 
 def is_command(text: str) -> bool:
@@ -35,6 +39,23 @@ def handle_command(conversation, user, text: str) -> str | None:
         state = controls.chat_controls(conversation, user)
         if command in ('/', '/help'):
             return HELP
+        if command in ('/profile', '/prompt', '/image', '/vision'):
+            kind = {'/profile': 'chat', '/prompt': 'prompt', '/image': 'image', '/vision': 'vision'}[command]
+            list_key = 'profiles' if kind == 'chat' else kind + '_profiles'
+            current_key = 'profile_id' if kind == 'chat' else kind + '_profile_id'
+            choices = state[list_key]
+            if not args:
+                rows = '\n'.join(f"{i}. {p['name']}{'（当前）' if p['id'] == state[current_key] else ''}" for i, p in enumerate(choices, 1))
+                return f"可选配置组：\n{rows}\n发送 {command} 序号或ID 切换，仅影响本会话。"
+            if len(args) != 1:
+                return f'用法：{command} 序号或ID'
+            chosen = args[0]
+            if chosen.isdigit():
+                index = int(chosen) - 1
+                if not 0 <= index < len(choices):
+                    return '配置组序号无效，请先查看列表。'
+                chosen = choices[index]['id']
+            return controls.update_chat_profile(conversation, user, kind, chosen)['message']
         if command == '/model':
             if not args:
                 choices = '\n'.join(f"{i}. {item['id']}" for i, item in enumerate(state['models'], 1))
@@ -46,7 +67,7 @@ def handle_command(conversation, user, text: str) -> str | None:
                 controls.set_auto_switch(conversation, user, True)
                 return '已开启本会话 AI 自主切换，仅在你的候选模型及支持的思考等级中选择。'
             if model.lower() == 'default':
-                model = controls._base_config()['model']
+                model = controls._base_config(conversation)['model']
             if model.isdigit():
                 index = int(model) - 1
                 if not 0 <= index < len(state['models']):
@@ -77,10 +98,12 @@ def handle_command(conversation, user, text: str) -> str | None:
             return result['message']
         if command in ('/status', '/context'):
             ctx = state['context']
+            window_text = '未指定，请按模型实际容量在设置中填写' if ctx.get('legacy_context_policy') else f"{ctx.get('context_window_tokens', 0):,} tokens（按所选配置）"
             return (f"模型：{state['model']}\n思考等级：{state['reasoning_effort']}\n"
                     f"AI 自主切换：{'开启' if state['auto_switch'] else '关闭'}\n"
                     f"历史消息：{ctx['total_messages']} 条；活跃上下文：{ctx['active_messages']} 条\n"
-                    f"摘要：{ctx['summary_characters']} 字；上下文约 {ctx['estimated_tokens']} tokens（字符估算，不含系统提示和工具）\n"
+                    f"模型窗口：{window_text}\n"
+                    f"摘要：{ctx['summary_characters']} 字；历史上下文约 {ctx['estimated_tokens']} tokens（估算）\n"
                     '可发送 /compact 压缩，聊天记录会完整保留。')
         return '未知命令。发送 /help 查看模型、思考等级和上下文压缩命令。'
     except ValueError as exc:

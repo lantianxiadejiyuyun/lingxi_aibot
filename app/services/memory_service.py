@@ -13,8 +13,6 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func
-
 from app.extensions import db
 from app.models.conversation import Conversation, Message
 from app.models.memory import SOURCE_AUTO, SOURCE_MANUAL, Memory
@@ -25,7 +23,7 @@ from app.utils.timeutil import get_tz, parse_local, utcnow
 logger = logging.getLogger(__name__)
 
 KEEP_RECENT = 8          # 有摘要时保留的最近消息条数
-CONSOLIDATE_MIN = 12     # 超过该条数才压缩
+CONSOLIDATE_MIN = 12     # 未声明模型容量的旧配置保留原定时梳理门槛
 MEMORY_LIMIT = 50        # 注入上下文的最大记忆条数
 MEMORY_TRUNCATE = 300    # 单条记忆注入时截断长度
 
@@ -71,12 +69,14 @@ def delete_expired(user_id: Optional[int] = None) -> int:
 # ---------- 会话摘要 ----------
 
 def consolidate_conversation(conv: Conversation, user) -> bool:
-    """保留定时梳理的 >12 条门槛，摘要与边界由统一服务原子更新。"""
+    """已声明模型容量时按 token 预算梳理；旧配置保留 >12 条策略。"""
     from app.services import context_service
 
     with context_service.conversation_lock(conv.id):
-        msgs = context_service.active_messages(conv, user)
-        if len(msgs) <= CONSOLIDATE_MIN:
+        status = context_service.context_status(conv, user)
+        if not status["legacy_context_policy"]:
+            return context_service.maybe_compact_conversation(conv, user)["changed"]
+        if status["active_messages"] <= CONSOLIDATE_MIN:
             return False
         return context_service.compact_conversation(conv, user, force=True)["changed"]
 
@@ -160,11 +160,14 @@ def consolidate_all(user) -> dict:
     """梳理全部：清理过期记忆 + 压缩有消息的长对话 + 抽取该用户长期记忆。"""
     report = {"summarized": 0, "memories": 0, "expired": 0}
     report["expired"] = delete_expired(user.id)
+    # A few long messages can exhaust a small declared window. Select every
+    # conversation with usable history and leave threshold decisions to the
+    # shared context policy rather than filtering by message count here.
     busy_ids = [r[0] for r in db.session.query(Message.conversation_id)
                 .join(Conversation, Message.conversation_id == Conversation.id)
-                .filter(Conversation.user_id == user.id)
-                .group_by(Message.conversation_id)
-                .having(func.count(Message.id) > CONSOLIDATE_MIN).all()]
+                .filter(Conversation.user_id == user.id,
+                        Message.role.in_(("user", "assistant")), Message.content != "")
+                .distinct().all()]
     for conv_id in busy_ids:
         conv = db.session.get(Conversation, conv_id)
         if conv is None:

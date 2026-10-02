@@ -225,7 +225,7 @@ def restart_scheduler(app) -> None:
 # ---------- 数据库初始化（CLI 与网页向导共用） ----------
 
 def ensure_schema(messages: list[str] | None = None) -> None:
-    """已有库补齐新增列（db.create_all 不会给已存在的表加列）。含多用户 user_id 迁移。"""
+    """补列与兼容扩宽（create_all 不修改旧表），含多用户 user_id 迁移。"""
     from sqlalchemy import inspect, text
 
     insp = inspect(db.engine)
@@ -242,6 +242,32 @@ def ensure_schema(messages: list[str] | None = None) -> None:
             db.session.execute(text("ALTER TABLE conversations ADD COLUMN summary TEXT NULL"))
             if messages is not None:
                 messages.append("✓ 已为 conversations 表补充 summary 列")
+    if db.engine.dialect.name == "mysql" and "messages" in insp.get_table_names():
+        from sqlalchemy import Column, DDL
+        from sqlalchemy.dialects import mysql
+        from sqlalchemy.schema import CreateColumn
+
+        content = next((c for c in insp.get_columns("messages") if c["name"] == "content"), None)
+        if content is not None and not isinstance(content["type"], mysql.LONGTEXT):
+            # MySQL MODIFY drops omitted attributes. Preserve the existing
+            # null/default/charset contract while widening only the data type.
+            # Our model's default='' is client-side, not a new server default.
+            old_type = content["type"]
+            default = content.get("default")
+            column = Column(
+                "content",
+                mysql.LONGTEXT(charset=getattr(old_type, "charset", None),
+                               collation=getattr(old_type, "collation", None)),
+                nullable=content.get("nullable", False),
+                server_default=text(str(default).replace(":", r"\:")) if default is not None else None,
+                comment=content.get("comment"),
+            )
+            definition = str(CreateColumn(column).compile(dialect=db.engine.dialect))
+            # DDL keeps reflected defaults/comments as schema literals instead
+            # of interpreting :names in them as application bind parameters.
+            db.session.execute(DDL(f"ALTER TABLE messages MODIFY COLUMN {definition}"))
+            if messages is not None:
+                messages.append("✓ 已将 messages.content 扩宽为 LONGTEXT，支持长上下文原文")
     if "memories" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("memories")}
         if "importance" not in cols:

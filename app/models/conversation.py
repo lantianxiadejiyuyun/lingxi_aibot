@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -37,7 +38,9 @@ class Message(db.Model):
         ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     role: Mapped[str] = mapped_column(String(16), nullable=False)  # user/assistant/tool
-    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    content: Mapped[str] = mapped_column(
+        Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=False, default=""
+    )
     tool_calls: Mapped[list] = mapped_column(JSON, nullable=True)  # 助手发起的工具调用原始记录
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 

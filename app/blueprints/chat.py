@@ -200,6 +200,38 @@ def api_tts():
     return audio
 
 
+@bp.route("/api/image", methods=["POST"])
+@login_required
+def api_image():
+    from app.services.image_input_service import ImageInputError, MAX_IMAGE_BYTES, receive_image
+
+    if request.content_length and request.content_length > MAX_IMAGE_BYTES + 65536:
+        return _json_err("图片不能超过 8 MiB", 413)
+    raw_id = request.form.get("conversation_id")
+    conversation = None
+    if raw_id not in (None, ""):
+        try:
+            conversation = _owned_conversation(int(raw_id))
+        except (ValueError, TypeError, OverflowError):
+            conversation = None
+        if conversation is None:
+            return _json_err("会话不存在", 404)
+    upload = request.files.get("file")
+    if upload is None:
+        return _json_err("请选择一张图片")
+    data = upload.read(MAX_IMAGE_BYTES + 1)
+    try:
+        result = receive_image(current_user, data, conversation,
+                               prompt=request.form.get("prompt", ""))
+    except ImageInputError as e:
+        return _json_err(str(e), e.status_code)
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        current_app.logger.exception("网页收图失败")
+        return _json_err("图片处理失败，请稍后重试", 500)
+    return _json_ok(result)
+
+
 @bp.route("/api/new", methods=["POST"])
 @login_required
 def api_new():

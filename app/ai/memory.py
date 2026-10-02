@@ -14,7 +14,7 @@ def build_messages(conversation, user) -> list[dict]:
     - 最后取尚未被摘要覆盖的 user / assistant 原文（tool 消息不回灌）
       无边界的旧会话保留全部现存消息，避免静默丢弃未总结的历史
     """
-    messages: list[dict] = [{"role": "system", "content": build_system_prompt(user)}]
+    messages: list[dict] = [{"role": "system", "content": build_system_prompt(user, conversation=conversation)}]
     mem = memory_service.build_memory_context(user.id)
     if mem:
         messages.append({"role": "system", "content": mem})

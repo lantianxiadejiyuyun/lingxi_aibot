@@ -11,7 +11,7 @@ DEFAULT_PERSONA_PRESET = "default"
 DEFAULT_PERSONA_VERBOSITY = "normal"
 PERSONA_NAME_MAX = 32
 PERSONA_ADDRESS_MAX = 16
-PERSONA_EXTRA_MAX = 2000
+PERSONA_EXTRA_MAX = 20000
 DEFAULT_ACK_TEMPLATE = "收到：{message}"
 ACK_TEMPLATE_MAX = 80
 DEFAULT_ACK_ENABLED = True
@@ -129,11 +129,14 @@ def strip_leading_ack(text: str, ack: str = "") -> str:
     return t.strip()
 
 
-def load_persona(user=None) -> dict[str, Any]:
+def load_persona(user=None, conversation=None) -> dict[str, Any]:
     """读取当前用户的对话人设（settings 用户级）。缺省为默认助理。"""
-    from app.services.settings_service import get_setting
+    from app.services.profile_service import resolve_profile_config
 
     uid = getattr(user, "id", None)
+    cfg = resolve_profile_config("prompt", conversation=conversation, user_id=uid)
+    def get_setting(key, default=None, user_id=None):
+        return cfg.get(key.removeprefix("ai_persona_"), default)
     name = str(get_setting("ai_persona_name", DEFAULT_PERSONA_NAME, user_id=uid) or "").strip()
     name = (name[:PERSONA_NAME_MAX] if name else DEFAULT_PERSONA_NAME)
     preset = str(get_setting("ai_persona_preset", DEFAULT_PERSONA_PRESET, user_id=uid) or "")
@@ -180,13 +183,13 @@ def _identity_line(p: dict[str, Any]) -> str:
     return f"你是{display}，一位私人 AI 助理。{style}默认使用中文。"
 
 
-def build_system_prompt(user) -> str:
+def build_system_prompt(user, conversation=None) -> str:
     """系统提示词：人设 + 当前时间（用户时区）+ 使用规则（规则优先于人设）。"""
     tz = user_tz(user)
     local = to_user(utcnow(), tz)
     now_str = f"{local.strftime('%Y-%m-%d %H:%M')} 星期{weekday_cn(local)}"
     tz_name = getattr(user, "timezone", None) or "Asia/Shanghai"
-    p = load_persona(user)
+    p = load_persona(user, conversation=conversation)
     parts = [_identity_line(p)]
     if p["address"]:
         parts.append(f"请用「{p['address']}」称呼用户。")

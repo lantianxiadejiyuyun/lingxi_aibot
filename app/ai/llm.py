@@ -7,8 +7,11 @@
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
+from urllib.parse import urlsplit
 
 from app.ai.reasoning import request_options, requires_streaming
 
@@ -254,6 +257,42 @@ def _as_text_block(text: str) -> dict:
     return {"type": "text", "text": text}
 
 
+def _anthropic_content(content):
+    """Translate OpenAI image parts; never send image_url blocks to Messages API."""
+    if not isinstance(content, list):
+        return content
+    blocks = []
+    for block in content:
+        if not isinstance(block, dict):
+            blocks.append(_as_text_block(str(block)))
+            continue
+        if block.get("type") != "image_url":
+            blocks.append(dict(block))
+            continue
+        image = block.get("image_url") or {}
+        url = str((image.get("url") if isinstance(image, dict) else image) or "")
+        if url.startswith("data:"):
+            header, separator, encoded = url.partition(",")
+            media_type = header[5:-7] if header.endswith(";base64") else ""
+            if media_type == "image/jpg":
+                media_type = "image/jpeg"
+            if not separator or media_type not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+                raise LLMError("图片 data URI 格式不支持，请使用 PNG、JPEG、GIF 或 WebP")
+            try:
+                base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as e:
+                raise LLMError("图片 base64 数据无效") from e
+            if not encoded:
+                raise LLMError("图片数据为空")
+            source = {"type": "base64", "media_type": media_type, "data": encoded}
+        elif urlsplit(url).scheme in {"http", "https"} and urlsplit(url).netloc:
+            source = {"type": "url", "url": url}
+        else:
+            raise LLMError("图片地址必须是 HTTP(S) URL 或 base64 data URI")
+        blocks.append({"type": "image", "source": source})
+    return blocks
+
+
 def _merge_anthropic_message(out: list[dict], role: str, content) -> None:
     """追加或合并到上一条同角色消息（Anthropic 要求 user/assistant 严格交替）。"""
     if not out or out[-1]["role"] != role:
@@ -282,7 +321,7 @@ def to_anthropic_payload(messages: list, tools: list | None = None) -> dict:
                 system_parts.append(str(text))
             continue
         if role == "user":
-            _merge_anthropic_message(out, "user", m.get("content") or "")
+            _merge_anthropic_message(out, "user", _anthropic_content(m.get("content") or ""))
             continue
         if role == "assistant":
             # Native blocks contain signed thinking and must be replayed exactly
@@ -446,6 +485,14 @@ def _attr(obj, key, default=None):
     return getattr(obj, key, default)
 
 
+def _text_content(content) -> str:
+    """Some compatible vision endpoints return typed text parts instead of a string."""
+    if isinstance(content, list):
+        return "".join(str(part.get("text") or "") for part in content
+                       if isinstance(part, dict) and part.get("type") in {None, "text"})
+    return str(content or "")
+
+
 def _http_error_message(resp) -> str:
     try:
         data = resp.json()
@@ -477,29 +524,10 @@ class LLMClient:
         self.timeout = float(DEFAULT_TIMEOUT)
 
     def _read_config(self) -> dict:
-        from app.services.settings_service import get_own_setting
+        from app.services.profile_service import resolve_profile_config
 
-        protocol = normalize_protocol(get_own_setting("llm_protocol", PROTOCOL_OPENAI))
-        defaults = default_for_protocol(protocol)
-        base = str(get_own_setting("llm_base_url", "") or "").strip().rstrip("/")
-        model = str(get_own_setting("llm_model", "") or "").strip()
-        key = str(get_own_setting("llm_api_key", "") or "").strip()
-        if not base:
-            base = defaults["base_url"]
-        if not model:
-            model = defaults["model"]
-        try:
-            timeout = float(get_own_setting("llm_timeout", DEFAULT_TIMEOUT) or DEFAULT_TIMEOUT)
-        except (TypeError, ValueError):
-            timeout = float(DEFAULT_TIMEOUT)
-        cfg = {
-            "protocol": protocol,
-            "base_url": base,
-            "api_key": key,
-            "model": model,
-            "timeout": timeout,
-            "reasoning_effort": get_own_setting("llm_reasoning_effort", "default") or "default",
-        }
+        cfg = resolve_profile_config("chat", conversation=self.conversation)
+        cfg.setdefault("timeout", DEFAULT_TIMEOUT)
         if self.conversation is not None:
             from app.services.model_control_service import resolve_llm_config
 
@@ -596,6 +624,9 @@ class LLMClient:
           {"type": "assistant_meta", "data": {...}}  # 内部续轮，不能发送到浏览器/飞书
         """
         cfg = self._read_config()
+        from app.services.model_capabilities import assert_context_fits
+
+        assert_context_fits(messages, tools, cfg)
         self._apply(cfg)
         self._require_key(cfg)
         self.last_assistant_meta = {}
@@ -658,6 +689,9 @@ class LLMClient:
     def chat(self, messages, tools=None):
         """非流式对话，返回 (content_str, tool_calls_list)。"""
         cfg = self._read_config()
+        from app.services.model_capabilities import assert_context_fits
+
+        assert_context_fits(messages, tools, cfg)
         self._apply(cfg)
         self._require_key(cfg)
         self.last_assistant_meta = {}
@@ -683,7 +717,7 @@ class LLMClient:
             if not choices:
                 return "", []
             msg = _attr(choices[0], "message")
-            content = _attr(msg, "content") or ""
+            content = _text_content(_attr(msg, "content"))
             reasoning = _attr(msg, "reasoning_content")
             if reasoning:
                 self._meta(cfg, {"reasoning_content": str(reasoning)})

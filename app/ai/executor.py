@@ -59,6 +59,7 @@ def _run_chat(conversation, user_text, user):
     try:
         from app.services.chat_command_service import handle_command
         from app.services.context_service import maybe_compact_conversation
+        from app.services.model_capabilities import assert_context_fits
 
         # Commands do not need a working model, except when generating a summary.
         command_reply = handle_command(conversation, user, user_text)
@@ -117,7 +118,11 @@ def _run_chat(conversation, user_text, user):
             content_parts: list[str] = []
             tool_calls: list[dict] = []
             assistant_meta = {}
-            for ev in llm.chat_stream(messages, tools=registry.openai_tools()):
+            tools = registry.openai_tools()
+            # Re-read after every tool round: switching models can reduce the
+            # available window, and tool results also consume input tokens.
+            assert_context_fits(messages, tools, llm._read_config())
+            for ev in llm.chat_stream(messages, tools=tools):
                 if ev["type"] == "delta":
                     content_parts.append(ev["text"])
                     yield ("delta", ev["text"])
@@ -167,7 +172,7 @@ def _run_chat(conversation, user_text, user):
                     'role': 'tool', 'name': call.get('name', ''),
                     'arguments': call.get('arguments', ''), 'result': result_str, 'ok': ok,
                 })
-                if ok and isinstance(parsed_result, dict) and parsed_result.get('changed') and call.get('name') in ('switch_chat_model', 'compact_chat_context'):
+                if ok and isinstance(parsed_result, dict) and parsed_result.get('changed') and call.get('name') in ('switch_chat_model', 'switch_chat_profile', 'compact_chat_context'):
                     rebuild_context = True
                     yield ('notice', parsed_result.get('message', '会话配置已更新'))
                 tool_calls_json.append(call)
