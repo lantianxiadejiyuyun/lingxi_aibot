@@ -1,20 +1,23 @@
 # 灵犀接入 API v1
 
-本版本接口已实现并通过本地验证及导航站 Node→Flask 联调。此文档是导航站与灵犀的接入契约；具体访问地址以部署和反向代理配置为准。
+本版本已部署到 fnOS，并通过本地测试、导航站 Node→Flask 联调及线上 Gunicorn 的 HTTP/SSE/WebSocket 验证。此文档是导航站与灵犀的接入契约。
 
 ## 地址与账号
 
 现有 fnOS 后台地址为 `http://192.168.100.72:8000/lingxi`。接口基地址为
 `http://192.168.100.72:8000/lingxi/api/v1`，WebSocket 为
-`ws://192.168.100.72:8000/lingxi/api/v1/ws`。升级到本版本后使用这些地址。
+`ws://192.168.100.72:8000/lingxi/api/v1/ws`。
 
 `/lingxi` 是可配置的 `ADMIN_ENTRY`，不是接口版本的一部分。没有配置入口时基地址为 `/api/v1`。
 独立公开网页端口（通常 8080）仅提供公开网页与图片，不提供这些 API。公网接入需要将后端 8000 端口通过 HTTPS/WSS 反向代理暴露给导航站后端。
 
-2026-10-03 只读实测：LAN 8000 的 `/healthz` 为 200；既有公网 `http://47.105.106.206:30079/` 可访问，
-但 `/lingxi/api/v1/me` 返回 404，该端口提供独立网页站点。已有 botadmin.eugenstudio.cn HTTPS 配置，但其云端上游 40030 未监听，实测返回 502；目前没有核实可用的后端 HTTPS/WSS 入口。
-联调前需约定专用后台域名及到 fnOS 8000 的穿透映射，保留现有公开网页映射。
-导航站选择复用 HTTPS 的 `/lingxi-service` 前缀，只反代 API 到云回环 SSH 隧道，再转 fnOS 8000；映射方案见 [导航站联调网络](导航站联调网络.md)。隧道和 HTTPS 代理由导航站侧协调发布，不改原 GOST 网页映射。
+2026-10-03 已上线两个公网接入地址：
+
+- `https://index.eugenstudio.cn/lingxi-service/api/v1`
+- `https://ojjlab.eugenstudio.cn/lingxi-service/api/v1`
+
+WebSocket 将 `https` 改为 `wss` 并追加 `/ws`。两个入口的 `/me` 无 Token 实测返回 401，WSS 升级及首帧鉴权通过；fnOS 容器到两个站点的保险库回调均可达，无 Token 返回 401，未读取真实保险库。
+这些入口只反代 API，经云端回环 SSH 隧道转入 fnOS 8000，不公开后台管理页面。链路见 [导航站联调网络](导航站联调网络.md)。原 GOST `30079 → 8080` 继续提供公开网页，不承载接入 API。
 
 每位用户在「设置 → 账号」生成自己的 API Token。导航站 Node 后端按已登录的导航站账号保存对应 Token，之后代理请求；无需再登录灵犀，也不共享灵犀登录密码。
 每次调用携带 `Authorization: Bearer lx_…`，也兼容 `X-API-Token`。不接受 URL 查询参数中的 Token，不以浏览器登录 Cookie 代替 Token。
