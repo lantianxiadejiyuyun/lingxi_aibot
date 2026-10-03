@@ -244,11 +244,19 @@ def api_new():
 @bp.route("/api/delete/<int:conv_id>", methods=["POST"])
 @login_required
 def api_delete(conv_id):
-    conv = _owned_conversation(conv_id)
-    if conv is None:
-        return _json_err("会话不存在")
-    db.session.delete(conv)
-    db.session.commit()
+    from app.models.setting import Setting
+    from app.services.context_service import conversation_lock
+
+    user_id = current_user.id
+    with conversation_lock(conv_id):
+        db.session.rollback()
+        conv = _owned_conversation(conv_id)
+        if conv is None:
+            return _json_err("会话不存在")
+        Setting.query.filter(Setting.user_id == user_id, Setting.key.in_(
+            [f"chat_llm:{conv_id}", f"chat_context:{conv_id}"])).delete(synchronize_session=False)
+        db.session.delete(conv)
+        db.session.commit()
     return _json_ok({"id": conv_id})
 
 
@@ -256,7 +264,21 @@ def api_delete(conv_id):
 @login_required
 def api_clear_all():
     """清空当前用户所有会话与消息（含简报/报告等系统会话），数据库级 CASCADE 删除 messages。"""
-    count = Conversation.query.filter(Conversation.user_id == current_user.id).count()
-    Conversation.query.filter(Conversation.user_id == current_user.id).delete(synchronize_session=False)
-    db.session.commit()
+    from app.models.setting import Setting
+    from app.services.context_service import all_conversations_lock
+
+    user_id = current_user.id
+    with all_conversations_lock():
+        db.session.rollback()
+        conversations = Conversation.query.filter_by(user_id=user_id).all()
+        count = len(conversations)
+        # ORM cascade also works on SQLite test/development databases where
+        # foreign-key cascades may be disabled.
+        for conversation in conversations:
+            db.session.delete(conversation)
+        (Setting.query.filter(Setting.user_id == user_id,
+                              Setting.key.startswith("chat_llm:", autoescape=True)
+                              | Setting.key.startswith("chat_context:", autoescape=True))
+         .delete(synchronize_session=False))
+        db.session.commit()
     return _json_ok({"deleted": count})

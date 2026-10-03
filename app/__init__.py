@@ -143,13 +143,26 @@ def create_app(config_class=Config) -> Flask:
     from app.blueprints.expenses_api import api_bp as expenses_api_bp
     from app.blueprints.setup import bp as setup_bp
     from app.blueprints.settings_api import api_bp as settings_api_bp
+    from app.blueprints.integration_account import bp as integration_account_bp
+    from app.blueprints.integration_data import bp as integration_data_bp
+    from app.blueprints.integration_chat import bp as integration_chat_bp
+    from app.blueprints.integration_vault import bp as integration_vault_bp
+    from app.blueprints.navigation_vault import bp as navigation_vault_bp
 
     for bp in (auth_bp, dashboard_bp, calendar_bp, tasks_bp, notes_bp,
                notifications_bp, settings_bp, jobs_bp, chat_bp, feishu_bp,
                pages_bp, pages_site_bp, images_bp, image_files_bp,
                skills_bp, memory_bp, fitness_bp, travel_bp, expenses_bp,
-               expenses_api_bp, setup_bp, settings_api_bp):
+               expenses_api_bp, setup_bp, settings_api_bp, navigation_vault_bp):
         app.register_blueprint(bp)
+
+    # Dedicated integration endpoints accept Tokens, never browser-session auth.
+    for bp in (integration_account_bp, integration_data_bp, integration_chat_bp, integration_vault_bp):
+        csrf.exempt(bp)
+        app.register_blueprint(bp)
+
+    from app.services.integration_ws import init_integration_ws
+    init_integration_ws(app)
 
     # ---- 上下文与错误页 ----
     register_context(app)
@@ -228,6 +241,8 @@ def create_app(config_class=Config) -> Flask:
     # ---- 静态资源缓存：第三方库/字体（含版本号、内容不可变）长期缓存，避免每次导航都重新校验导致图标闪烁 ----
     @app.after_request
     def set_static_cache_headers(response):
+        if request.path == "/api/v1" or request.path.startswith("/api/v1/"):
+            response.headers["Cache-Control"] = "no-store"
         if request.path.startswith("/static/vendor/"):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -239,6 +254,9 @@ def create_app(config_class=Config) -> Flask:
     #      所有页面请求统一跳转到 /setup 安装向导 ----
     @app.before_request
     def _redirect_to_setup_when_uninitialized():
+        # Integrations must receive JSON status codes, never installation HTML.
+        if request.path == "/api/v1" or request.path.startswith("/api/v1/"):
+            return None
         if request.method != "GET" or request.path.startswith("/static/"):
             return None
         if request.path.rstrip("/") == "/healthz":
@@ -326,11 +344,26 @@ def register_context(app: Flask):
 
 
 def register_errors(app: Flask):
+    from werkzeug.exceptions import HTTPException
+
+    @app.errorhandler(HTTPException)
+    def http_error(e):
+        if request.path == "/api/v1" or request.path.startswith("/api/v1/"):
+            from app.utils.integration_api import error_response
+            return error_response(e.name, e.code or 500, "http_error")
+        return e
+
     @app.errorhandler(404)
     def not_found(e):
+        if request.path == "/api/v1" or request.path.startswith("/api/v1/"):
+            from app.utils.integration_api import error_response
+            return error_response("接口或资源不存在", 404, "not_found")
         return render_template("errors/404.html"), 404
 
     @app.errorhandler(500)
     def server_error(e):
         recover_session()
+        if request.path == "/api/v1" or request.path.startswith("/api/v1/"):
+            from app.utils.integration_api import error_response
+            return error_response("服务暂时不可用，请稍后重试", 500, "internal_error")
         return render_template("errors/500.html"), 500

@@ -3,7 +3,8 @@
 默认监听 127.0.0.1:5000（仅本机可访问）；可用环境变量 HOST / PORT 覆盖。
 调试器（Werkzeug debugger）默认关闭：FLASK_DEBUG=1 时开启，但监听非回环地址
 会强制关闭调试器（调试器可在服务端执行任意代码，暴露公网/局域网等于 RCE）。
-⚠️ 仅用于开发调试；公网生产部署请用 wsgi.py + waitress（见 docs/部署.md）。
+⚠️ 仅用于开发调试；公网生产部署推荐 Docker + Gunicorn（见 docs/部署.md）。
+Waitress 只支持 HTTP/SSE；通用 WebSocket 需要 Gunicorn 或此开发入口。
 """
 import os
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 
-from flask import current_app
+from flask import current_app, g, has_request_context
 
 from app.ai import registry
 from app.ai.llm import LLMClient
@@ -222,7 +222,14 @@ def _run_chat(conversation, user_text, user):
         yield ("done", final_content)
 
     except Exception as e:  # noqa: BLE001 —— 对话异常不中断请求，回传错误
-        logger.exception("对话执行失败")
+        # External clients share the same history: do not persist upstream
+        # exception strings (which may contain credentials) in API conversations.
+        external = has_request_context() and g.get("api_user") is not None
+        error_text = "对话处理失败，请稍后重试" if external else str(e)[:500]
+        if external:
+            logger.error("接入 API 对话执行失败 (%s)", type(e).__name__)
+        else:
+            logger.exception("对话执行失败")
         db.session.rollback()  # 回滚未提交部分，已提交的用户消息保留
         # 补写失败占位消息：工具副作用（各服务内部已 commit）无法回滚，
         # 明确告知用户避免静默不一致与重复操作
@@ -231,11 +238,11 @@ def _run_chat(conversation, user_text, user):
             if conv_id is not None:
                 db.session.add(Message(
                     role="assistant",
-                    content=(f"⚠️ 本次对话处理中断：{str(e)[:200]}"
+                    content=(f"⚠️ 本次对话处理中断：{error_text[:200]}"
                              "（此前已执行的工具操作可能已生效，请勿重复提交）"),
                     conversation_id=conv_id,
                 ))
                 db.session.commit()
         except Exception:  # noqa: BLE001 —— 占位消息写失败不影响错误回传
             db.session.rollback()
-        yield ("error", str(e)[:500])
+        yield ("error", error_text)

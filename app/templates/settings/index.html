@@ -119,11 +119,16 @@
       </div>
     </div>
     <div class="card" style="margin-top:16px">
-      <div class="card-head"><h2>App API Token</h2></div>
+      <div class="card-head"><h2>外部应用接入 · API Token</h2></div>
       <p class="muted" style="margin-top:0">
-        给手机记账 App 用。请求头带 <code>X-API-Token</code> 或 <code>Authorization: Bearer</code>，
+        用于导航站、手机 App 等客户端接入日程、待办、AI 对话和消费记录。
+        请求头带 <code>X-API-Token</code> 或 <code>Authorization: Bearer</code>，
         数据记在<strong>你的账号</strong>下，和其他用户互不影响。完整 Token 只在生成时显示一次。
       </p>
+      <p class="muted">账号验证地址：<code>{{ url_for('integration_account.me', _external=True) }}</code><br>
+        支持 REST、SSE 和 WebSocket。绑定由外部应用后端保存；撤销或重新生成 Token 后需重新绑定。
+      </p>
+      <p><a class="btn btn-ghost" href="{{ url_for('navigation_vault.index') }}"><i class="bi bi-shield-lock"></i> 导航站密码保险库</a></p>
       <p id="api-token-status">
         {% if api_token_view.configured %}
         已生成（结尾 <code>{{ api_token_view.tail }}</code>）。旧 Token 可继续用，重新生成后旧的立即失效。

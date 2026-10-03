@@ -17,6 +17,7 @@ USER aibot
 
 EXPOSE 8000
 # 单 worker + 多线程：APScheduler 随 worker 进程启动一次，避免多 worker 重复调度
+# WebSocket 每连接占用一个线程；最多 16 条连接，32 线程为 HTTP/SSE 保留余量
 # timeout 300：多轮工具调用的长对话（LLM_TIMEOUT=90 × 多轮）不会在 120s 被截断
 # 镜像以 uid 1000 运行；bind mount ./data 时请 chown -R 1000:1000 data
-CMD ["gunicorn", "-w", "1", "--threads", "8", "-b", "0.0.0.0:8000", "--timeout", "300", "wsgi:app"]
+CMD ["gunicorn", "-w", "1", "--threads", "32", "-b", "0.0.0.0:8000", "--timeout", "300", "wsgi:app"]

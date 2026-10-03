@@ -1,7 +1,7 @@
 """保留聊天记录的会话压缩：摘要 + 已覆盖消息边界 + 最近完整轮次。"""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import logging
 import threading
 
@@ -29,6 +29,19 @@ _LOCKS = tuple(threading.RLock() for _ in range(128))
 def conversation_lock(conversation_id):
     """串行处理同一会话，允许本轮 AI 工具再次进入压缩服务。"""
     with _LOCKS[int(conversation_id) % len(_LOCKS)]:
+        yield
+
+
+@contextmanager
+def all_conversations_lock():
+    """Serialize a user's bulk deletion with active chat and compaction work.
+
+    Bulk callers hold no individual conversation lock when entering; acquire
+    the bounded stripe table in its fixed order to avoid lock-order cycles.
+    """
+    with ExitStack() as stack:
+        for lock in _LOCKS:
+            stack.enter_context(lock)
         yield
 
 

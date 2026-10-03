@@ -61,8 +61,16 @@ def _token_eq(a: str, b: str) -> bool:
 
 def resolve_api_user():
     """根据请求 Token 解析归属用户；无法识别返回 None。"""
-    provided = _provided_token()
-    if not provided:
+    return resolve_token_user(_provided_token())
+
+
+def resolve_token_user(provided: str):
+    """Resolve a REST header or WebSocket auth frame using the same accounts."""
+    if not isinstance(provided, str) or not provided or len(provided) > 4096:
+        return None
+    try:
+        provided.encode("utf-8")
+    except UnicodeError:
         return None
     from app.models.user import User
 
