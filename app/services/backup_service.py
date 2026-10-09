@@ -44,6 +44,8 @@ _BUSINESS_TABLES = frozenset({
     "notifications", "scheduled_jobs", "settings", "webpages", "image_assets",
     "skills", "memories", "embeddings", "fitness_records", "trip_plans",
     "expense_records",
+    "storage_locations", "media_download_tasks", "media_download_attempts",
+    "media_resource_candidates", "media_events", "agent_runs", "agent_steps",
 })
 
 

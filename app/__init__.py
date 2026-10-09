@@ -148,21 +148,24 @@ def create_app(config_class=Config) -> Flask:
     from app.blueprints.integration_chat import bp as integration_chat_bp
     from app.blueprints.integration_vault import bp as integration_vault_bp
     from app.blueprints.navigation_vault import bp as navigation_vault_bp
+    from app.blueprints.media import bp as media_bp, api_bp as integration_media_bp
 
     for bp in (auth_bp, dashboard_bp, calendar_bp, tasks_bp, notes_bp,
                notifications_bp, settings_bp, jobs_bp, chat_bp, feishu_bp,
                pages_bp, pages_site_bp, images_bp, image_files_bp,
                skills_bp, memory_bp, fitness_bp, travel_bp, expenses_bp,
-               expenses_api_bp, setup_bp, settings_api_bp, navigation_vault_bp):
+               expenses_api_bp, setup_bp, settings_api_bp, navigation_vault_bp, media_bp):
         app.register_blueprint(bp)
 
     # Dedicated integration endpoints accept Tokens, never browser-session auth.
-    for bp in (integration_account_bp, integration_data_bp, integration_chat_bp, integration_vault_bp):
+    for bp in (integration_account_bp, integration_data_bp, integration_chat_bp, integration_vault_bp, integration_media_bp):
         csrf.exempt(bp)
         app.register_blueprint(bp)
 
     from app.services.integration_ws import init_integration_ws
     init_integration_ws(app)
+    from app.services.media_ws import init_media_ws
+    init_media_ws(app)
 
     # ---- 上下文与错误页 ----
     register_context(app)
@@ -179,6 +182,7 @@ def create_app(config_class=Config) -> Flask:
     app.cli.add_command(commands.restore_backup_cmd)
     app.cli.add_command(commands.reindex)
     app.cli.add_command(commands.list_routes)
+    app.cli.add_command(commands.media_worker)
 
     # ---- AI 工具加载 & 通知渠道 & 调度器 ----
     with app.app_context():
@@ -311,6 +315,7 @@ def register_context(app: Flask):
                 ("fitness.index", "健身", "bi-heart-pulse"),
                 ("travel.index", "出行", "bi-airplane"),
                 ("expenses.index", "消费", "bi-wallet2"),
+                ("media.index", "文件与下载", "bi-cloud-arrow-down"),
             ]),
             ("智能", [
                 ("skills.index", "技能", "bi-puzzle"),

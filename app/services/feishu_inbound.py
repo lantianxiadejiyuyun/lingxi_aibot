@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 _seen: deque = deque(maxlen=200)
 _seen_lock = threading.Lock()
 _conversation_map_lock = threading.Lock()
+_dispatch_lock = threading.Lock()
+_pending: dict[tuple[int, str, str], deque] = {}
+_pending_ids: set[str] = set()
 
 
 def parse_message(payload: dict) -> dict | None:
@@ -69,26 +72,74 @@ def mark_seen(message_id: str) -> bool:
 
 
 def dispatch(app, msg: dict) -> None:
-    """后台线程处理一条已解析消息。"""
-    if not msg:
-        return
-    if not mark_seen(msg.get("message_id") or ""):
+    """同一发送者的图文按到达顺序处理，不同会话可以并行。"""
+    if not msg or not msg.get("chat_id") or not msg.get("message_id"):
         return
     if msg.get("type") == "image":
-        threading.Thread(
-            target=_process_image,
-            args=(app, msg["chat_id"], msg["message_id"], msg["image_key"],
-                  msg.get("open_id", "")),
-            daemon=True,
-        ).start()
+        if not msg.get("image_key"):
+            return
+    elif msg.get("type") != "text" or not msg.get("text"):
         return
-    if not msg.get("text"):
-        return
-    threading.Thread(
-        target=_process_text,
-        args=(app, msg["chat_id"], msg["text"], msg.get("open_id", "")),
-        daemon=True,
-    ).start()
+    key = (id(app), msg["chat_id"], msg.get("open_id", ""))
+    message_id = msg["message_id"]
+    with _dispatch_lock:
+        # Active/queued messages must stay deduplicated even if enough unrelated
+        # traffic arrives to evict them from the small completed-message cache.
+        if message_id in _pending_ids or not mark_seen(message_id):
+            return
+        _pending_ids.add(message_id)
+        if key in _pending:
+            _pending[key].append(dict(msg))
+            return
+        _pending[key] = deque([dict(msg)])
+        try:
+            threading.Thread(target=_drain_messages, args=(app, key), daemon=True).start()
+        except Exception:
+            _pending.pop(key, None)
+            _pending_ids.discard(message_id)
+            with _seen_lock:
+                if message_id in _seen:
+                    _seen.remove(message_id)
+            raise
+
+
+def _drain_messages(app, key: tuple[int, str, str]) -> None:
+    while True:
+        with _dispatch_lock:
+            queue = _pending[key]
+            if not queue:
+                del _pending[key]
+                return
+            msg = queue.popleft()
+        try:
+            if msg["type"] == "image":
+                _process_image(app, msg["chat_id"], msg["message_id"],
+                               msg["image_key"], msg.get("open_id", ""))
+            else:
+                _process_text(app, msg["chat_id"], msg["text"], msg.get("open_id", ""))
+        except Exception:  # noqa: BLE001 — a failed item must not strand later messages
+            logger.exception("飞书队列消息处理失败 chat=%s", msg["chat_id"])
+        finally:
+            with _dispatch_lock:
+                with _seen_lock:
+                    if msg["message_id"] in _seen:
+                        _seen.remove(msg["message_id"])
+                    _seen.append(msg["message_id"])
+                _pending_ids.discard(msg["message_id"])
+
+
+def _send_progress(chat_id: str, text: str) -> bool:
+    """进度消息发送失败不应中断模型生成或工具执行。"""
+    from app.services.channels.feishu_app import send_text
+
+    if not text:
+        return False
+    try:
+        send_text(chat_id, text)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("飞书进度消息发送失败 chat=%s", chat_id, exc_info=True)
+        return False
 
 
 def _send_generated_images(chat_id: str, image_ids: list[int]) -> None:
@@ -151,6 +202,9 @@ def _get_or_create_conversation(user, chat_id: str):
 
 
 def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
+    from app.utils.scoping import user_scope
+
+    user_id = 0
     with app.app_context():
         from app.ai.executor import run_chat
         from app.services.channels.feishu_app import send_text
@@ -164,30 +218,39 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
                     logger.warning("飞书消息忽略：发送者未绑定 open_id=%s", open_id)
                     _unbound_reply(chat_id, open_id)
                     return
+                user_id = user.id
                 login_user(user)
 
                 conv = _get_or_create_conversation(user, chat_id)
 
                 image_ids: list[int] = []
                 final_text, err, ack_text = "", "", ""
+                chunks: list[str] = []
                 # Feishu group messages can prefix slash commands with bot mentions.
                 command_text = re.sub(r'^\s*(?:@_user_\d+\s*)+', '', text)
                 for ev in run_chat(conv, command_text, user):
                     if ev[0] == "ack":
-                        ack_text = ev[1]
-                        send_text(chat_id, ack_text)
+                        if _send_progress(chat_id, ev[1]):
+                            ack_text = ev[1]
+                    elif ev[0] == "delta":
+                        chunks.append(ev[1])
                     elif ev[0] == "done":
                         final_text = ev[1]
                     elif ev[0] == "error":
                         err = ev[1]
                     elif ev[0] == 'notice':
-                        send_text(chat_id, ev[1])
+                        _send_progress(chat_id, ev[1])
                     elif ev[0] == "tool" and ev[1].get("name") in ("generate_image", "edit_image"):
                         m = re.search(r'"id"\s*:\s*(\d+)', ev[1].get("result") or "")
                         if m:
-                            image_ids.append(int(m.group(1)))
+                            image_id = int(m.group(1))
+                            if image_id not in image_ids:
+                                image_ids.append(image_id)
 
-                reply = final_text or f"🤖 处理失败：{err}"
+                reply = final_text or "".join(chunks)
+                if err:
+                    failure = f"🤖 本次回复未完成：{err}"
+                    reply = f"{reply}\n\n{failure}" if reply else failure
                 reply_clean = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', reply).strip()
                 if ack_text:
                     from app.ai.prompts import strip_leading_ack
@@ -197,12 +260,13 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
                 if reply_clean:
                     from app.utils.netinfo import feishu_sdk_page_warning, reply_looks_like_page
 
-                    note = feishu_sdk_page_warning()
-                    if note and reply_looks_like_page(reply_clean):
-                        reply_clean = reply_clean + "\n\n⚠️ " + note
+                    if reply_looks_like_page(reply_clean):
+                        note = feishu_sdk_page_warning()
+                        if note:
+                            reply_clean = reply_clean + "\n\n⚠️ " + note
                     send_text(chat_id, reply_clean)
                 elif not image_ids:
-                    send_text(chat_id, "🤖 已处理。")
+                    send_text(chat_id, "🤖 未能生成有效回复，请在网页查看会话记录及操作结果后继续。")
 
                 if image_ids:
                     _send_generated_images(chat_id, image_ids)
@@ -210,6 +274,8 @@ def _process_text(app, chat_id: str, text: str, open_id: str = "") -> None:
                 logger.info("飞书消息已回复 chat=%s", chat_id)
         except Exception:  # noqa: BLE001
             logger.exception("飞书消息处理失败 chat=%s", chat_id)
+            with user_scope(user_id):
+                _send_progress(chat_id, "🤖 本次消息处理或回复发送失败，请在网页查看会话记录及操作结果后继续。")
 
 
 def _process_image(app, chat_id: str, message_id: str, image_key: str, open_id: str = "") -> None:
@@ -234,7 +300,7 @@ def _process_image(app, chat_id: str, message_id: str, image_key: str, open_id: 
                     conv = _get_or_create_conversation(user, chat_id)
                     data = download_image_resource(message_id, image_key)
                     result = receive_image(user, data, conversation=conv,
-                                           on_identify=lambda: send_text(chat_id, "🔍 正在识别图片…"))
+                                           on_identify=lambda: _send_progress(chat_id, "🔍 正在识别图片…"))
                     send_text(chat_id, result["reply"])
         except Exception as e:  # noqa: BLE001
             logger.exception("飞书图片处理失败 chat=%s", chat_id)

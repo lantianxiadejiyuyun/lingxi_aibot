@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% block title %}媒体与下载{% endblock %}
+{% block page_title %}媒体与下载{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='css/media.css', v='20261006a') }}">{% endblock %}
+{% block content %}
+<div id="media-app" data-api-base="{{ api_base }}" data-chat-url="{{ url_for('chat.index') }}">
+  <div class="page-head media-heading">
+    <div><h1>媒体与下载</h1><p class="media-muted">告诉 AI 想看的番剧，自动搜源、下载，并在失败后寻找新的资源。</p></div>
+    <button class="btn btn-ghost" type="button" id="media-refresh"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> 刷新</button>
+  </div>
+  <p id="media-worker-status" class="media-worker-status" role="status">正在连接后台服务…</p>
+  <p id="media-feedback" class="media-feedback" role="status" hidden></p>
+  <div class="media-tabs" role="tablist" aria-label="媒体管理">
+    <button type="button" class="media-tab active" role="tab" aria-selected="true" aria-controls="media-downloads-panel" id="media-downloads-tab" data-media-tab="downloads">下载任务 <span id="media-task-count" class="media-count">0</span></button>
+    <button type="button" class="media-tab" role="tab" aria-selected="false" aria-controls="media-files-panel" id="media-files-tab" data-media-tab="files">文件</button>
+    <button type="button" class="media-tab" role="tab" aria-selected="false" aria-controls="media-agents-panel" id="media-agents-tab" data-media-tab="agents">AI 执行记录</button>
+    {% if current_user.is_admin %}<button type="button" class="media-tab" role="tab" aria-selected="false" aria-controls="media-settings-panel" id="media-settings-tab" data-media-tab="settings">存储与下载器</button>{% endif %}
+  </div>
+
+  <section id="media-downloads-panel" role="tabpanel" aria-labelledby="media-downloads-tab" class="media-panel">
+    <div class="media-workspace">
+      <section class="card media-create">
+        <h2>新建下载</h2>
+        <form id="media-create-form">
+          <div class="form-group"><label for="media-title">番剧名称 *</label><input class="input" id="media-title" name="title" required maxlength="300" placeholder="输入番剧名称"></div>
+          <div class="form-group"><label for="media-aliases">别名</label><input class="input" id="media-aliases" maxlength="300" placeholder="日文、英文名或其他译名"></div>
+          <div class="form-row">
+            <div class="form-group"><label for="media-season">季度</label><input class="input" id="media-season" maxlength="30" placeholder="如：第 2 季"></div>
+            <div class="form-group"><label for="media-episode">集数</label><input class="input" id="media-episode" maxlength="80" placeholder="如：01–12 / 全集"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label for="media-quality">清晰度</label><select class="select" id="media-quality"><option value="">不限</option><option>1080p</option><option>2160p</option><option>720p</option></select></div>
+            <div class="form-group"><label for="media-subtitle">字幕</label><select class="select" id="media-subtitle"><option value="">不限</option><option>简体中文</option><option>繁体中文</option><option>简繁双语</option><option>无字幕</option></select></div>
+          </div>
+          <div class="form-group"><label for="media-storage">保存位置 *</label><select class="select" id="media-storage" required><option value="">加载存储位置…</option></select><p id="media-storage-hint" class="media-help"></p></div>
+          <details class="media-options"><summary>补充要求与重试策略</summary>
+            <div class="form-group"><label for="media-notes">补充要求</label><textarea class="textarea" id="media-notes" maxlength="2000" rows="3" placeholder="如：优先合集，保留字幕文件"></textarea></div>
+            <div class="form-row">
+              <div class="form-group"><label for="media-retries">单资源重试</label><select class="select" id="media-retries"><option value="0">不重试</option><option value="1">1 次</option><option value="2" selected>2 次</option><option value="3">3 次</option></select></div>
+              <div class="form-group"><label for="media-recoveries">AI 重新搜源</label><select class="select" id="media-recoveries"><option value="0">关闭</option><option value="1">最多 1 次</option><option value="2">最多 2 次</option><option value="3" selected>最多 3 次</option><option value="5">最多 5 次</option></select></div>
+            </div>
+            <p class="media-help">默认最多尝试 5 个不同资源。空间不足或 NAS 离线时等待存储恢复。</p>
+          </details>
+          <div class="media-actions"><button class="btn btn-ghost" type="button" id="media-search">先搜索</button><button class="btn btn-primary" type="submit" id="media-create">让 AI 下载</button></div>
+        </form>
+        <div id="media-search-results" class="media-search-results" aria-live="polite" hidden></div>
+      </section>
+
+      <section class="card media-task-card">
+        <div class="media-section-head"><h2>下载任务</h2><label class="media-filter"><span class="sr-only">筛选任务</span><select class="select" id="media-filter"><option value="all">全部</option><option value="active">进行中</option><option value="completed">已完成</option><option value="failed">失败 / 需处理</option></select></label></div>
+        <p class="media-help">最近 50 个任务 · 每 5 秒自动更新</p>
+        <div id="media-task-list" class="media-task-list"><p class="empty">正在加载任务…</p></div>
+      </section>
+    </div>
+    <section class="card media-detail" id="media-task-detail" hidden aria-label="下载任务详情">
+      <div id="media-task-summary"></div>
+      <div class="media-detail-columns"><div><h3>下载尝试</h3><div id="media-attempts"></div></div><div><h3>执行动态</h3><ol id="media-events" class="media-events"></ol></div></div>
+    </section>
+  </section>
+
+  <section id="media-files-panel" role="tabpanel" aria-labelledby="media-files-tab" class="media-panel" hidden>
+    <section class="card">
+      <div class="media-section-head"><h2>文件</h2><button type="button" class="btn btn-ghost btn-sm" id="media-files-up">上一级</button></div>
+      <div class="media-files-toolbar"><label for="media-files-storage">存储位置</label><select class="select" id="media-files-storage"><option value="">选择存储位置</option></select><button type="button" class="btn btn-ghost" id="media-probe">检查连接</button></div>
+      <p id="media-health" class="media-help" role="status"></p><p id="media-file-path" class="media-file-path">/</p>
+      <div id="media-files-list"><p class="empty">选择存储位置后浏览文件。</p></div>
+    </section>
+  </section>
+
+  <section id="media-agents-panel" role="tabpanel" aria-labelledby="media-agents-tab" class="media-panel" hidden>
+    <section class="card media-agent-create"><h2>交给 AI 后台处理</h2><form id="media-agent-form"><div class="form-group"><label for="media-agent-prompt">任务要求</label><textarea class="textarea" id="media-agent-prompt" required maxlength="12000" rows="3" placeholder="例如：搜索这部番剧的日文名称、播出季度和可靠的公开资源来源，分派子任务交叉核对。"></textarea></div><div class="media-section-head"><p class="media-help">AI 可多轮调用工具并分派子代理，执行记录会保存在这里。</p><button class="btn btn-primary" type="submit" id="media-agent-start">开始后台任务</button></div></form></section>
+    <div class="media-agent-layout"><section class="card"><h2>AI 执行记录</h2><p class="media-help">查看搜索、解析和子任务进度。</p><div id="media-agent-list"><p class="empty">正在加载…</p></div></section><section class="card" id="media-agent-detail"><p class="empty">选择一条记录查看工具调用和结果。</p></section></div>
+  </section>
+
+  {% if current_user.is_admin %}
+  <section id="media-settings-panel" role="tabpanel" aria-labelledby="media-settings-tab" class="media-panel" hidden>
+    <div class="media-settings-grid">
+      <section class="card"><h2>存储位置</h2><p class="media-help">支持本机硬盘和已经挂载的 SMB / NFS 共享。Docker 内填写容器可见的目录。</p><div id="media-storage-list"></div>
+        <details class="media-options"><summary>添加存储位置</summary><form id="media-storage-form">
+          <div class="form-group"><label for="media-storage-name">名称</label><input class="input" id="media-storage-name" required maxlength="120" placeholder="如：NAS 番剧库"></div>
+          <div class="form-group"><label for="media-storage-owner">分配给用户编号（可选）</label><input class="input" id="media-storage-owner" type="number" min="1" step="1" placeholder="留空保存到当前账号"><p class="media-help">为其他账号分配时，请使用独立目录；该账号登录后即可使用。</p></div>
+          <div class="form-group"><label for="media-storage-kind">类型</label><select class="select" id="media-storage-kind"><option value="local">本机硬盘</option><option value="mount">已挂载 NAS（SMB / NFS）</option></select></div>
+          <div class="form-group"><label for="media-storage-root">灵犀可见的根目录</label><input class="input" id="media-storage-root" required maxlength="1024" placeholder="如：/media/anime" autocomplete="off"></div>
+          <div class="form-group"><label for="media-storage-download-root">下载器可见的同一目录</label><input class="input" id="media-storage-download-root" maxlength="1024" placeholder="如：/downloads（留空表示相同路径）" autocomplete="off"></div>
+          <p class="media-help">两个路径必须指向同一个物理目录。系统会检测挂载与剩余空间，并为每次下载分开保存文件。</p>
+          <button class="btn btn-primary" type="submit">验证并添加</button>
+        </form></details>
+      </section>
+      <section class="card"><h2>下载器与搜索源</h2><p class="media-help">qBittorrent 负责磁力和种子，aria2 负责 HTTP / HTTPS。账号、密码和密钥留空时保留原值。</p>
+        <form id="media-config-form" autocomplete="off">
+          <div class="form-group"><label for="media-config-owner">为用户编号配置（可选）</label><input class="input" id="media-config-owner" type="number" min="1" step="1" placeholder="留空配置当前账号"><p class="media-help">为其他账号填写其下载器连接；未填写的凭据保留该账号原值。</p></div>
+          <fieldset class="media-fieldset"><legend>qBittorrent</legend><div class="form-group"><label for="media-qb-url">WebUI 地址</label><input class="input" id="media-qb-url" type="url" placeholder="http://qbittorrent:8080" autocomplete="off"></div><div class="form-row"><div class="form-group"><label for="media-qb-user">用户名</label><input class="input" id="media-qb-user" autocomplete="off" placeholder="留空保留"></div><div class="form-group"><label for="media-qb-password">密码</label><input class="input" id="media-qb-password" type="password" autocomplete="new-password" placeholder="留空保留"></div></div><p class="media-help" id="media-qb-status"></p></fieldset>
+          <fieldset class="media-fieldset"><legend>aria2</legend><div class="form-group"><label for="media-aria-url">JSON-RPC 地址</label><input class="input" id="media-aria-url" type="url" placeholder="http://aria2:6800/jsonrpc" autocomplete="off"></div><div class="form-group"><label for="media-aria-secret">RPC 密钥</label><input class="input" id="media-aria-secret" type="password" autocomplete="new-password" placeholder="留空保留"></div><p class="media-help" id="media-aria-status"></p></fieldset>
+          <fieldset class="media-fieldset"><legend>搜索源</legend><p id="media-sources-status" class="media-help"></p><label class="media-check"><input type="checkbox" id="media-edit-sources"> 修改搜索源</label><div id="media-source-editor" hidden><div class="form-group"><label for="media-rss">RSS 订阅（每行一个：名称 | URL）</label><textarea class="textarea" id="media-rss" rows="4" placeholder="我的订阅 | https://example.com/feed.xml" autocomplete="off"></textarea></div><label class="media-check"><input type="checkbox" id="media-web-search" checked> 同时使用设置中的联网搜索</label><p class="media-help">保存后替换全部搜索源。原订阅地址不回显；留空 RSS 可仅使用联网搜索。</p></div></fieldset>
+          <button class="btn btn-primary" type="submit">保存配置</button>
+        </form>
+      </section>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/media.js', v='20261006a') }}"></script>{% endblock %}

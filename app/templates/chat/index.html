@@ -2,7 +2,7 @@
 {% block title %}AI 助手{% endblock %}
 {% block page_title %}AI 助手{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/chat-controls.css', v='20261001a') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chat-controls.css', v='20261005a') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/profiles.css', v='20261002a') }}">
 {% endblock %}
 {% block content %}
@@ -64,7 +64,7 @@
       <div class="chat-command-menu" id="chat-command-menu" role="listbox" aria-label="聊天命令" hidden></div>
       <div class="chat-image-status" id="chat-image-status" role="status" hidden></div>
       <div class="chat-input-row">
-      <input class="input" id="chat-input" type="text" placeholder="输入消息，或 / 查看命令" autocomplete="off" aria-controls="chat-command-menu" aria-autocomplete="list" aria-expanded="false">
+      <textarea class="input" id="chat-input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行" aria-label="消息，Enter 发送，Shift+Enter 换行" autocomplete="off" aria-controls="chat-command-menu" aria-autocomplete="list" aria-expanded="false"></textarea>
       <input type="file" id="chat-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
       <button class="btn btn-ghost" id="btn-upload-image" type="button" title="上传图片（PNG、JPEG、WebP、GIF，最大 8 MiB）" aria-label="上传图片"><i class="bi bi-image"></i><span class="chat-upload-label"> 上传图片</span></button>
       <button class="btn btn-ghost" id="btn-mic" type="button" title="语音输入（浏览器）"><i class="bi bi-mic"></i></button>
@@ -119,13 +119,33 @@
 
   var currentConvId = null;
   var sending = false;
+  var loadingHistory = false;
+  var changingConversation = false;
+  var historyRequest = 0;
+  var listRequest = 0;
+  var followOutput = true;
   var controlState = null;
   var controlsRequest = 0;
   var menuOptions = [];
   var menuIndex = -1;
   var effortLabels = { "default": "默认", off: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
 
-  function scrollBottom() { msgList.scrollTop = msgList.scrollHeight; }
+  function scrollBottom(force) {
+    if (force) followOutput = true;
+    if (followOutput) msgList.scrollTop = msgList.scrollHeight;
+  }
+
+  msgList.addEventListener("scroll", function () {
+    followOutput = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight < 64;
+  }, { passive: true });
+  msgList.addEventListener("load", function (event) {
+    if (event.target.tagName === "IMG") scrollBottom();
+  }, true);
+
+  function resizeInput() {
+    inputEl.style.height = "auto";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
+  }
 
   /* ---------- 会话模型与上下文 ---------- */
   function setControlsOpen(open) {
@@ -135,8 +155,14 @@
   }
 
   function updateControlAvailability() {
-    var disabled = sending || !controlState;
-    uploadButton.disabled = sending;
+    var busy = sending || loadingHistory || changingConversation;
+    var disabled = busy || !controlState;
+    btnSend.disabled = busy;
+    btnSend.textContent = sending ? "回复中…" : "发送";
+    btnNew.disabled = sending || changingConversation;
+    document.getElementById("btn-clear-all").disabled = sending || changingConversation;
+    uploadButton.disabled = busy;
+    msgList.setAttribute("aria-busy", String(sending || loadingHistory));
     modelSelect.disabled = disabled;
     profileFields.forEach(function (field) { field.element.disabled = disabled; });
     effortSelect.disabled = disabled;
@@ -296,6 +322,7 @@
   function chooseCommand(index) {
     if (!menuOptions[index]) return;
     inputEl.value = menuOptions[index].command;
+    resizeInput();
     inputEl.focus();
     if (/\s$/.test(inputEl.value)) renderCommandMenu();
     else hideCommandMenu();
@@ -310,7 +337,7 @@
     });
   }
 
-  inputEl.addEventListener("input", renderCommandMenu);
+  inputEl.addEventListener("input", function () { resizeInput(); renderCommandMenu(); });
   document.addEventListener("click", function (event) {
     if (!event.target.closest(".chat-composer")) hideCommandMenu();
     if (!event.target.closest(".chat-control-panel, .chat-control-bar")) setControlsOpen(false);
@@ -318,18 +345,23 @@
 
   /* ---------- 会话列表 ---------- */
   function loadConversations() {
+    var sequence = ++listRequest;
     return window.api.get("/chat/api/conversations").then(function (res) {
+      if (sequence !== listRequest) return;
       if (!res || !res.ok) return;
       convList.innerHTML = "";
       // 后端按 updated_at DESC（最新在前）返回；appendConvItem 用前插，
       // 因此先倒序再遍历，保证界面最新会话在顶部
       (res.data || []).slice().reverse().forEach(function (c) { appendConvItem(c.id, c.title); });
-      if (!currentConvId && res.data && res.data.length) {
-        selectConversation(res.data[0].id);
+      refreshActive();
+      if (!currentConvId && !sending && !changingConversation && res.data && res.data.length) {
+        var linkedId = Number(new URLSearchParams(window.location.search).get("conversation"));
+        var linked = res.data.find(function (item) { return item.id === linkedId; });
+        selectConversation(linked ? linked.id : res.data[0].id);
       } else if (!currentConvId) {
         refreshControls();
       }
-    });
+    }).catch(function () { window.toast("会话列表加载失败，请刷新重试", "error"); });
   }
 
   function appendConvItem(id, title) {
@@ -350,22 +382,31 @@
   }
 
   function selectConversation(id) {
-    if (sending) return;
+    if (sending || changingConversation) return;
+    var sequence = ++historyRequest;
+    loadingHistory = true;
     currentConvId = id;
     refreshActive();
     refreshControls();
     setControlsOpen(false);
     msgList.innerHTML = '<p class="empty">加载中…</p>';
     window.api.get("/chat/api/messages/" + id).then(function (res) {
-      if (String(currentConvId) !== String(id)) return;
+      if (sequence !== historyRequest || String(currentConvId) !== String(id)) return;
       if (!res || !res.ok) { msgList.innerHTML = '<p class="empty">加载失败</p>'; return; }
       renderMessages(res.data || []);
+    }).catch(function () {
+      if (sequence === historyRequest) msgList.innerHTML = '<p class="empty">消息加载失败，请重新选择会话重试。</p>';
+    }).finally(function () {
+      if (sequence !== historyRequest) return;
+      loadingHistory = false;
+      updateControlAvailability();
     });
   }
 
   /* ---------- 消息渲染 ---------- */
   function renderMessages(rows) {
     msgList.innerHTML = "";
+    var fragment = document.createDocumentFragment();
     // 工具行在库中位于其所属 assistant 行之前：先把行转成渲染计划，
     // 用后续 assistant 的 tool_calls 为前面的 tool 行补工具名。
     var plan = [];
@@ -398,18 +439,19 @@
     }
     plan.forEach(function (p) {
       if (p.type === "tool") {
-        appendToolChip(p.name, p.content, null);
+        appendToolChip(p.name, p.content, null, fragment);
       } else if (p.type === "assistant") {
         // 历史消息同样必须转义：assistant 走 mdLite（内部先 escape）、user 只转义
-        appendBubble(p.type, window.mdLite(p.content));
+        appendBubble(p.type, window.mdLite(p.content), fragment);
       } else {
-        appendBubble(p.type, window.escapeHtml(p.content));
+        appendBubble(p.type, window.escapeHtml(p.content), fragment);
       }
     });
-    scrollBottom();
+    msgList.appendChild(fragment);
+    scrollBottom(true);
   }
 
-  function appendBubble(role, html) {
+  function appendBubble(role, html, target, pending) {
     var avatar = role === "user" ? '<i class="bi bi-person-fill"></i>' : '<i class="bi bi-robot"></i>';
     var cls = role === "user" ? "user-a" : "bot-a";
     var msg = document.createElement("div");
@@ -417,9 +459,9 @@
     msg.innerHTML = '<div class="avatar ' + cls + '">' + avatar + '</div><div class="msg-bubble"></div>';
     var bubble = msg.querySelector(".msg-bubble");
     bubble.innerHTML = html;
-    if (role === "assistant") attachSpeak(bubble);
-    msgList.appendChild(msg);
-    scrollBottom();
+    if (role === "assistant" && !pending) attachSpeak(bubble);
+    (target || msgList).appendChild(msg);
+    if (!target) scrollBottom();
     return msg;
   }
 
@@ -473,6 +515,8 @@
       rec.onresult = function (e) {
         var t = e.results && e.results[0] && e.results[0][0] ? e.results[0][0].transcript : "";
         if (t) inputEl.value = (inputEl.value ? inputEl.value + " " : "") + t;
+        resizeInput();
+        renderCommandMenu();
         inputEl.focus();
       };
       rec.onerror = function (e) { window.toast("语音识别失败：" + (e.error || "未知"), "error"); };
@@ -481,21 +525,21 @@
     try { window.__sttRec.start(); } catch (e) { /* 已开始则忽略 */ }
   }
 
-  function appendToolChip(name, result, ok) {
+  function appendToolChip(name, result, ok, target, before) {
     var chip = document.createElement("div");
     chip.className = "tool-row";
     var text = String(result || "");
     var isErr = ok === false || (ok == null && /"error"|error/.test(text));
     var cls = isErr ? "tool-chip err" : "tool-chip ok";
     chip.innerHTML = '<span class="' + cls + '"><i class="bi bi-tools"></i> ' + window.escapeHtml((name || "工具") + "：" + text.slice(0, 60)) + '</span>';
-    msgList.appendChild(chip);
-    scrollBottom();
+    (target || msgList).insertBefore(chip, before || null);
+    if (!target) scrollBottom();
     return chip;
   }
 
   /* ---------- 发送 ---------- */
   function sendImage(file) {
-    if (!file || sending) return;
+    if (!file || sending || loadingHistory || changingConversation) return;
     var prompt = inputEl.value.trim();
     if (prompt.length > 4000) {
       window.toast("读图问题最多 4000 字，请缩短后重试", "error");
@@ -510,6 +554,7 @@
       return;
     }
     sending = true;
+    ++listRequest;
     btnSend.disabled = true;
     updateControlAvailability();
     hideCommandMenu();
@@ -535,6 +580,7 @@
       btnSend.disabled = false;
       imageStatus.hidden = true;
       if (data.recognized !== false && inputEl.value.trim() === prompt) inputEl.value = "";
+      resizeInput();
       if (data.conversation_id != null) {
         currentConvId = data.conversation_id;
         loadConversations();
@@ -552,7 +598,7 @@
     });
   }
 
-  uploadButton.addEventListener("click", function () { if (!sending) imageFile.click(); });
+  uploadButton.addEventListener("click", function () { if (!sending && !loadingHistory && !changingConversation) imageFile.click(); });
   imageFile.addEventListener("change", function () {
     var file = imageFile.files && imageFile.files[0];
     imageFile.value = "";
@@ -562,49 +608,91 @@
   function sendMessage(command) {
     var isCommand = typeof command === "string";
     var text = isCommand ? command : inputEl.value.trim();
-    if (!text || sending) return;
+    if (!text || sending || loadingHistory || changingConversation) return;
     sending = true;
-    btnSend.disabled = true;
+    ++historyRequest;
+    ++listRequest;
     updateControlAvailability();
     hideCommandMenu();
     if (!isCommand) inputEl.value = "";   // 控制面板操作保留尚未发送的草稿
+    resizeInput();
     inputEl.focus();
 
     var doSend = function (convId) {
+      var empty = msgList.querySelector(".empty");
+      if (empty) empty.remove();
+      scrollBottom(true);
       appendBubble("user", window.escapeHtml(text));
       var assistantMsg = appendBubble("assistant", '<span class="typing">' +
-        '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span>');
+        '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span>', null, true);
       var bubble = assistantMsg.querySelector(".msg-bubble");
       var acc = "";
-      var finalContent = "";
-      var hasError = false;
+      var finalContent = null;
+      var errorMessage = "";
+      var accepted = false;
+      var renderTimer = null;
+      var finished = false;
+
+      function renderReply() {
+        renderTimer = null;
+        bubble.innerHTML = window.mdLite(finalContent === null ? acc : finalContent);
+        scrollBottom();
+      }
+
+      function addDelta(chunk) {
+        if (finished) return;
+        accepted = true;
+        acc += chunk;
+        // 一个网络块可能带来几十个 token，将 Markdown 与布局合并到一次更新。
+        if (renderTimer === null) renderTimer = setTimeout(renderReply, 60);
+      }
 
       function finish() {
+        if (finished) return;
+        finished = true;
+        if (renderTimer !== null) clearTimeout(renderTimer);
+        renderReply();
+        if (finalContent || acc) attachSpeak(bubble);
+        if (errorMessage) {
+          if (!accepted && !isCommand && !inputEl.value) {
+            inputEl.value = text;
+            resizeInput();
+          }
+          var note = document.createElement("div");
+          note.className = "chat-reply-error";
+          note.setAttribute("role", "status");
+          note.textContent = (acc ? "回复未完成：" : "未能完成回复：") + errorMessage;
+          bubble.appendChild(note);
+          window.toast(errorMessage, "error");
+        }
+        if (!finalContent && !acc && !errorMessage) bubble.textContent = "本次没有返回回复内容，请重试。";
+        scrollBottom();
         sending = false;
-        btnSend.disabled = false;
-        inputEl.disabled = false;
         refreshControls();
+        var item = convList.querySelector('[data-conv-id="' + convId + '"]');
+        if (item) convList.insertBefore(item, convList.firstChild);
       }
 
       window.streamSSE("/chat/api/send", { conversation_id: convId, message: text }, {
-        onDelta: function (t) {
-          acc += t;
-          bubble.innerHTML = window.mdLite(acc);
-          scrollBottom();
-        },
+        onDelta: addDelta,
         onEvent: function (evt, payload) {
-          // 后端所有事件都带 event: 行，delta 也走这里：必须累积渲染，
-          // 否则流式内容丢失、onDone 还会把最终回答清空
           if (evt === "delta") {
-            acc += payload;
-            bubble.innerHTML = window.mdLite(acc);
-            scrollBottom();
+            addDelta(payload);
             return;
           }
-          if (evt === "tool") {
+          if (evt === "start") {
+            accepted = true;
+            var start;
+            try { start = JSON.parse(payload); } catch (e) { return; }
+            if (start.conversation_id != null) {
+              currentConvId = convId = start.conversation_id;
+              refreshActive();
+            }
+          } else if (evt === "tool") {
+            accepted = true;
             var t = {};
             try { t = JSON.parse(payload); } catch (e) {}
-            appendToolChip(t.name || "工具", t.result || "", t.ok);
+            appendToolChip(t.name || "工具", t.result || "", t.ok, null, assistantMsg);
           } else if (evt === "title") {
             var first = convList.querySelector('[data-conv-id="' + convId + '"]');
             if (first) {
@@ -612,47 +700,38 @@
               first.querySelector(".conv-title").textContent = payload;
             }
           } else if (evt === "error") {
-            hasError = true;
-            window.toast(payload || "出错了", "error");
+            errorMessage = payload || "出错了，请重试";
           } else if (evt === "done") {
-            if (hasError) {
-              assistantMsg.remove();
-            } else if (payload) {
-              finalContent = payload;
-              bubble.innerHTML = window.mdLite(payload);
-              attachSpeak(bubble);
-              scrollBottom();
-            }
+            // 错误完成标记通常为空，保留已展示的部分回复。
+            if (payload || !errorMessage) finalContent = payload || acc;
           }
         },
-        onDone: function () {
-          if (hasError) { assistantMsg.remove(); }
-          else if (finalContent) { bubble.innerHTML = window.mdLite(finalContent); attachSpeak(bubble); }
-          else if (acc) { bubble.innerHTML = window.mdLite(acc); attachSpeak(bubble); }
-          else { bubble.innerHTML = ""; }
-          finish();
-        }
+        onDone: finish
       }).catch(function (err) {
-        window.toast("网络错误：" + (err && err.message ? err.message : "请重试"), "error");
-        assistantMsg.remove();
+        errorMessage = errorMessage || (err && err.message ? err.message : "网络异常，请重试");
         finish();
       });
     };
 
+    function creationFailed(message) {
+      sending = false;
+      if (!isCommand && !inputEl.value) inputEl.value = text;
+      resizeInput();
+      updateControlAvailability();
+      window.toast(message, "error");
+    }
+
     if (currentConvId === null) {
       // 没有选中会话：先新建
       window.api.post("/chat/api/new", {}).then(function (res) {
-        if (!res || !res.ok) { window.toast("创建会话失败", "error"); sending = false; btnSend.disabled = false; updateControlAvailability(); return; }
+        if (!res || !res.ok || !res.data) { creationFailed("创建会话失败，消息已保留，请重试"); return; }
         currentConvId = res.data.id;
         msgList.innerHTML = "";
         appendConvItem(res.data.id, "新对话");
         refreshActive();
         doSend(res.data.id);
       }).catch(function () {
-        window.toast("网络错误，请重试", "error");
-        sending = false;
-        btnSend.disabled = false;
-        updateControlAvailability();
+        creationFailed("网络错误，消息已保留，请重试");
       });
     } else {
       doSend(currentConvId);
@@ -660,24 +739,43 @@
   }
 
   /* ---------- 删除会话 ---------- */
+  function beginConversationChange() {
+    changingConversation = true;
+    ++listRequest;
+    updateControlAvailability();
+  }
+
+  function endConversationChange() {
+    changingConversation = false;
+    updateControlAvailability();
+  }
+
   convList.addEventListener("click", function (e) {
-    if (sending) return;
+    if (sending || changingConversation) return;
     var del = e.target.closest("[data-conv-del]");
     if (del) {
       e.stopPropagation();
       var id = del.getAttribute("data-conv-del");
       if (!window.confirm("确定删除该会话吗？")) return;
+      beginConversationChange();
       window.api.post("/chat/api/delete/" + id, {}).then(function (res) {
+        endConversationChange();
         if (res && res.ok) {
           window.toast("已删除", "success");
           if (String(currentConvId) === String(id)) {
+            ++historyRequest;
+            loadingHistory = false;
             currentConvId = null;
             msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
+            refreshControls();
           }
           loadConversations();
         } else {
           window.toast((res && res.error) || "删除失败", "error");
         }
+      }).catch(function () {
+        endConversationChange();
+        window.toast("删除失败，请重试", "error");
       });
       return;
     }
@@ -687,18 +785,24 @@
 
   /* ---------- 新建会话 ---------- */
   btnNew.addEventListener("click", function () {
-    if (sending) return;
+    if (sending || changingConversation) return;
+    var draft = inputEl.value;
+    beginConversationChange();
     window.api.post("/chat/api/new", {}).then(function (res) {
+      endConversationChange();
       if (!res || !res.ok) { window.toast("创建会话失败", "error"); return; }
+      ++historyRequest;
+      loadingHistory = false;
       currentConvId = res.data.id;
       msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
       appendConvItem(res.data.id, "新对话");
       refreshActive();
       refreshControls();
       setControlsOpen(false);
-      inputEl.value = "";
+      if (inputEl.value === draft) inputEl.value = "";
+      resizeInput();
       inputEl.focus();
-    }).catch(function () { window.toast("网络错误，请重试", "error"); });
+    }).catch(function () { endConversationChange(); window.toast("网络错误，请重试", "error"); });
   });
 
   btnSend.addEventListener("click", sendMessage);
@@ -706,32 +810,38 @@
 
   /* ---------- 清空所有对话 ---------- */
   document.getElementById("btn-clear-all").addEventListener("click", function () {
-    if (sending) return;
+    if (sending || changingConversation) return;
     if (!window.confirm("确定清空所有对话吗？将删除全部会话与消息（含早安简报/周报等系统会话），不可恢复。")) return;
+    beginConversationChange();
     window.api.post("/chat/api/clear-all", {}).then(function (r) {
+      endConversationChange();
       if (r && r.ok) {
         window.toast("已清空 " + (r.data && r.data.deleted || 0) + " 个会话", "success");
+        ++historyRequest;
+        loadingHistory = false;
         currentConvId = null;
         msgList.innerHTML = '<p class="empty">开始和 AI 对话吧，例如：“帮我看看今天有什么安排”</p>';
+        refreshControls();
         loadConversations();
       } else {
         window.toast((r && r.error) || "清空失败", "error");
       }
     }).catch(function () {
+      endConversationChange();
       window.toast("网络错误，请重试", "error");
     });
   });
 
   inputEl.addEventListener("keydown", function (e) {
-    if (e.isComposing) return;
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Escape") { hideCommandMenu(); setControlsOpen(false); return; }
     if (!commandMenu.hidden && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault(); moveCommandSelection(e.key === "ArrowDown" ? 1 : -1); return;
     }
-    if (!commandMenu.hidden && menuIndex >= 0 && (e.key === "Enter" || e.key === "Tab")) {
+    if (!commandMenu.hidden && menuIndex >= 0 && !e.shiftKey && (e.key === "Enter" || e.key === "Tab")) {
       e.preventDefault(); chooseCommand(menuIndex); return;
     }
-    if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
 
   /* ---------- 初始化 ---------- */

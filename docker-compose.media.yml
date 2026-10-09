@@ -1,0 +1,123 @@
+# Add after your existing Compose file; keep the existing project name (-p).
+# Required: MEDIA_ROOT points to an existing local directory / mounted NAS share.
+# Optional profiles: media-aria2, media-qb. See docs/番剧下载与文件服务.md.
+services:
+  app:
+    image: ${LINGXI_IMAGE:-lingxi-aibot:media}
+    volumes:
+      - type: bind
+        source: ${MEDIA_ROOT:?请先设置已存在的硬盘或NAS目录 MEDIA_ROOT}
+        target: /media
+        bind:
+          create_host_path: false
+    # Covers both docker-compose.yml (aibot) and quickstart (default).
+    networks: [default, aibot, media]
+
+  media-worker:
+    image: ${LINGXI_IMAGE:-lingxi-aibot:media}
+    build: .
+    command: [python, -m, flask, media-worker, --concurrency, "3"]
+    init: true
+    environment:
+      FLASK_APP: wsgi:app
+      FLASK_SKIP_DOTENV: "1"
+      AIBOT_ENV_FILE: /app/data/.env
+      SCHEDULER_ENABLED: "0"
+      PAGE_PORT: "0"
+      TZ: Asia/Shanghai
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MEDIA_ROOT:?请先设置已存在的硬盘或NAS目录 MEDIA_ROOT}
+        target: /media
+        bind:
+          create_host_path: false
+    networks: [default, aibot, media]
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+  aria2:
+    profiles: [media-aria2]
+    image: lingxi-media-downloaders:debian13
+    build:
+      context: ./docker/media-downloaders
+    command: [aria2]
+    init: true
+    # NET_ADMIN is used only by the entrypoint to install container-local rules.
+    # setpriv drops all capabilities before starting the uid-1000 downloader.
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETPCAP, SETUID, SETGID, CHOWN, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp, /run]
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "1"
+    volumes:
+      - aria2_config:/config
+      - type: bind
+        source: ${MEDIA_ROOT:?请先设置已存在的硬盘或NAS目录 MEDIA_ROOT}
+        target: /media
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MEDIA_ARIA2_SECRET_FILE:-./data/media/aria2-secret}
+        target: /run/secrets/aria2_secret
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [media]
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  qbittorrent:
+    profiles: [media-qb]
+    image: lingxi-media-downloaders:debian13
+    build:
+      context: ./docker/media-downloaders
+    command: [qbittorrent]
+    init: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETPCAP, SETUID, SETGID, CHOWN, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp, /run]
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "1"
+    volumes:
+      - qbittorrent_config:/config
+      - type: bind
+        source: ${MEDIA_ROOT:?请先设置已存在的硬盘或NAS目录 MEDIA_ROOT}
+        target: /media
+        bind:
+          create_host_path: false
+    # Local-only admin UI. Use SSH forwarding when administering a remote NAS.
+    ports:
+      - "127.0.0.1:${MEDIA_QB_ADMIN_PORT:-18080}:8080"
+    networks: [media]
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+networks:
+  default:
+  aibot:
+  media:
+    enable_ipv6: false
+
+volumes:
+  aria2_config:
+  qbittorrent_config:

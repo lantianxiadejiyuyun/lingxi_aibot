@@ -633,6 +633,7 @@ class LLMClient:
         if cfg["protocol"] == PROTOCOL_ANTHROPIC:
             yield from self._anthropic_stream(cfg, messages, tools)
             return
+        stream = None
         try:
             stream = self._client_for(cfg).chat.completions.create(
                 model=cfg["model"],
@@ -650,9 +651,9 @@ class LLMClient:
                 delta = _attr(choices[0], "delta")
                 if delta is None:
                     continue
-                content = _attr(delta, "content")
+                content = _text_content(_attr(delta, "content"))
                 if content:
-                    yield {"type": "delta", "text": str(content)}
+                    yield {"type": "delta", "text": content}
                 reasoning = _attr(delta, "reasoning_content")
                 if reasoning:
                     reasoning_parts.append(str(reasoning))
@@ -685,6 +686,15 @@ class LLMClient:
             raise
         except Exception as e:  # noqa: BLE001
             raise LLMError(str(e)[:300]) from e
+        finally:
+            # Closing the generator on disconnect must release the HTTP stream
+            # as well; waiting for SDK garbage collection leaves requests open.
+            close = getattr(stream, "close", None)
+            if close:
+                try:
+                    close()
+                except Exception:  # noqa: BLE001 — cleanup must not hide a provider error
+                    logger.warning("关闭模型响应流失败")
 
     def chat(self, messages, tools=None):
         """非流式对话，返回 (content_str, tool_calls_list)。"""
@@ -792,14 +802,20 @@ class LLMClient:
             )
         except requests.RequestException as e:
             raise LLMError(f"Anthropic 请求失败: {str(e)[:300]}") from e
-        if resp.status_code >= 400:
-            raise LLMError(_http_error_message(resp))
-
         parser = _AnthropicAccumulator()
         try:
-            for raw in resp.iter_lines(decode_unicode=True):
+            if resp.status_code >= 400:
+                raise LLMError(_http_error_message(resp))
+            # SSE is UTF-8 even when the gateway omits charset; requests otherwise
+            # defaults text/event-stream to Latin-1 and corrupts Chinese deltas.
+            resp.encoding = "utf-8"
+            # requests buffers 512 bytes by default, which delays small SSE
+            # deltas. Read each available line without waiting for a batch.
+            for raw in resp.iter_lines(chunk_size=1, decode_unicode=True):
                 if not raw:
                     continue
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
                 line = raw.strip()
                 if line.startswith("event:"):
                     continue

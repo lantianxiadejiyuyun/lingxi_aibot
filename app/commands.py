@@ -8,6 +8,58 @@ from flask.cli import with_appcontext
 from app.extensions import db
 
 
+@click.command("media-worker")
+@click.option("--once", is_flag=True, help="处理一次队列后退出")
+@click.option("--concurrency", default=3, type=click.IntRange(1, 8), help="并行处理任务数")
+@with_appcontext
+def media_worker(once, concurrency):
+    """运行持久下载任务队列；复用应用配置，不启动飞书或定时调度器。"""
+    from concurrent.futures import ThreadPoolExecutor
+    import signal
+    import threading
+    from app.services.media_service import process_one, deliver_notifications
+    from app.services.native_agent_service import process_queued_agent
+
+    app = current_app._get_current_object()
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+
+    def work():
+        while not stop.is_set():
+            with app.app_context():
+                try:
+                    progressed = process_one()
+                    if not progressed:
+                        progressed = process_queued_agent()
+                except Exception as exc:
+                    db.session.rollback()
+                    app.logger.error("下载 worker 暂不可用：%s", type(exc).__name__)
+                    progressed = False
+            if once:
+                return
+            if not progressed:
+                stop.wait(2)
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="media-worker") as executor:
+        futures = [executor.submit(work) for _ in range(concurrency)]
+        while not stop.is_set():
+            with app.app_context():
+                try:
+                    from app.services.settings_service import set_setting
+                    from app.utils.timeutil import utcnow
+                    set_setting("media_worker_heartbeat", utcnow().isoformat(), user_id=0)
+                    deliver_notifications()
+                except Exception as exc:
+                    db.session.rollback()
+                    app.logger.error("下载通知暂不可用：%s", type(exc).__name__)
+            if once:
+                for future in futures:
+                    future.result()
+                break
+            stop.wait(5)
+
+
 @click.command("init-db")
 @with_appcontext
 def init_db():

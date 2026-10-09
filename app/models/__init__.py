@@ -15,9 +15,14 @@ from app.models.embedding import Embedding
 from app.models.fitness import FitnessRecord
 from app.models.travel import TripPlan
 from app.models.expense import ExpenseRecord
+from app.models.storage import StorageLocation
+from app.models.media import DownloadTask, DownloadAttempt, ResourceCandidate, MediaEvent
+from app.models.agent_run import AgentRun, AgentStep
 
 __all__ = [
     "User", "Event", "Task", "Note", "Conversation", "Message",
     "Notification", "ScheduledJob", "Setting", "WebPage", "ImageAsset",
     "Skill", "Memory", "Embedding", "FitnessRecord", "TripPlan", "ExpenseRecord",
+    "StorageLocation", "DownloadTask", "DownloadAttempt", "ResourceCandidate", "MediaEvent",
+    "AgentRun", "AgentStep",
 ]

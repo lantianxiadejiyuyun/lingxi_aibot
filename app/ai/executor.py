@@ -16,7 +16,7 @@ import logging
 from flask import current_app, g, has_request_context
 
 from app.ai import registry
-from app.ai.llm import LLMClient
+from app.ai.llm import LLMClient, LLMError
 from app.ai.memory import build_messages
 from app.ai.prompts import ack_received, compose_reply
 from app.extensions import db
@@ -56,6 +56,11 @@ def _build_runtime_messages(conversation, user):
 
 
 def _run_chat(conversation, user_text, user):
+    ack = ""
+    response_parts: list[str] = []
+    tool_calls_json: list[dict] = []
+    user_saved = False
+    completed = False
     try:
         from app.services.chat_command_service import handle_command
         from app.services.context_service import maybe_compact_conversation
@@ -67,10 +72,13 @@ def _run_chat(conversation, user_text, user):
             db.session.add(Message(role='user', content=user_text, conversation_id=conversation.id))
             db.session.add(Message(role='assistant', content=command_reply, conversation_id=conversation.id))
             conversation.updated_at = utcnow()
-            if conversation.title == '新对话':
+            needs_title = conversation.title == '新对话'
+            if needs_title:
                 conversation.title = '会话控制'
-                yield ('title', conversation.title)
             db.session.commit()
+            completed = True
+            if needs_title:
+                yield ('title', conversation.title)
             yield ('delta', command_reply)
             yield ('done', command_reply)
             return
@@ -85,6 +93,7 @@ def _run_chat(conversation, user_text, user):
         user_msg = Message(role="user", content=user_text, conversation_id=conversation.id)
         db.session.add(user_msg)
         db.session.commit()
+        user_saved = True
 
         # 先回立即确认（用户可在人设里自定义）；关闭则跳过
         ack = ack_received(user_text, user=user)
@@ -110,8 +119,6 @@ def _run_chat(conversation, user_text, user):
 
         # 4) 多轮工具调用循环
         max_rounds = current_app.config.get("LLM_MAX_TOOL_ROUNDS", 8)
-        final_content = ""
-        tool_calls_json: list[dict] = []
         continuation_records: list[dict] = []
 
         for _round in range(max_rounds):
@@ -122,17 +129,28 @@ def _run_chat(conversation, user_text, user):
             # Re-read after every tool round: switching models can reduce the
             # available window, and tool results also consume input tokens.
             assert_context_fits(messages, tools, llm._read_config())
-            for ev in llm.chat_stream(messages, tools=tools):
-                if ev["type"] == "delta":
-                    content_parts.append(ev["text"])
-                    yield ("delta", ev["text"])
-                elif ev["type"] == "tool_calls":
-                    tool_calls = ev["calls"]
-                elif ev['type'] == 'assistant_meta':
-                    assistant_meta.update(ev.get('data') or {})
+            stream = llm.chat_stream(messages, tools=tools)
+            try:
+                for ev in stream:
+                    if ev["type"] == "delta" and ev.get("text"):
+                        # A tool round is a new paragraph. Preserve every piece
+                        # already shown so done/history never erase earlier text.
+                        if not content_parts and response_parts:
+                            response_parts.append("\n\n")
+                            yield ("delta", "\n\n")
+                        content_parts.append(ev["text"])
+                        response_parts.append(ev["text"])
+                        yield ("delta", ev["text"])
+                    elif ev["type"] == "tool_calls":
+                        tool_calls = ev["calls"]
+                    elif ev['type'] == 'assistant_meta':
+                        assistant_meta.update(ev.get('data') or {})
+            finally:
+                close = getattr(stream, "close", None)
+                if close:
+                    close()
 
             content = "".join(content_parts)
-            final_content = content
             if content:
                 continuation_records.append({'role': 'assistant', 'content': content})
 
@@ -145,12 +163,15 @@ def _run_chat(conversation, user_text, user):
             messages.append(assistant_msg)
 
             if not tool_calls:
+                if not content.strip():
+                    raise LLMError("模型未返回有效回复，请稍后重试或切换模型")
                 break
 
             # 执行工具，结果回灌 messages 继续下一轮
             rebuild_context = False
             for call in tool_calls:
                 parsed_result = None
+                control_notice = None
                 try:
                     arguments = json.loads(call.get("arguments") or "{}")
                     if not isinstance(arguments, dict):
@@ -174,14 +195,8 @@ def _run_chat(conversation, user_text, user):
                 })
                 if ok and isinstance(parsed_result, dict) and parsed_result.get('changed') and call.get('name') in ('switch_chat_model', 'switch_chat_profile', 'compact_chat_context'):
                     rebuild_context = True
-                    yield ('notice', parsed_result.get('message', '会话配置已更新'))
+                    control_notice = parsed_result.get('message', '会话配置已更新')
                 tool_calls_json.append(call)
-                yield ("tool", {
-                    "name": call.get("name", ""),
-                    "arguments": call.get("arguments", ""),
-                    "result": result_str[:200],
-                    "ok": ok,
-                })
                 # 工具结果落库（历史记录展示用；不回灌 LLM 上下文）
                 db.session.add(Message(
                     role="tool",
@@ -192,6 +207,17 @@ def _run_chat(conversation, user_text, user):
                     "role": "tool",
                     "content": result_str,
                     "tool_call_id": call.get("id", ""),
+                })
+                # Persist the result before yielding: a disconnected client may
+                # stop consuming immediately after the tool has taken effect.
+                db.session.commit()
+                if control_notice:
+                    yield ('notice', control_notice)
+                yield ("tool", {
+                    "name": call.get("name", ""),
+                    "arguments": call.get("arguments", ""),
+                    "result": result_str[:200],
+                    "ok": ok,
                 })
 
             if rebuild_context:
@@ -205,10 +231,14 @@ def _run_chat(conversation, user_text, user):
                     + json.dumps(continuation_records, ensure_ascii=False)})
                 messages.append({'role': 'user', 'content': '请结合以上已执行结果继续完成本轮原始请求。'})
 
-        # 循环因轮数上限退出且最后一轮只有工具调用无文本：给用户明确提示
-        if not final_content and tool_calls_json:
-            final_content = "已连续执行多轮工具调用，达到轮次上限。请简化需求后重试。"
-        final_content = compose_reply(ack, final_content)
+        else:
+            # Preambles such as “我来查询” are not a final answer. Always make
+            # the limit visible, without suggesting repeating completed writes.
+            limit_text = "本轮工具调用已达到上限，回复尚未完成。已执行的操作已保留，可继续补充要求，请勿重复提交已完成的操作。"
+            suffix = ("\n\n" if response_parts else "") + limit_text
+            response_parts.append(suffix)
+            yield ("delta", suffix)
+        final_content = compose_reply(ack, "".join(response_parts))
 
         # 5) 存储最终助手回答
         conversation.updated_at = utcnow()
@@ -219,8 +249,14 @@ def _run_chat(conversation, user_text, user):
             conversation=conversation,
         ))
         db.session.commit()
+        completed = True
         yield ("done", final_content)
 
+    except GeneratorExit:
+        if user_saved and not completed:
+            _save_interrupted_reply(conversation, ack, response_parts, tool_calls_json,
+                                    "回复已中断，可继续发送消息")
+        raise
     except Exception as e:  # noqa: BLE001 —— 对话异常不中断请求，回传错误
         # External clients share the same history: do not persist upstream
         # exception strings (which may contain credentials) in API conversations.
@@ -230,19 +266,26 @@ def _run_chat(conversation, user_text, user):
             logger.error("接入 API 对话执行失败 (%s)", type(e).__name__)
         else:
             logger.exception("对话执行失败")
-        db.session.rollback()  # 回滚未提交部分，已提交的用户消息保留
-        # 补写失败占位消息：工具副作用（各服务内部已 commit）无法回滚，
-        # 明确告知用户避免静默不一致与重复操作
-        try:
-            conv_id = getattr(conversation, "id", None)
-            if conv_id is not None:
-                db.session.add(Message(
-                    role="assistant",
-                    content=(f"⚠️ 本次对话处理中断：{error_text[:200]}"
-                             "（此前已执行的工具操作可能已生效，请勿重复提交）"),
-                    conversation_id=conv_id,
-                ))
-                db.session.commit()
-        except Exception:  # noqa: BLE001 —— 占位消息写失败不影响错误回传
+        if user_saved and not completed:
+            _save_interrupted_reply(conversation, ack, response_parts, tool_calls_json, error_text)
+        else:
             db.session.rollback()
         yield ("error", error_text)
+
+
+def _save_interrupted_reply(conversation, ack, response_parts, tool_calls, reason):
+    """Retain streamed text and completed tool history when a turn is cut short."""
+    db.session.rollback()
+    try:
+        content = "".join(response_parts).strip()
+        warning = f"⚠️ 本次对话处理中断：{reason[:200]}"
+        if tool_calls:
+            warning += "（此前已执行的工具操作可能已生效，请勿重复提交）"
+        content = f"{content}\n\n{warning}" if content else warning
+        conversation.updated_at = utcnow()
+        db.session.add(Message(role="assistant", content=compose_reply(ack, content),
+                               tool_calls=tool_calls or None,
+                               conversation_id=conversation.id))
+        db.session.commit()
+    except Exception:  # noqa: BLE001 —— 占位消息写失败不影响错误回传
+        db.session.rollback()

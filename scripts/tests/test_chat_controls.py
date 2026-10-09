@@ -111,7 +111,7 @@ class ChatControlTests(IsolatedAppTestCase):
         self.assertNotIn('PRIVATE_REASONING', json.dumps(next_messages))
         self.assertNotIn('PRIVATE_REASONING', json.dumps(events))
         self.assertNotIn('PRIVATE_REASONING', '\n'.join(row.content for row in Message.query.all()))
-        self.assertIn(('done', '完成'), events)
+        self.assertIn(('done', 'UNIQUE_ASSISTANT_PLAN\n\n完成'), events)
 
     def test_ai_tools_respect_manual_lock_and_limit_repeated_switches(self):
         from app.ai.tools.model_tools import switch_chat_model

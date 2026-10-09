@@ -108,58 +108,88 @@
       method: "POST",
       headers: window.csrfHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body || {}),
+      signal: handlers.signal,
     }).then(function (resp) {
       if (!resp.ok) {
         return resp.text().then(function (t) {
-          throw new Error(t || ("HTTP " + resp.status));
+          var message;
+          try { message = JSON.parse(t).error; } catch (e) { /* 非 JSON 错误页 */ }
+          throw new Error(message || ("请求失败（HTTP " + resp.status + "）"));
         });
       }
+      var contentType = resp.headers && resp.headers.get("content-type");
+      if (resp.headers && !/^text\/event-stream(?:\s*;|$)/i.test(contentType || "")) {
+        throw new Error("未收到对话数据，请确认登录状态后重试");
+      }
+      if (!resp.body || !resp.body.getReader) throw new Error("当前浏览器无法读取流式回复");
       var reader = resp.body.getReader();
       var decoder = new TextDecoder();
       var buffer = "";
+      var eventName = "";
+      var data = [];
+      var completed = false;
+
+      function dispatch() {
+        if (!data.length || completed) { eventName = ""; data = []; return; }
+        var payload = data.join("\n");
+        var evt = eventName;
+        eventName = "";
+        data = [];
+        if (evt) handlers.onEvent && handlers.onEvent(evt, payload);
+        else handlers.onDelta && handlers.onDelta(payload);
+        if (evt === "done") completed = true;
+      }
+
+      function processLine(line) {
+        if (!line) { dispatch(); return; }
+        if (line.charAt(0) === ":") return; // 心跳和注释
+        var colon = line.indexOf(":");
+        var field = colon < 0 ? line : line.slice(0, colon);
+        var value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+        if (field === "event") eventName = value;
+        else if (field === "data") data.push(value);
+      }
+
+      function processBuffer(final) {
+        // CR/LF 可被拆在两个网络块中；仅处理完整行，避免吞掉换行 token。
+        var start = 0;
+        for (var i = 0; i < buffer.length && !completed; i++) {
+          var char = buffer.charAt(i);
+          if (char !== "\r" && char !== "\n") continue;
+          if (char === "\r" && i === buffer.length - 1 && !final) break;
+          processLine(buffer.slice(start, i));
+          if (char === "\r" && buffer.charAt(i + 1) === "\n") i++;
+          start = i + 1;
+        }
+        buffer = buffer.slice(start);
+        if (final && !completed) {
+          if (buffer) processLine(buffer);
+          buffer = "";
+          dispatch();
+        }
+      }
+
       function pump() {
         return reader.read().then(function (r) {
           if (r.done) {
-            buffer += decoder.decode();  // 冲刷多字节残余
+            buffer += decoder.decode();
             processBuffer(true);
+            if (!completed) throw new Error("连接提前结束，回复可能不完整，请重试");
             handlers.onDone && handlers.onDone();
             return;
           }
           buffer += decoder.decode(r.value, { stream: true });
           processBuffer(false);
+          if (completed) {
+            // done 是应用层完成标记，不必等待代理关闭连接。
+            if (reader.cancel) Promise.resolve(reader.cancel()).catch(function () {});
+            handlers.onDone && handlers.onDone();
+            return;
+          }
           return pump();
         });
       }
-      function processBuffer(final) {
-        // 兼容 \n\n 与 \r\n\r\n 分隔
-        var parts = buffer.split(/\r?\n\r?\n/);
-        buffer = parts.pop();
-        parts.forEach(function (raw) {
-          var evt = null, data = [];
-          raw.split(/\r?\n/).forEach(function (line) {
-            if (line.startsWith("event:")) evt = line.slice(6).trim();
-            else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
-          });
-          if (!data.length) return;
-          var payload = data.join("\n");
-          if (evt) handlers.onEvent && handlers.onEvent(evt, payload);
-          else handlers.onDelta && handlers.onDelta(payload);
-        });
-        if (final && buffer) {
-          var evt = null, data = [];
-          buffer.split(/\r?\n/).forEach(function (line) {
-            if (line.startsWith("event:")) evt = line.slice(6).trim();
-            else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
-          });
-          if (data.length) {
-            var payload = data.join("\n");
-            if (evt) handlers.onEvent && handlers.onEvent(evt, payload);
-            else handlers.onDelta && handlers.onDelta(payload);
-          }
-          buffer = "";
-        }
-      }
-      return pump();
+      return pump().finally(function () { if (reader.releaseLock) reader.releaseLock(); });
     });
   };
 

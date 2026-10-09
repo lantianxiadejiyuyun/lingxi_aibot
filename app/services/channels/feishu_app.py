@@ -73,25 +73,40 @@ def get_tenant_access_token() -> str:
         return _token_cache["token"]
 
 
+def _text_chunks(text: str, limit: int = 4000):
+    """保留完整正文，在已有单条长度上限内优先按段落分拆。"""
+    while text:
+        end = min(len(text), limit)
+        if end < len(text):
+            boundary = text.rfind("\n", limit // 2, end)
+            if boundary >= 0:
+                end = boundary + 1
+        yield text[:end]
+        text = text[end:]
+
+
 def send_text(chat_id: str, text: str, receive_id_type: str = "chat_id") -> None:
-    """通过应用机器人发送文本消息到指定目标（chat_id / open_id）。"""
+    """按顺序发送完整文本，长回复分段发送（chat_id / open_id）。"""
+    if not text:
+        return
     token = get_tenant_access_token()
-    resp = requests.post(
-        f"{_API_BASE}/im/v1/messages?receive_id_type={receive_id_type}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "receive_id": chat_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": text[:4000]}, ensure_ascii=False),
-        },
-        timeout=15,
-    )
-    try:
-        data = resp.json()
-    except ValueError:
-        raise ValueError(resp.text[:200]) from None
-    if data.get("code") != 0:
-        raise ValueError(f"飞书发送失败: {data.get('msg', resp.text[:200])}")
+    for chunk in _text_chunks(text):
+        resp = requests.post(
+            f"{_API_BASE}/im/v1/messages?receive_id_type={receive_id_type}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "receive_id": chat_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": chunk}, ensure_ascii=False),
+            },
+            timeout=15,
+        )
+        try:
+            data = resp.json()
+        except ValueError:
+            raise ValueError(resp.text[:200]) from None
+        if data.get("code") != 0:
+            raise ValueError(f"飞书发送失败: {data.get('msg', resp.text[:200])}")
 
 
 def upload_image(image_bytes: bytes) -> str:

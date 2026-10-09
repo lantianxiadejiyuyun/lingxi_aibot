@@ -101,36 +101,51 @@ def api_controls(conv_id):
 @bp.route("/api/send", methods=["POST"])
 @login_required
 def api_send():
-    data = request.get_json(silent=True) or {}
-    message = (data.get("message") or "").strip()
-    if not message:
-        return _json_err("消息不能为空")
+    from app.services.context_service import conversation_lock
+    from app.services.integration_chat_service import validate_chat_payload
+    from app.utils.integration_api import ApiError
+    from app.utils.scoping import user_scope
 
-    # conversation_id 无效或未传 → 新建会话
-    raw_id = data.get("conversation_id")
-    conversation = None
-    if raw_id not in (None, ""):
-        try:
-            conversation = _owned_conversation(int(raw_id))
-        except (TypeError, ValueError):
-            conversation = None
-    if conversation is None:
+    data = request.get_json(silent=True)
+    # The web sidebar supplies DOM attribute IDs as strings. Keep that accepted,
+    # but never silently redirect a deleted/invalid conversation into a new one.
+    if isinstance(data, dict):
+        data = dict(data)
+        raw_id = data.get("conversation_id")
+        if raw_id == "":
+            data["conversation_id"] = None
+        elif isinstance(raw_id, str) and raw_id.isascii() and raw_id.isdecimal() and len(raw_id) <= 10:
+            data["conversation_id"] = int(raw_id)
+    try:
+        payload = validate_chat_payload(data)
+    except ApiError as exc:
+        return _json_err(str(exc), exc.status)
+    message = payload["message"]
+    if payload["conversation_id"] is None:
         conversation = Conversation(title="新对话", user_id=current_user.id)
         db.session.add(conversation)
         db.session.commit()
+    else:
+        conversation = _owned_conversation(payload["conversation_id"])
+        if conversation is None:
+            return _json_err("会话不存在，请重新选择或新建对话", 404)
     # 在路由内（会话仍存活）先取出纯整型 id；生成器运行时上下文已切换，
     # 对象可能已脱离会话，必须用 id 重新加载
     conv_id = conversation.id
     user_id = getattr(current_user, "id", None)
 
     def gen():
-        with current_app.app_context():
+        # Flush response headers and expose the actual conversation immediately,
+        # even when its previous turn is still holding the conversation lock.
+        yield _sse("start", json.dumps({"conversation_id": conv_id}))
+        with current_app.app_context(), user_scope(user_id), conversation_lock(conv_id):
             # 生成器运行在独立的应用上下文里（db.session 随上下文隔离），
             # 必须重新从库里取会话与用户，否则对象与当前会话脱离
             from app.models.user import User
 
+            db.session.rollback()
             conv = db.session.get(Conversation, conv_id)
-            if conv is None:
+            if conv is None or conv.user_id != user_id:
                 yield _sse("error", "会话不存在")
                 yield _sse("done", "")
                 return
@@ -139,8 +154,13 @@ def api_send():
                 yield _sse("error", "用户不存在")
                 yield _sse("done", "")
                 return
+            iterator = None
+            reply = ""
+            completed = False
+            failed = False
             try:
-                for ev in run_chat(conv, message, user):
+                iterator = run_chat(conv, message, user)
+                for ev in iterator:
                     kind, payload = ev
                     if kind == "delta":
                         yield _sse("delta", payload)
@@ -154,15 +174,28 @@ def api_send():
                     elif kind == "title":
                         yield _sse("title", payload)
                     elif kind == "done":
-                        yield _sse("done", payload)
+                        reply = payload
+                        completed = True
+                        break
                     elif kind == "error":
+                        failed = True
                         yield _sse("error", payload)
-            except Exception as e:  # noqa: BLE001 —— 任何异常先发 error 再 done
-                yield _sse("error", str(e)[:500])
-                yield _sse("done", "")
+                        break
+                if not completed and not failed:
+                    yield _sse("error", "回复意外中断，请检查会话记录后再继续")
+            except Exception:  # noqa: BLE001 —— 任何异常先发 error 再 done
+                db.session.rollback()
+                current_app.logger.exception("网页对话执行失败")
+                yield _sse("error", "对话处理中断，请检查会话记录后再继续")
+            finally:
+                # Closing the HTTP response must also close the executor and its
+                # provider stream, releasing the lock for the next message.
+                if iterator is not None and hasattr(iterator, "close"):
+                    iterator.close()
+            yield _sse("done", reply if completed else "")
 
     resp = Response(stream_with_context(gen()), mimetype="text/event-stream")
-    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Cache-Control"] = "no-store"
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
 

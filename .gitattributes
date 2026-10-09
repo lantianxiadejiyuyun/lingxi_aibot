@@ -1,0 +1,2 @@
+# Preserve shell-compatible line endings after a Windows checkout.
+docker/media-downloaders/entrypoint.sh text eol=lf

@@ -16,6 +16,8 @@ def me():
         "username": user.username,
         "timezone": user.timezone,
         "api_version": "v1",
-        "capabilities": ["events", "event_occurrences", "tasks", "conversations", "chat", "sse", "websocket", "navigation_vault"],
+        "capabilities": ["events", "event_occurrences", "tasks", "conversations", "chat", "sse", "websocket", "navigation_vault",
+                         "storage", "anime_search", "downloads", "native_agents", "download_event_replay"],
         "websocket_path": request.script_root + "/api/v1/ws",
+        "download_websocket_path": request.script_root + "/api/v1/download-events/ws",
     })
