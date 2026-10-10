@@ -180,7 +180,7 @@ async function selectedPage() {
 test("conversation links select an available conversation and fall back when unavailable", async () => {
   for (const [search, expectedId] of [["?conversation=2", 2], ["?conversation=999", 1]]) {
     const result = page({ chat: true, search });
-    result.resolve("/chat/api/conversations", [{ id: 1, title: "会话一" }, { id: 2, title: "会话二" }]);
+    result.resolve("/chat/api/conversations" + search, [{ id: 1, title: "会话一" }, { id: 2, title: "会话二" }]);
     await flush();
     const histories = result.requests.filter(item => item.url.includes("/messages/"));
     assert.equal(histories.length, 1);
@@ -188,6 +188,28 @@ test("conversation links select an available conversation and fall back when una
     result.resolve(histories[0].url, [{ role: "user", content: "关联会话历史" }]);
     await flush();
     assert.match(result.elements.get("msg-list").textContent, /关联会话历史/);
+  }
+});
+
+test("a daily report link loads its older conversation outside the latest twenty without reordering", async () => {
+  const result = page({ chat: true, search: "?conversation=2" });
+  const recent = Array.from({ length: 20 }, (_, index) => ({ id: 120 - index, title: "近期会话 " + index }));
+  result.resolve("/chat/api/conversations?conversation=2", [...recent, { id: 2, title: "历史早安简报" }]);
+  await flush();
+  const list = result.elements.get("conv-list");
+  assert.deepEqual(list.children.map(item => item.getAttribute("data-conv-id")), [...recent.map(item => String(item.id)), "2"]);
+  assert.equal(list.children.filter(item => item.className.split(/\s+/).includes("active"))[0].getAttribute("data-conv-id"), "2");
+  result.resolve("/chat/api/messages/2", [{ role: "assistant", content: "历史日报的完整内容" }]);
+  await flush();
+  assert.match(result.elements.get("msg-list").textContent, /历史日报的完整内容/);
+});
+
+test("missing or malformed conversation ids keep the normal list request and default selection", async () => {
+  for (const search of ["", "?conversation=", "?conversation=0", "?conversation=-2", "?conversation=1.5", "?conversation=2e1", "?conversation=abc", "?conversation=9007199254740992"]) {
+    const result = page({ chat: true, search });
+    result.resolve("/chat/api/conversations", [{ id: 1, title: "最近会话" }]);
+    await flush();
+    assert.equal(result.requests.filter(item => item.url.includes("/messages/"))[0].url, "/chat/api/messages/1");
   }
 });
 

@@ -183,6 +183,7 @@ def create_app(config_class=Config) -> Flask:
     app.cli.add_command(commands.reindex)
     app.cli.add_command(commands.list_routes)
     app.cli.add_command(commands.media_worker)
+    app.cli.add_command(commands.sync_daily_reports)
 
     # ---- AI 工具加载 & 通知渠道 & 调度器 ----
     with app.app_context():

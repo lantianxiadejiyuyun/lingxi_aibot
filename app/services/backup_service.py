@@ -25,7 +25,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from flask import current_app
-from sqlalchemy import MetaData, Table, inspect, select, text
+from sqlalchemy import Date, DateTime, MetaData, Table, inspect, select, text
 
 from app.extensions import db
 from app.scheduler import register_action
@@ -43,7 +43,7 @@ _BUSINESS_TABLES = frozenset({
     "users", "events", "tasks", "notes", "conversations", "messages",
     "notifications", "scheduled_jobs", "settings", "webpages", "image_assets",
     "skills", "memories", "embeddings", "fitness_records", "trip_plans",
-    "expense_records",
+    "expense_records", "daily_reports",
     "storage_locations", "media_download_tasks", "media_download_attempts",
     "media_resource_candidates", "media_events", "agent_runs", "agent_steps",
 })
@@ -95,7 +95,7 @@ def backup_to_json() -> Path:
         fh.write(', "tables": {')
         first_table = True
         for table_name in inspector.get_table_names():
-            table = Table(table_name, meta, autoload_with=db.engine)
+            table = Table(table_name, meta, autoload_with=db.session.connection())
             if not first_table:
                 fh.write(", ")
             fh.write(json.dumps(table_name, ensure_ascii=False))
@@ -170,7 +170,7 @@ def _restore_users(table, rows: list) -> int:
         name = row.get("username")
         if uid in existing_ids or (name and name in existing_names):
             continue  # 不覆盖已有用户（含管理员）
-        payload = dict(row)
+        payload = _restore_row(table, row)
         payload["is_admin"] = False
         db.session.execute(table.insert(), [payload])
         if uid is not None:
@@ -179,6 +179,20 @@ def _restore_users(table, rows: list) -> int:
             existing_names.add(name)
         inserted += 1
     return inserted
+
+
+def _restore_row(table, row):
+    """Undo JSON's date serialization for typed INSERTs, including SQLite."""
+    payload = dict(row)
+    for column in table.columns:
+        value = payload.get(column.name)
+        if not isinstance(value, str):
+            continue
+        if isinstance(column.type, DateTime):
+            payload[column.name] = datetime.fromisoformat(value)
+        elif isinstance(column.type, Date):
+            payload[column.name] = date.fromisoformat(value)
+    return payload
 
 
 def restore_from_json(path) -> dict[str, int]:
@@ -218,7 +232,7 @@ def restore_from_json(path) -> dict[str, int]:
             if (table_name not in existing or table_name not in _BUSINESS_TABLES
                     or not isinstance(rows, list)):
                 continue
-            table = Table(table_name, meta, autoload_with=db.engine)
+            table = Table(table_name, meta, autoload_with=db.session.connection())
             if table_name == "settings":
                 continue  # 不覆盖运行时配置（含密钥）
             if table_name == "users":
@@ -230,7 +244,7 @@ def restore_from_json(path) -> dict[str, int]:
             for i in range(0, len(rows), batch):
                 chunk = rows[i:i + batch]
                 if chunk:
-                    db.session.execute(table.insert(), chunk)
+                    db.session.execute(table.insert(), [_restore_row(table, row) for row in chunk])
             restored[table_name] = len(rows)
         db.session.commit()
     except Exception:

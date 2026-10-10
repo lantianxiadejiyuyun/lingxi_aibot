@@ -346,7 +346,10 @@
   /* ---------- 会话列表 ---------- */
   function loadConversations() {
     var sequence = ++listRequest;
-    return window.api.get("/chat/api/conversations").then(function (res) {
+    var linkedValue = new URLSearchParams(window.location.search).get("conversation") || "";
+    var linkedId = /^[1-9]\d*$/.test(linkedValue) && Number.isSafeInteger(Number(linkedValue)) ? Number(linkedValue) : null;
+    var listUrl = "/chat/api/conversations" + (linkedId ? "?conversation=" + linkedId : "");
+    return window.api.get(listUrl).then(function (res) {
       if (sequence !== listRequest) return;
       if (!res || !res.ok) return;
       convList.innerHTML = "";
@@ -355,7 +358,6 @@
       (res.data || []).slice().reverse().forEach(function (c) { appendConvItem(c.id, c.title); });
       refreshActive();
       if (!currentConvId && !sending && !changingConversation && res.data && res.data.length) {
-        var linkedId = Number(new URLSearchParams(window.location.search).get("conversation"));
         var linked = res.data.find(function (item) { return item.id === linkedId; });
         selectConversation(linked ? linked.id : res.data[0].id);
       } else if (!currentConvId) {

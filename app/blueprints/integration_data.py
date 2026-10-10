@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from itertools import islice
 
 from dateutil.rrule import rrulestr
@@ -120,6 +120,24 @@ def _event_view(event):
         "rrule": event.rrule, "reminder_minutes": event.reminder_minutes,
         "created_at": iso_datetime(event.created_at), "updated_at": iso_datetime(event.updated_at),
     }
+
+
+@bp.get("/daily-reports")
+@api_authenticated
+def daily_reports():
+    """Read the same daily archives shown in the user's calendar."""
+    from app.services.daily_report_service import calendar_items
+
+    _query({"date_from", "date_to"})
+    try:
+        raw_start, raw_end = request.args.get("date_from", ""), request.args.get("date_to", "")
+        start, end = date.fromisoformat(raw_start), date.fromisoformat(raw_end)
+        if (start.isoformat() != raw_start or end.isoformat() != raw_end
+                or start > end or (end - start).days > 365):
+            raise ValueError()
+    except (TypeError, ValueError):
+        raise ApiError("请提供 YYYY-MM-DD 格式的 date_from 和 date_to，含首尾最多 366 天") from None
+    return success(calendar_items(g.api_user, start, end))
 
 
 def _task_fields(body, *, creating=False):

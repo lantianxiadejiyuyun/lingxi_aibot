@@ -59,6 +59,12 @@ const result = await response.json();
 | `POST /events` | 新建日程 |
 | `GET/PATCH/DELETE /events/{id}` | 查询、部分更新、软删除日程 |
 | `GET /events/occurrences?start=...&end=...` | 日历实际发生项，展开重复规则，区间最多 93 天 |
+| `GET /daily-reports?date_from=2026-10-01&date_to=2026-10-31` | 查询账号每天的日报，按日期排序，早午晚各一段 |
+
+日报的日期参数使用 `YYYY-MM-DD`，包含首尾日期，最多 366 天。每个日期返回一条 `kind:daily_report`、`readonly:true` 的全天记录，`sections` 中有已生成的早安／午间／晚间正文、生成时间和可用的会话链接。同日重复生成只更新对应段；历史简报会自动补入，清空聊天后已归档的日报仍保留。
+日报独立归档，在灵犀日历展示，不占用日程时间或触发提醒。外部日历可将此接口的记录与 `/events/occurrences` 合并展示；日报的 `id` 为 `daily-report-数字`，不能传给普通日程修改接口。
+
+升级时先运行 `python -m flask init-db` 创建日报归档表，再运行 `python -m flask sync-daily-reports` 一次性同步已有历史简报；也可加 `--user-id 1` 只同步一个账号。这些命令不会重新生成简报或发送通知。未一次性同步时，打开日历也会自动补入当前月份的历史简报。
 
 待办字段：`title`、`notes`、`due_at`（可为 null）、`priority`（1–3）、`status`（open/done/cancelled）、`project`、`tags`（字符串数组）。导航站 deadline 组件对应 `due_at`；PATCH `due_at:null` 可清除截止时间。
 

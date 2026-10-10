@@ -97,6 +97,7 @@ def build_briefing(kind: str, user) -> str:
         raise ValueError(f"未知简报类型: {kind}")
 
     tz = user_tz(user)
+    generated_at = utcnow()
     today = datetime.now(tz).date()
     start, end = day_bounds(today, tz)
     yesterday_start, yesterday_end = day_bounds(today - timedelta(days=1), tz)
@@ -209,6 +210,9 @@ def build_briefing(kind: str, user) -> str:
     else:
         content = _fallback_markdown(kind, data)
 
+    if not content.strip():
+        content = _fallback_markdown(kind, data)
+
     # ---- 落库（复用当天该用户的同名简报会话）----
     conv = Conversation.query.filter(Conversation.title == title,
                                      Conversation.user_id == user.id).order_by(
@@ -218,6 +222,10 @@ def build_briefing(kind: str, user) -> str:
         db.session.add(conv)
     conv.updated_at = utcnow()
     conv.messages.append(Message(role="assistant", content=content, conversation=conv))
+    db.session.flush()
+    from app.services.daily_report_service import record_briefing
+
+    record_briefing(user, kind, today, content, conv.id, generated_at)
     db.session.commit()
     return content
 

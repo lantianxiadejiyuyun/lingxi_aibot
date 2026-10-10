@@ -6,6 +6,15 @@
   .cal-cell.selected { outline: 2px solid var(--primary); }
   .day-list-item .day-main { flex: 1; min-width: 0; }
   .day-desc { color: var(--text-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cal-event.cal-event-report { color: var(--primary); background: var(--primary-light, #eef2ff); border-left: 3px solid var(--primary); }
+  .day-report { align-items: flex-start; }
+  .day-report .day-time { color: var(--primary); font-weight: 600; }
+  .report-section { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .report-section summary { padding: 12px; cursor: pointer; font-weight: 600; }
+  .report-section summary .muted { margin-left: 8px; font-size: 12px; font-weight: 400; }
+  .report-content { margin: 0; padding: 0 12px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; }
+  .report-section .report-chat { margin: 0 12px 12px; }
+  .report-hint { margin: 6px 0 0; font-size: 12px; color: var(--text-2); }
 </style>
 {% endblock %}
 
@@ -27,7 +36,7 @@
   <div class="cal-cell {{ 'out' if cell.out }} {{ 'today' if cell.today }}" data-date="{{ cell.date }}">
     <div class="cal-day-num">{{ cell.day_num }}</div>
     {% for ev in cell.events %}
-    <div class="cal-event" data-id="{{ ev.id }}">{{ ev.time }} {{ ev.title }}</div>
+    <div class="cal-event{{ ' cal-event-report' if ev.kind == 'daily_report' }}" data-id="{{ ev.id }}"{% if ev.kind == 'daily_report' %} data-kind="daily_report"{% endif %}>{% if ev.kind == 'daily_report' %}📖 {% else %}{{ ev.time }} {% endif %}{{ ev.title }}</div>
     {% endfor %}
     {% if cell.more %}<div class="cal-event more">还有 {{ cell.more }} 项</div>{% endif %}
   </div>
@@ -42,6 +51,24 @@
   <div id="day-list">
     {% if day_events %}
       {% for it in day_events %}
+      {% if it.kind == 'daily_report' %}
+      <div class="day-list-item day-report" data-kind="daily_report">
+        <span class="day-time">📖 日报</span>
+        <div class="day-main">
+          <div class="day-title">{{ it.title }} <span class="tag">自动汇总</span></div>
+          <p class="report-hint">早安、午间和晚间内容按天归档，点击展开查看；当天后续生成的内容会更新到这份日报。</p>
+          {% for section in it.sections %}
+          <details class="report-section">
+            <summary>{{ section.label }}{% if section.generated_at %}<span class="muted">{{ section.generated_at }}</span>{% endif %}</summary>
+            <div class="report-content">{{ section.content }}</div>
+            {% if section.conversation_url and section.conversation_url.startswith('/') and not section.conversation_url.startswith('//') and '\\' not in section.conversation_url %}<a class="btn btn-sm btn-ghost report-chat" href="{{ section.conversation_url }}">继续聊这份{{ section.label }}</a>{% endif %}
+          </details>
+          {% else %}
+          {% if it.description %}<details class="report-section"><summary>查看日报内容</summary><div class="report-content">{{ it.description }}</div></details>{% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
       <div class="day-list-item">
         <span class="day-time">{{ '全天' if it.all_day else it.start[11:16] }}</span>
         <div class="day-main">
@@ -55,9 +82,10 @@
           data-reminder="{{ it.reminder_minutes if it.reminder_minutes is not none else '' }}"
           data-location="{{ it.location }}" data-description="{{ it.description }}">编辑</button>
       </div>
+      {% endif %}
       {% endfor %}
     {% else %}
-      <p class="empty">当天没有日程 🎉</p>
+      <p class="empty">当天没有日程或日报 🎉</p>
     {% endif %}
   </div>
 </section>
@@ -220,7 +248,9 @@
       html += '<div class="' + cls + '" data-date="' + cell.date + '">';
       html += '<div class="cal-day-num">' + cell.day + "</div>";
       evs.slice(0, 3).forEach(function (it) {
-        html += '<div class="cal-event" data-id="' + it.id + '">' + esc(timeOf(it) + " " + it.title) + "</div>";
+        var report = it.kind === "daily_report";
+        html += '<div class="cal-event' + (report ? ' cal-event-report' : '') + '" data-id="' + esc(String(it.id)) + '"' +
+          (report ? ' data-kind="daily_report"' : '') + '>' + esc((report ? "📖 " : timeOf(it) + " ") + it.title) + "</div>";
       });
       if (evs.length > 3) html += '<div class="cal-event more">还有 ' + (evs.length - 3) + " 项</div>";
       html += "</div>";
@@ -245,17 +275,42 @@
     return '<button type="button" class="btn btn-sm btn-ghost" ' + attrs + '>编辑</button>';
   }
 
+  function reportHtml(it) {
+    var html = '<div class="day-list-item day-report" data-kind="daily_report"><span class="day-time">📖 日报</span><div class="day-main">';
+    html += '<div class="day-title">' + esc(it.title || "") + ' <span class="tag">自动汇总</span></div>';
+    html += '<p class="report-hint">早安、午间和晚间内容按天归档，点击展开查看；当天后续生成的内容会更新到这份日报。</p>';
+    var sections = Array.isArray(it.sections) ? it.sections : [];
+    sections.forEach(function (section) {
+      html += '<details class="report-section"><summary>' + esc(section.label || "");
+      if (section.generated_at) html += '<span class="muted">' + esc(section.generated_at) + '</span>';
+      html += '</summary><div class="report-content">' + esc(section.content || "") + '</div>';
+      var url = section.conversation_url || "";
+      if (url.charAt(0) === "/" && url.slice(0, 2) !== "//" && url.indexOf("\\") < 0) {
+        html += '<a class="btn btn-sm btn-ghost report-chat" href="' + esc(url) + '">继续聊这份' + esc(section.label || "简报") + '</a>';
+      }
+      html += '</details>';
+    });
+    if (!sections.length && it.description) {
+      html += '<details class="report-section"><summary>查看日报内容</summary><div class="report-content">' + esc(it.description) + '</div></details>';
+    }
+    return html + '</div></div>';
+  }
+
   function renderDay() {
     var map = bucket();
     var evs = map[CAL.day] || [];
     $("#day-label").textContent = CAL.day;
     var wrap = $("#day-list");
     if (!evs.length) {
-      wrap.innerHTML = '<p class="empty">当天没有日程 🎉</p>';
+      wrap.innerHTML = '<p class="empty">当天没有日程或日报 🎉</p>';
       return;
     }
     var html = "";
     evs.forEach(function (it) {
+      if (it.kind === "daily_report") {
+        html += reportHtml(it);
+        return;
+      }
       html += '<div class="day-list-item">';
       html += '<span class="day-time">' + timeOf(it) + "</span>";
       html += '<div class="day-main">';

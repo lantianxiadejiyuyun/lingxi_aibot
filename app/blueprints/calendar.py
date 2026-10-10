@@ -14,6 +14,7 @@ from flask_login import current_user, login_required
 
 from app.models.event import Event
 from app.services import calendar_service
+from app.services.daily_report_service import calendar_items
 from app.utils.timeutil import (
     day_bounds, expand_rrule, fmt_dt, parse_local, to_naive_utc, to_user, user_tz,
 )
@@ -113,6 +114,7 @@ def _month_occurrences(year: int, month: int, tz) -> list[dict]:
                     items.append(_occ_item(ev, occ, tz, gs, ge, True))
         else:
             items.append(_occ_item(ev, ev.start_utc, tz, gs, ge, False))
+    items.extend(calendar_items(current_user, gs, ge))
     items.sort(key=lambda it: (it["date"], it["start"]))
     return items
 
@@ -161,6 +163,7 @@ def _day_occurrences(day_str: str, tz) -> list[dict]:
                     end_d -= timedelta(days=1)
             if start_d <= d <= end_d:
                 items.append(_occ_item(ev, ev.start_utc, tz, d, d, False))
+    items.extend(calendar_items(current_user, d, d))
     items.sort(key=lambda it: it["start"])
     return items
 
@@ -208,6 +211,7 @@ def index():
             "id": it["id"],
             "time": "全天" if it["all_day"] else it["start"][11:16],
             "title": it["title"],
+            "kind": it.get("kind", "event"),
         } for it in evs[:3]]
         cells.append({
             "date": key,

@@ -749,6 +749,7 @@
     <div class="card">
       <div class="card-head"><h2>简报设置</h2></div>
       <p class="muted">早安简报、午间简报和晚间复盘可分别设置时间和推送渠道，按 {{ briefing.timezone }} 时区执行。</p>
+      <p class="cron-hint">生成的简报会自动同步到 <a href="{{ url_for('calendar.index') }}">日历</a>：每天一份日报，汇总当天的早安、午间和晚间内容，重复生成会更新对应时段。</p>
       <p class="cron-hint">
         支持站内通知、飞书应用机器人、飞书群 Webhook 和 Server 酱，可同时选择多个渠道或通知组。
         请先完成 <a href="{{ url_for('settings_page.index', tab='channels') }}">渠道配置</a> 或 <a href="{{ url_for('settings_page.index', tab='feishu-app') }}">飞书配置</a>。

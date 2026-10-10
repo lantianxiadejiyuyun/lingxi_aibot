@@ -70,6 +70,24 @@ def init_db():
         click.echo(msg)
 
 
+@click.command("sync-daily-reports")
+@click.option("--user-id", type=click.IntRange(min=1), help="仅同步指定账号；省略则同步全部账号")
+@with_appcontext
+def sync_daily_reports(user_id):
+    """把已有早午晚简报归档到日历；可重复执行，不调用模型或发送通知。"""
+    from app.models.user import User
+    from app.services.daily_report_service import backfill_history
+
+    query = User.query.order_by(User.id)
+    if user_id is not None:
+        query = query.filter(User.id == user_id)
+    users = query.all()
+    if user_id is not None and not users:
+        raise click.ClickException("账号不存在")
+    count = sum(backfill_history(user) for user in users)
+    click.echo(f"✓ 已检查 {len(users)} 个账号，补入 {count} 段历史简报")
+
+
 @click.command("reset-db")
 @click.option("--yes", "confirmed", is_flag=True, help="确认删除当前库全部数据表")
 @with_appcontext

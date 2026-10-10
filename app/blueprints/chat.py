@@ -60,6 +60,12 @@ def api_conversations():
     tz = user_tz(current_user)
     convs = (Conversation.query.filter(Conversation.user_id == current_user.id)
              .order_by(Conversation.updated_at.desc()).limit(20).all())
+    linked_id = request.args.get("conversation", type=int)
+    if linked_id and 0 < linked_id <= 2147483647 and all(c.id != linked_id for c in convs):
+        linked = _owned_conversation(linked_id)
+        if linked is not None:
+            convs.append(linked)
+            convs.sort(key=lambda row: row.updated_at, reverse=True)
     data = [
         {"id": c.id, "title": c.title, "updated_at": fmt_dt(c.updated_at, tz)}
         for c in convs
