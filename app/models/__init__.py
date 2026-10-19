@@ -21,6 +21,7 @@ from app.models.agent_run import AgentRun, AgentStep
 from app.models.daily_report import DailyReport
 from app.models.astrbot import AstrBotBinding, AstrBotOutbox
 from app.models.companion import CompanionState, CompanionActivity
+from app.models.onebot import OneBotBinding, OneBotBindingCode, OneBotEvent
 
 __all__ = [
     "User", "Event", "Task", "Note", "Conversation", "Message",
@@ -29,4 +30,5 @@ __all__ = [
     "StorageLocation", "DownloadTask", "DownloadAttempt", "ResourceCandidate", "MediaEvent",
     "AgentRun", "AgentStep", "DailyReport", "AstrBotBinding", "AstrBotOutbox",
     "CompanionState", "CompanionActivity",
+    "OneBotBinding", "OneBotBindingCode", "OneBotEvent",
 ]

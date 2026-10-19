@@ -72,6 +72,7 @@ _CHANNEL_OPTIONS = (
     ("inapp", "站内"), ("serverchan", "Server酱"),
     ("feishu", "飞书"), ("feishu_app", "飞书机器人(应用)"),
     ("astrbot", "AstrBot 私聊"),
+    ("onebot", "QQ 个人号（NapCat）"),
 )
 
 

@@ -24,6 +24,8 @@
       <option value="serverchan" {{ 'selected' if channel == 'serverchan' }}>Server酱</option>
       <option value="feishu" {{ 'selected' if channel == 'feishu' }}>飞书</option>
       <option value="feishu_app" {{ 'selected' if channel == 'feishu_app' }}>飞书机器人(应用)</option>
+      <option value="onebot" {{ 'selected' if channel == 'onebot' }}>QQ 个人号（NapCat）</option>
+      <option value="astrbot" {{ 'selected' if channel == 'astrbot' }}>AstrBot 私聊</option>
     </select>
     <select class="select" name="status" style="width:auto; min-width:120px;">
       <option value="" {{ 'selected' if not status }}>全部状态</option>

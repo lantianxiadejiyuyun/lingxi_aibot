@@ -148,6 +148,7 @@ def create_app(config_class=Config) -> Flask:
     from app.blueprints.integration_chat import bp as integration_chat_bp
     from app.blueprints.integration_astrbot import bp as integration_astrbot_bp
     from app.blueprints.companion import bp as companion_bp
+    from app.blueprints.onebot import bp as onebot_bp
     from app.blueprints.integration_vault import bp as integration_vault_bp
     from app.blueprints.navigation_vault import bp as navigation_vault_bp
     from app.blueprints.media import bp as media_bp, api_bp as integration_media_bp
@@ -156,7 +157,7 @@ def create_app(config_class=Config) -> Flask:
                notifications_bp, settings_bp, jobs_bp, chat_bp, feishu_bp,
                pages_bp, pages_site_bp, images_bp, image_files_bp,
                skills_bp, memory_bp, fitness_bp, travel_bp, expenses_bp,
-               expenses_api_bp, setup_bp, settings_api_bp, navigation_vault_bp, media_bp, companion_bp):
+               expenses_api_bp, setup_bp, settings_api_bp, navigation_vault_bp, media_bp, companion_bp, onebot_bp):
         app.register_blueprint(bp)
 
     # Dedicated integration endpoints accept Tokens, never browser-session auth.
@@ -168,6 +169,8 @@ def create_app(config_class=Config) -> Flask:
     init_integration_ws(app)
     from app.services.media_ws import init_media_ws
     init_media_ws(app)
+    from app.services.onebot_transport import init_onebot
+    init_onebot(app)
 
     # ---- 上下文与错误页 ----
     register_context(app)

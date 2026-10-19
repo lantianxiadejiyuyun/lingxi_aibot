@@ -33,6 +33,7 @@ ROOT_FILES = (
     "docker-compose.yml",
     "docker-compose.quickstart.yml",
     "docker-compose.astrbot.yml",
+    "docker-compose.napcat.yml",
     ".dockerignore",
     ".env.example",
     ".env.docker.example",
@@ -48,6 +49,7 @@ DOC_FILES = (
     "docs/部署参考.md",
     "docs/使用指南.md",
     "docs/主动陪伴与AstrBot.md",
+    "docs/QQ个人号.md",
     "docs/接入API.md",
     "docs/开发指南.md",
     "docs/更新记录.md",
@@ -109,6 +111,9 @@ def pack(make_zip: bool = True) -> Path:
     copied += _copy_tree(ROOT / "app", DEST / "app")
     copied += _copy_tree(ROOT / "docker", DEST / "docker")
     copied += _copy_tree(ROOT / "integrations" / "astrbot", DEST / "integrations" / "astrbot")
+    (DEST / "scripts").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "scripts" / "configure_napcat.py", DEST / "scripts" / "configure_napcat.py")
+    copied += 1
 
     for name in ROOT_FILES:
         src = ROOT / name

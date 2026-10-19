@@ -70,6 +70,11 @@
     </form>
   </section>
   <div>
+    <section class="card companion-card" aria-labelledby="qq-title">
+      <div class="card-head"><h2 id="qq-title">连接个人 QQ</h2></div>
+      <p class="companion-help">通过 NapCat 直接连接灵犀，绑定后可接收私聊回复、简报和主动消息。</p>
+      <a class="btn btn-ghost" style="margin-top:14px" href="{{ url_for('onebot.index') }}">管理 QQ 连接</a>
+    </section>
     <section class="card companion-card" aria-labelledby="astrbot-title">
       <div class="card-head"><h2 id="astrbot-title">连接 AstrBot</h2><span class="tag {{ 'tag-green' if binding.bound and binding.enabled else 'tag-gray' }}">{{ '已绑定' if binding.bound and binding.enabled else '未连接' }}</span></div>
       <p class="companion-help">AstrBot 接收平台消息，灵犀继续负责对话、记忆和任务。主动消息会送回你绑定的私聊。</p>

@@ -1,0 +1,38 @@
+# Optional standalone NapCat, connected to the existing Lingxi Docker network.
+# Initialize first: python scripts/configure_napcat.py (see docs/QQ个人号.md).
+services:
+  napcat:
+    image: ${NAPCAT_IMAGE:-mlikiowa/napcat-docker:v4.18.37@sha256:f611790ecffa23c3c182017d5cf68179dc24612403608cd835ad13d79642f1bd}
+    hostname: lingxi-qq
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: Asia/Shanghai
+      NAPCAT_UID: "1000"
+      NAPCAT_GID: "1000"
+    ports:
+      - "${NAPCAT_BIND_IP:-127.0.0.1}:6099:6099"
+    volumes:
+      - ./data/napcat/qq:/app/.config/QQ
+      - ./data/napcat/config:/app/napcat/config
+      - ./data/napcat/plugins:/app/napcat/plugins
+    networks: [aibot]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "5", --output, /dev/null, "http://127.0.0.1:6099/webui/"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+    ulimits:
+      core: 0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  aibot:
+    external: true
+    name: ${NAPCAT_NETWORK:-lingxi-aibot_aibot}

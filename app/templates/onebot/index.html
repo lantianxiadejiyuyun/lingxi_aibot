@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}QQ 个人号{% endblock %}
+{% block page_title %}QQ 个人号{% endblock %}
+{% block head %}
+<style>
+.qq-layout{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(280px,.8fr);gap:22px;align-items:start}
+.qq-card{padding:24px}.qq-card h2{font-size:18px;margin:0}.qq-help{color:var(--text-2);line-height:1.8}
+.qq-status{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}
+.qq-steps{padding-left:22px;line-height:1.9;color:var(--text-2)}.qq-steps li{margin-bottom:12px}
+.qq-command{display:block;padding:16px;background:var(--primary-soft);border:1px solid var(--primary-ring);border-radius:10px;overflow-wrap:anywhere;user-select:all;line-height:1.8;margin:16px 0}
+.qq-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:18px}
+@media(max-width:900px){.qq-layout{grid-template-columns:1fr}}@media(max-width:520px){.qq-card{padding:18px}}
+</style>
+{% endblock %}
+{% block content %}
+<div class="qq-layout">
+  <section class="card qq-card" aria-labelledby="qq-title">
+    <h2 id="qq-title">用 QQ 和灵犀聊天</h2>
+    <p class="qq-help">NapCat 连接个人 QQ，灵犀负责模型、人设、记忆、日程和待办。</p>
+    <div class="qq-status">
+      <span class="tag {{ 'tag-green' if connection.connected else 'tag-gray' }}">{{ 'QQ 已连接' if connection.connected else ('等待 QQ 登录' if connection.enabled else '服务未启用') }}</span>
+      <span class="tag {{ 'tag-green' if binding.bound else 'tag-gray' }}">{{ '账号已绑定' if binding.bound else '账号未绑定' }}</span>
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('onebot.index') }}">刷新状态</a>
+    </div>
+    {% if binding.bound %}
+    <p class="qq-help">你的 QQ：<strong>{{ binding.qq_user_id }}</strong><br>助手 QQ：<strong>{{ binding.self_id }}</strong></p>
+    {% if binding.conversation_id %}<a class="btn btn-ghost" href="{{ url_for('chat.index', conversation=binding.conversation_id) }}">查看聊天记录</a>{% endif %}
+    {% endif %}
+    <ol class="qq-steps">
+      <li>在 NapCat 管理页，用准备作为助手的 QQ 扫码登录。{% if webui_url %}<br><a href="{{ webui_url }}" target="_blank" rel="noopener noreferrer">打开 NapCat 管理页 <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>{% endif %}</li>
+      <li>用你自己的 QQ 添加助手 QQ 为好友，然后点击下方按钮生成绑定码。</li>
+      <li>把完整绑定命令发到与助手 QQ 的<strong>私聊</strong>中。收到绑定成功回复后，即可直接聊天。</li>
+    </ol>
+    {% if binding_code %}
+    <code class="qq-command">/lingxi 绑定 {{ binding_code.code }}</code>
+    <p class="qq-help">绑定码 10 分钟有效，只能使用一次。生成新码后旧码失效。请仅发送到自己的助手 QQ 私聊。</p>
+    {% endif %}
+    <div class="qq-actions">
+      <form method="post" action="{{ url_for('onebot.create_code') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-primary" type="submit" {{ 'disabled' if not connection.enabled }}>生成{{ '新的' if binding.bound or binding_code else '' }}绑定码</button>
+      </form>
+      {% if binding.bound %}<form method="post" action="{{ url_for('onebot.unbind') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-ghost" type="submit">解除绑定</button>
+      </form>{% endif %}
+    </div>
+  </section>
+  <section class="card qq-card" aria-labelledby="qq-use-title">
+    <h2 id="qq-use-title">绑定后可以做什么</h2>
+    <p class="qq-help">私聊里可以安排日程、管理待办、继续 AI 对话，模型切换等命令沿用灵犀的 <code>/help</code>。</p>
+    <p class="qq-help">在<a href="{{ url_for('settings_page.index', tab='channels') }}">通知渠道</a>选择「QQ 个人号（NapCat）」，即可接收简报和到期提醒；主动聊天在<a href="{{ url_for('companion.index') }}">主动陪伴</a>中单独开启。</p>
+    <p class="qq-help">连接和绑定不会自动开启主动消息。当前接收私聊文字，群聊不会触发 AI；图片、语音输入请先使用灵犀网页或飞书。</p>
+    <p class="qq-help"><code>/lingxi 身份</code>：查看 QQ 身份<br><code>/lingxi 状态</code>：查看绑定<br><code>/lingxi 解绑</code>：解除当前私聊绑定</p>
+  </section>
+</div>
+{% endblock %}

@@ -135,6 +135,12 @@ def _resolve_secret_key() -> str:
 
 
 class Config:
+    # NapCat direct integration; shared server credentials never enter chat.
+    ONEBOT_ENABLED = _bool("ONEBOT_ENABLED", False)
+    ONEBOT_ACCESS_TOKEN = os.getenv("ONEBOT_ACCESS_TOKEN", "").strip()
+    ONEBOT_API_URL = os.getenv("ONEBOT_API_URL", "").strip()
+    ONEBOT_WEBUI_URL = os.getenv("ONEBOT_WEBUI_URL", "").strip()
+
     # ---- 基础 ----
     SECRET_KEY = _resolve_secret_key()
     SESSION_COOKIE_SECURE = _bool("SESSION_COOKIE_SECURE", False)

@@ -14,7 +14,7 @@ from app.utils.timeutil import fmt_dt, user_tz
 bp = Blueprint("notifications", __name__, url_prefix="/notifications")
 
 # 渠道 / 状态 → 中文展示名（未知值原样显示）
-_CHANNELS = {"inapp": "站内", "serverchan": "Server酱", "feishu": "飞书", "feishu_app": "飞书机器人(应用)", "astrbot": "AstrBot 私聊"}
+_CHANNELS = {"inapp": "站内", "serverchan": "Server酱", "feishu": "飞书", "feishu_app": "飞书机器人(应用)", "astrbot": "AstrBot 私聊", "onebot": "QQ 个人号（NapCat）"}
 _STATUSES = {"pending": "待发送", "sent": "已发送", "failed": "失败"}
 
 

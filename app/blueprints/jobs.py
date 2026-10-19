@@ -33,6 +33,7 @@ _CHANNEL_OPTIONS = [
     ("serverchan", "Server酱"),
     ("feishu", "飞书"),
     ("feishu_app", "飞书机器人(应用)"),
+    ("onebot", "QQ 个人号（NapCat）"),
 ]
 
 _BRIEFING_ACTIONS = {"morning_briefing", "noon_briefing", "evening_review"}

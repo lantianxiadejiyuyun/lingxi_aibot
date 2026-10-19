@@ -60,6 +60,7 @@
       <div class="tabs-group-items">
         <button class="tab" type="button" data-tab="channels"><i class="bi bi-broadcast"></i> 渠道</button>
         <button class="tab" type="button" data-tab="feishu-app"><i class="bi bi-chat-dots"></i> 飞书</button>
+        <a class="tab" href="{{ url_for('onebot.index') }}"><i class="bi bi-chat-square-text"></i> QQ 个人号</a>
         <button class="tab" type="button" data-tab="briefing"><i class="bi bi-sun"></i> 简报</button>
       </div>
     </div>
@@ -432,7 +433,7 @@
       <p class="muted" style="margin-top:0">
         把多个渠道打包成一个「通知组」；在默认渠道、各场景、AI 助手、定时任务里选中该组，即同步推送到组内全部渠道。
       </p>
-      {% set ch_labels = {'inapp': '站内', 'serverchan': 'Server酱', 'feishu': '飞书', 'feishu_app': '飞书机器人(应用)'} %}
+      {% set ch_labels = {'inapp': '站内', 'serverchan': 'Server酱', 'feishu': '飞书', 'feishu_app': '飞书机器人(应用)', 'onebot': 'QQ 个人号（NapCat）', 'astrbot': 'AstrBot 私聊'} %}
       {% if notify_groups %}
         {% for gname, gchans in notify_groups.items() %}
         <div class="form-inline" style="padding:6px 0; border-top:1px solid #e5e7eb;">
