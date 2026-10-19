@@ -667,7 +667,9 @@ def deliver_notifications():
                 db.session.commit()
             records = notify(title, body, channels=event.notify_channels, user_id=event.user_id)
             event.notify_attempts += 1
-            event.notify_channels = [r.channel for r in records if r.status != "sent"]
+            # Pending means an asynchronous channel has durably accepted the
+            # message. That channel owns retries; enqueueing again duplicates it.
+            event.notify_channels = [r.channel for r in records if r.status == "failed"]
             if not event.notify_channels or event.notify_attempts >= 5:
                 event.notify_pending = False
                 if not event.notify_channels:

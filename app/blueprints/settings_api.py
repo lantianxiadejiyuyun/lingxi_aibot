@@ -155,12 +155,13 @@ def test_channel():
     records = notify("🧪 测试通知", "这是一条来自 灵犀 的测试消息", [channel])
     sent = [r for r in records if r.status == "sent"]
     failed = [r for r in records if r.status == "failed"]
-    status = "sent" if not failed and sent else "failed"
+    pending = [r for r in records if r.status == "pending"]
+    status = "failed" if failed else ("pending" if pending else "sent")
     error = "; ".join(r.error for r in failed if r.error) or ""
     return jsonify({"ok": True, "data": {
         "status": status,
         "error": error,
-        "detail": f"{len(records)} 个渠道：成功 {len(sent)}，失败 {len(failed)}",
+        "detail": f"{len(records)} 个渠道：成功 {len(sent)}，等待投递 {len(pending)}，失败 {len(failed)}",
     }})
 
 

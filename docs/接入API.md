@@ -214,6 +214,22 @@ const headers = {
 
 导航站回调响应约定：`{items:[{id,title,url,username,password,notes}],snapshot_version,source_version,updated_at}`。灵犀只提取对应入口允许返回的字段。远端 401/403、409、503 分别表示授权失效、副本需更新或服务不可用，灵犀返回脱敏错误，不透传原始响应正文。
 
+## AstrBot 私聊桥接
+
+以下路径同样使用账号 Bearer Token；基路径为 `/api/v1/integrations/astrbot`。绑定对象必须是 AstrBot 的 `平台实例:FriendMessage:私聊ID`，不接收群聊。安装与操作见 [主动陪伴与 AstrBot](主动陪伴与AstrBot.md)。
+
+| 方法与路径 | 请求与结果 |
+|---|---|
+| `GET /binding` | 返回 `bound`、`session`、`conversation_id`；不改变绑定 |
+| `PUT /binding` | `{session}`；明确绑定本人私聊，返回持久会话 ID；重复绑定同一私聊不新建会话 |
+| `DELETE /binding` | `{session}`；仅当仍为该私聊时解绑，否则 409；取消该账号旧投递队列 |
+| `POST /outbox/claim` | `{limit:1}`，1–10；返回 `{id,session,text,lease_token,lease_until,conversation_id}` 列表，租期 300 秒 |
+| `POST /outbox/{id}/ack` | `{lease_token,outcome:"sent"}` 或 `"failed"`；只能确认本人当前租约，失效租约返回 409 |
+
+普通文字沿用 `POST /api/v1/chat`，传绑定返回的 `conversation_id`。桥接插件仅处理后台明确允许的私聊；不要让陌生用户通过聊天提交账号 Token。`request_id` 是关联标识，不是服务端执行幂等键，因此插件持久保存平台消息 ID，聊天超时不自动重放。
+
+`astrbot` 是通知渠道，可用于简报、提醒和主动陪伴。排队后的通知状态为 `pending`，平台确认后才变为 `sent`，正文会追加到绑定会话，便于用户接着回复。未确认消息按退避重试，最多领取 5 次、24 小时后过期。插件保存分段投递进度，ACK 丢失仅补确认；平台发送与进度落盘无法形成单一事务，进程恰在两者之间崩溃时仍可能重复。主动陪伴队列在领取时再次检查开关、免打扰和近期聊天；普通提醒沿用自身计划。
+
 ## 隔离联调入口
 
 运行以下脚本会启动真实 Flask 路由与独立临时 SQLite，创建两个合成账号，并将合成凭据写入指定目录的 `ready.json`。目录必须尚不存在；所有上游 HTTP 被禁用，聊天使用 `/help`，不调用真实模型或密码库：

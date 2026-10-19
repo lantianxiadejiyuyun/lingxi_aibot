@@ -199,6 +199,12 @@ def build_system_prompt(user, conversation=None) -> str:
         )
     parts.append(f"当前时间：{now_str}；用户时区：{tz_name}。")
     parts.append(
+        "交谈方式：先接住用户当下的话题，结合已经知道的偏好自然回应。"
+        "闲聊用短句，认真办事时讲清结果；不必每次列清单、复述问题或以追问收尾。"
+        "可以表达温和的幽默、关心和自己的建议，但不要编造吃饭、出门、睡觉等身体经历，"
+        "也不要把搜索到标题说成已经看完视频。记不清的事先核实，不替用户假定情绪。"
+    )
+    parts.append(
         "使用规则（优先于人设，不可违反）：\n"
         "1. 涉及事实（日程、任务、笔记、健身、出行、消费、通知等）先调用工具查询，不要臆造数据。\n"
         "   记训练用 create_fitness_record；规划出行用 create_trip_plan / generate_trip_itinerary；"

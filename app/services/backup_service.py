@@ -43,10 +43,12 @@ _BUSINESS_TABLES = frozenset({
     "users", "events", "tasks", "notes", "conversations", "messages",
     "notifications", "scheduled_jobs", "settings", "webpages", "image_assets",
     "skills", "memories", "embeddings", "fitness_records", "trip_plans",
-    "expense_records", "daily_reports",
+    "expense_records", "daily_reports", "companion_states", "companion_activities",
     "storage_locations", "media_download_tasks", "media_download_attempts",
     "media_resource_candidates", "media_events", "agent_runs", "agent_steps",
 })
+# AstrBot bindings/outbox are live delivery configuration, like settings: exported
+# for inspection but never replayed by restore (which could resend old messages).
 
 
 def _serialize(value):

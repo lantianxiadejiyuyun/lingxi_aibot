@@ -272,6 +272,34 @@ class MediaWorkflowTest(IsolatedAppTestCase):
             self.assertEqual(self.uid, notify.call_args.kwargs["user_id"])
             self.assertFalse(event.notify_pending)
 
+    def test_astrbot_queued_notification_is_not_enqueued_again_by_media(self):
+        from app.models.astrbot import AstrBotOutbox
+        from app.models.notification import Notification
+        from app.services import astrbot_service
+
+        astrbot_service.bind(self.uid, "test:FriendMessage:download-owner")
+        task = self.task()
+        event = service._event(task, "failed", {"message": "isolated queue check"}, notify=True)
+        db.session.commit()
+        # Real notify() and real AstrBot queue; no platform sender runs here.
+        with patch("app.services.notify_service.default_channels", return_value=["astrbot"]):
+            service.deliver_notifications()
+            self.assertEqual(AstrBotOutbox.query.count(), 1)
+            self.assertEqual(Notification.query.one().status, "pending")
+            self.assertFalse(event.notify_pending)
+            self.assertEqual(event.notify_channels, [])
+            event.notify_lease_until = utcnow() - timedelta(seconds=1)
+            db.session.commit()
+            service.deliver_notifications()
+            self.assertEqual(AstrBotOutbox.query.count(), 1)
+            self.assertEqual(Notification.query.count(), 1)
+            queued = astrbot_service.claim(self.uid)[0]
+            astrbot_service.acknowledge(self.uid, queued["id"], queued["lease_token"], "sent")
+            service.deliver_notifications()
+            self.assertEqual(AstrBotOutbox.query.count(), 1)
+            self.assertEqual(Notification.query.one().status, "sent")
+            self.assertEqual(event.notify_attempts, 1)
+
     def test_admin_can_assign_downloaders_without_erasing_other_kind(self):
         member = self.make_user("member", is_admin=False)
         save_config(self.uid, {"owner_id": member.id, "downloaders": [{"kind": "aria2", "base_url": "http://localhost:6800", "secret": "other-secret"}]})

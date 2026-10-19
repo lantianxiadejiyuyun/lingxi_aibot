@@ -1,0 +1,25 @@
+# Standalone optional AstrBot. Run from the repository root:
+# docker compose -f docker-compose.astrbot.yml --profile astrbot up -d
+# Add it to the main compose only when sharing the same 'aibot' network:
+# docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile astrbot up -d astrbot
+services:
+  astrbot:
+    image: ${ASTRBOT_IMAGE:-soulter/astrbot:v4.29.1}
+    profiles: [astrbot]
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      PYTHONDONTWRITEBYTECODE: "1"
+    ports:
+      - "${ASTRBOT_BIND_IP:-127.0.0.1}:6185:6185"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/astrbot:/AstrBot/data
+      - ./integrations/astrbot:/AstrBot/data/plugins/astrbot_plugin_lingxi:ro
+    security_opt:
+      - no-new-privileges:true
+    networks: [aibot]
+
+networks:
+  aibot:

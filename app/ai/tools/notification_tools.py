@@ -47,7 +47,7 @@ def _parse_channels(channels) -> list[str] | None:
     "发送通知。当用户要求发送通知/提醒/推送（如设定提醒、定时推送、把信息发到微信或飞书）时调用。"
     "title 为通知标题（必填）；body 为正文内容；channels 为目标渠道，逗号分隔字符串或列表，"
     "可选值: inapp（站内通知）、serverchan（Server酱推送到微信）、feishu（飞书机器人）、"
-    "feishu_app（飞书应用机器人），也可填「group:组名」引用设置页自定义的通知组（一次联动组内多个渠道），"
+    "feishu_app（飞书应用机器人）、astrbot（已绑定的 AstrBot 私聊），也可填「group:组名」引用设置页自定义的通知组（一次联动组内多个渠道），"
     "省略时使用设置页配置的默认渠道；"
     "image_id 为可选图片 ID（从 list_images 获取），填写后把该图片随通知一起发送"
     "（飞书/飞书应用机器人支持发图，Server酱与站内仅文本）。返回每条渠道的发送结果（渠道/状态/错误）。",
@@ -58,7 +58,7 @@ def _parse_channels(channels) -> list[str] | None:
             "body": {"type": "string", "description": "通知正文，可空"},
             "channels": {
                 "type": "string",
-                "description": "目标渠道，逗号分隔（如 'inapp,serverchan'）；可选 inapp/serverchan/feishu/feishu_app，或 group:组名 引用自定义通知组；省略用默认渠道",
+                "description": "目标渠道，逗号分隔（如 'inapp,serverchan'）；可选 inapp/serverchan/feishu/feishu_app/astrbot，或 group:组名；省略用默认渠道。pending 表示已排队，不能称已送达。",
             },
             "image_id": {"type": "integer", "description": "可选，要随通知发送的图片 ID"},
         },
@@ -92,8 +92,9 @@ def send_notification(title: str, body: str = "", channels: str | list | None = 
                      user_id=current_user.id)
     ok = [r for r in records if r.status == "sent"]
     fail = [r for r in records if r.status == "failed"]
+    pending = [r for r in records if r.status == "pending"]
     return {
-        "summary": f"共 {len(records)} 条，成功 {len(ok)} 条，失败 {len(fail)} 条",
+        "summary": f"共 {len(records)} 条，已送达 {len(ok)} 条，等待投递 {len(pending)} 条，失败 {len(fail)} 条",
         "records": [
             {"channel": r.channel, "status": r.status, "error": r.error}
             for r in records
@@ -105,7 +106,7 @@ def send_notification(title: str, body: str = "", channels: str | list | None = 
     "list_notifications",
     "查询最近的通知记录。limit 为返回条数（默认 20，最大 50）。"
     "返回每条通知的 id/channel/title/status/created_at："
-    "channel 为渠道（inapp/serverchan/feishu/feishu_app），status 为状态（sent 已发送/failed 失败/pending 待发送），"
+    "channel 为渠道（inapp/serverchan/feishu/feishu_app/astrbot），status 为状态（sent 已发送/failed 失败/pending 待发送），"
     "created_at 为用户本地时区时间字符串。",
     {
         "type": "object",

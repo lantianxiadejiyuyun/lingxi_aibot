@@ -52,6 +52,7 @@
         <button class="tab" type="button" data-tab="ai"><i class="bi bi-cpu"></i> 模型与人设</button>
         <button class="tab" type="button" data-tab="voice"><i class="bi bi-mic"></i> 语音</button>
         <button class="tab" type="button" data-tab="search"><i class="bi bi-search"></i> 联网搜索</button>
+        <a class="tab" href="{{ url_for('companion.index') }}"><i class="bi bi-chat-heart"></i> 主动陪伴</a>
       </div>
     </div>
     <div class="tabs-group">
@@ -1231,6 +1232,8 @@
           var d = r.data || {};
           if (d.status === "sent") {
             window.toast("测试通知发送成功 🎉", "success");
+          } else if (d.status === "pending") {
+            window.toast("通知已排队，等待 AstrBot 投递；可在通知中心查看结果", "success");
           } else {
             window.toast("发送失败：" + (d.error || "未知错误"), "error");
           }

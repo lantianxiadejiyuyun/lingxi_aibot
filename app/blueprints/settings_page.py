@@ -71,6 +71,7 @@ _ACCOUNT_FIELD_LABELS = {
 _CHANNEL_OPTIONS = (
     ("inapp", "站内"), ("serverchan", "Server酱"),
     ("feishu", "飞书"), ("feishu_app", "飞书机器人(应用)"),
+    ("astrbot", "AstrBot 私聊"),
 )
 
 

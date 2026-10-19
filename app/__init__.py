@@ -146,6 +146,8 @@ def create_app(config_class=Config) -> Flask:
     from app.blueprints.integration_account import bp as integration_account_bp
     from app.blueprints.integration_data import bp as integration_data_bp
     from app.blueprints.integration_chat import bp as integration_chat_bp
+    from app.blueprints.integration_astrbot import bp as integration_astrbot_bp
+    from app.blueprints.companion import bp as companion_bp
     from app.blueprints.integration_vault import bp as integration_vault_bp
     from app.blueprints.navigation_vault import bp as navigation_vault_bp
     from app.blueprints.media import bp as media_bp, api_bp as integration_media_bp
@@ -154,11 +156,11 @@ def create_app(config_class=Config) -> Flask:
                notifications_bp, settings_bp, jobs_bp, chat_bp, feishu_bp,
                pages_bp, pages_site_bp, images_bp, image_files_bp,
                skills_bp, memory_bp, fitness_bp, travel_bp, expenses_bp,
-               expenses_api_bp, setup_bp, settings_api_bp, navigation_vault_bp, media_bp):
+               expenses_api_bp, setup_bp, settings_api_bp, navigation_vault_bp, media_bp, companion_bp):
         app.register_blueprint(bp)
 
     # Dedicated integration endpoints accept Tokens, never browser-session auth.
-    for bp in (integration_account_bp, integration_data_bp, integration_chat_bp, integration_vault_bp, integration_media_bp):
+    for bp in (integration_account_bp, integration_data_bp, integration_chat_bp, integration_vault_bp, integration_media_bp, integration_astrbot_bp):
         csrf.exempt(bp)
         app.register_blueprint(bp)
 
@@ -204,6 +206,7 @@ def create_app(config_class=Config) -> Flask:
         from app.services import backup_service  # noqa: F401
         from app.services import maintenance_service  # noqa: F401
         from app.services import memory_service  # noqa: F401
+        from app.services import companion_service  # noqa: F401
 
         try:
             from app.services.notify_service import load_channels
@@ -319,6 +322,7 @@ def register_context(app: Flask):
                 ("media.index", "文件与下载", "bi-cloud-arrow-down"),
             ]),
             ("智能", [
+                ("companion.index", "主动陪伴", "bi-chat-heart"),
                 ("skills.index", "技能", "bi-puzzle"),
                 ("memory.index", "记忆", "bi-lightbulb"),
             ]),

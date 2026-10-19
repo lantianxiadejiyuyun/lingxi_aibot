@@ -1,0 +1,8 @@
+name: astrbot_plugin_lingxi
+display_name: 灵犀 AI 助理桥接
+desc: AstrBot 接收私聊，灵犀负责 AI、日程、待办和主动消息。
+version: 0.1.0
+author: lingxi_aibot
+# This is a subdirectory plugin, updated together with the Lingxi repository.
+# Do not advertise the monorepo root as an independently installable plugin.
+astrbot_version: ">=4.29.1,<5"

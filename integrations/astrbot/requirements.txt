@@ -1,0 +1,2 @@
+# AstrBot 4.29.1 already includes httpx. Keep the plugin requirement explicit.
+httpx>=0.28.1,<1

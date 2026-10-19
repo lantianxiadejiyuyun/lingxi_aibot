@@ -22,6 +22,7 @@ from app.models.notification import (
     CHANNEL_INAPP, STATUS_FAILED, STATUS_PENDING, STATUS_SENT, Notification,
 )
 from app.services import settings_service
+from app.utils.scoping import current_user_id
 from app.utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ CHANNELS: dict[str, type] = {}
 class BaseChannel:
     name: str = ""
     display_name: str = ""
+    queued: bool = False
 
     @property
     def configured(self) -> bool:
@@ -40,6 +42,10 @@ class BaseChannel:
     def send(self, title: str, body: str, image_bytes: bytes | None = None) -> None:
         """发送通知。image_bytes 为可选的图片原始字节（各渠道按能力处理）。"""
         raise NotImplementedError
+
+    def deliver(self, notification, image_bytes: bytes | None = None, delivery_context=None) -> None:
+        """Default synchronous delivery; queued channels can retain the record ID."""
+        self.send(notification.title, notification.body, image_bytes=image_bytes)
 
 
 def register_channel(cls):
@@ -243,7 +249,8 @@ def notify_for(scene: str, title: str, body: str, explicit: Optional[list | str]
 
 
 def notify(title: str, body: str, channels: Optional[list[str] | str] = None,
-           image_bytes: bytes | None = None, user_id: Optional[int] = None) -> list[Notification]:
+           image_bytes: bytes | None = None, user_id: Optional[int] = None,
+           delivery_context: dict | None = None) -> list[Notification]:
     """发送通知到指定渠道（默认渠道列表），每渠道生成一条记录。
 
     :param image_bytes: 可选图片字节，渠道按其能力发送（飞书应用机器人可上传发图）
@@ -260,7 +267,7 @@ def notify(title: str, body: str, channels: Optional[list[str] | str] = None,
     records = []
     for name in channels:
         rec = Notification(channel=name, title=title, body=body, status=STATUS_PENDING,
-                           user_id=user_id)
+                           user_id=user_id if user_id is not None else (current_user_id() or None))
         db.session.add(rec)
         db.session.flush()
         ch = get_channel(name)
@@ -269,9 +276,9 @@ def notify(title: str, body: str, channels: Optional[list[str] | str] = None,
                 raise ValueError(f"未知渠道: {name}")
             if not ch.configured:
                 raise ValueError(f"渠道 {ch.display_name} 未配置")
-            ch.send(title, body, image_bytes=image_bytes)
-            rec.status = STATUS_SENT
-            rec.sent_at = utcnow()
+            ch.deliver(rec, image_bytes=image_bytes, delivery_context=delivery_context)
+            rec.status = STATUS_PENDING if ch.queued else STATUS_SENT
+            rec.sent_at = None if ch.queued else utcnow()
         except Exception as e:  # noqa: BLE001
             rec.status = STATUS_FAILED
             rec.error = str(e)[:500]
