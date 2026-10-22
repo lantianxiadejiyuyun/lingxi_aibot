@@ -73,6 +73,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/integrations/astrbot/outbox/{id}/ack",post(crate::companion::private::ack_api))
         .route("/api/v2/qq/inbound/{user_id}",post(crate::qq::api::inbound))
         .route("/api/v2/qq/people",get(crate::qq::api::people))
+        .route("/api/v2/qq/decision/probe",post(crate::qq::decision::probe))
         .route("/api/v2/qq/groups",get(crate::qq::sessions::list).post(crate::qq::sessions::create))
         .route("/api/v2/qq/groups/{group}",axum::routing::put(crate::qq::sessions::update).delete(crate::qq::sessions::remove))
         .route("/api/v2/qq/groups/{group}/conversation",get(crate::qq::sessions::conversation))

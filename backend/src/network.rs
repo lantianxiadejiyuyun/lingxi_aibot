@@ -69,12 +69,32 @@ pub async fn validate_url(app: &App, text: &str) -> Result<(url::Url, Vec<Socket
 /// Pin validated DNS answers for this connection; disable redirects and environment proxies.
 pub async fn client(app: &App, url: &str) -> Result<reqwest::Client> {
     let (url, addresses) = validate_url(app, url).await?;
+    pinned_client(&url, &addresses)
+}
+/// Local inference must never fall back to a public address or an environment proxy.
+pub async fn local_client(app: &App, text: &str) -> Result<reqwest::Client> {
+    let (url, addresses) = validate_url(app, text).await?;
+    if addresses.iter().any(|a| !is_local(a.ip())) {
+        return Err(invalid("本地判断模型只支持回环或局域网地址"));
+    }
+    pinned_client(&url, &addresses)
+}
+fn is_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .map(|v| is_local(IpAddr::V4(v)))
+            .unwrap_or(ip.is_loopback() || ip.is_unique_local()),
+    }
+}
+fn pinned_client(url: &url::Url, addresses: &[SocketAddr]) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
-        .resolve_to_addrs(url.host_str().unwrap(), &addresses)
+        .resolve_to_addrs(url.host_str().unwrap(), addresses)
         .build()
         .map_err(|e| Error::Internal(e.into()))
 }

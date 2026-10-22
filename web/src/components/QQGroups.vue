@@ -7,7 +7,7 @@ import type { Profile } from '../types'
 import ResourceState from './ResourceState.vue'
 import EmptyState from './EmptyState.vue'
 
-export interface GroupSettings { name:string; enabled:boolean; profile_id:string|null; system_prompt:string; reply_mentioned:boolean|null; collect_memory:boolean|null }
+export interface GroupSettings { name:string; enabled:boolean; profile_id:string|null; system_prompt:string; reply_mentioned:boolean|null; collect_memory:boolean|null; decision?:{mode:'off'|'observe'|'auto';cooldown_secs:number;max_replies_per_hour:number} }
 export interface QQGroup { group_id:string; settings:GroupSettings; conversation:{id:string;updated_at:number}; messages:number; last_seen:number|null; active:boolean; profile_id:string|null; reply_mentioned:boolean; collect_memory:boolean }
 const emit = defineEmits<{changed:[];filter:[group:string]}>()
 const {data,loading,error,load}=useResource(async()=>{
@@ -26,8 +26,11 @@ function edit(group?:QQGroup) {
     {...field('system_prompt','这个群的人设与交流风格',c?.system_prompt||'','textarea'),hint:'仅用于当前群，最多2000字。留空使用默认群聊风格，不加载私人助手的人设与记忆。'},
     choice('reply_mentioned','被 @ 时回复',[['inherit','沿用接入设置'],['true','开启'],['false','关闭']],inherit(c?.reply_mentioned)),
     choice('collect_memory','提取人物特点',[['inherit','沿用接入设置'],['true','开启'],['false','关闭']],inherit(c?.collect_memory)),
+    {...choice('decision_mode','普通消息的接话判断',[['off','关闭'],['observe','只观察 · 记录判断，不主动回复'],['auto','自动接话']],c?.decision?.mode||'off'),hint:'先在群管理配置本地判断模型。等待表示等下一条消息再判断，不会定时补发。'},
+    {...field('decision_cooldown','自动接话间隔（秒）',c?.decision?.cooldown_secs??120,'number',true),min:30,max:3600},
+    {...field('decision_max','每小时最多自动接话',c?.decision?.max_replies_per_hour??6,'number',true),min:1,max:30,hint:'被 @ 的回复不占这个额度。'},
   ],save:async v=>{
-    const settings:GroupSettings={name:v.name.trim(),enabled:v.enabled==='true',profile_id:v.profile_id||null,system_prompt:v.system_prompt.trim(),reply_mentioned:toggle(v.reply_mentioned),collect_memory:toggle(v.collect_memory)}
+    const settings:GroupSettings={name:v.name.trim(),enabled:v.enabled==='true',profile_id:v.profile_id||null,system_prompt:v.system_prompt.trim(),reply_mentioned:toggle(v.reply_mentioned),collect_memory:toggle(v.collect_memory),decision:{mode:(v.decision_mode||'off') as 'off'|'observe'|'auto',cooldown_secs:Number(v.decision_cooldown??120),max_replies_per_hour:Number(v.decision_max??6)}}
     if(group) await put(`/qq/groups/${group.group_id}`,settings)
     else await post('/qq/groups',{group_id:v.group_id.trim(),settings})
     notify(group?'群会话设置已保存':'群已添加，独立会话已建立')
@@ -50,7 +53,7 @@ defineExpose({load})
       <div v-else class="qq-groups-grid"><article v-for="g in data.groups" :key="g.group_id" class="qq-group-card">
         <div class="section-heading"><span class="stat-icon green"><MessageSquare :size="21" /></span><span :class="['tag',g.active?'green':'neutral']">{{g.active?'接入中':g.settings.enabled?'等待开启接入':'已暂停'}}</span></div>
         <h3>{{g.settings.name||`QQ 群 ${g.group_id}`}}</h3><p>群号 {{g.group_id}}</p>
-        <div class="qq-group-meta"><span>{{modelName(g)}}</span><span>{{g.reply_mentioned?'@ 时回复':'仅记录'}}</span></div>
+        <div class="qq-group-meta"><span>{{modelName(g)}}</span><span>{{g.reply_mentioned?'@ 时回复':'@ 回复关闭'}}</span><span v-if="g.settings.decision?.mode==='auto'">自动接话</span><span v-else-if="g.settings.decision?.mode==='observe'">接话观察中</span></div>
         <p class="qq-group-persona">{{g.settings.system_prompt||'默认群聊风格，只参考这个群里的交流。'}}</p>
         <div class="qq-group-activity"><span>{{g.messages}} 条发言</span><span>{{g.last_seen?date(g.last_seen):'等待第一条消息'}}</span></div>
         <div class="qq-group-actions"><RouterLink :to="`/qq/groups/${g.group_id}`" class="text-link">打开会话<ArrowUpRight :size="14" /></RouterLink><button class="icon-button" :aria-label="`查看群 ${g.group_id} 的人物`" @click="emit('filter',g.group_id)"><UsersRound :size="15" /></button><button class="icon-button" :aria-label="`设置群 ${g.group_id}`" @click="edit(g)"><Settings2 :size="15" /></button><button class="icon-button danger" :aria-label="`移除群 ${g.group_id}`" @click="disconnect(g)"><Trash2 :size="15" /></button></div>

@@ -14,7 +14,7 @@ FILES = ["Cargo.toml", "Cargo.lock", "Dockerfile", "docker-compose.yml",
          "scripts/export_legacy.py", "scripts/requirements-migration.txt", "scripts/pack_release.py",
          "docs/Rust部署与迁移.md", "docs/Rust-Vue架构.md", "docs/legacy/README.md",
          ".env.example", ".env.docker.example", "docker-compose.astrbot.yml",
-         "docker-compose.fnos.yml", "docs/fnOS部署.md", "docs/B站书房.md"]
+         "docker-compose.fnos.yml", "docker-compose.ollama.yml", "docs/fnOS部署.md", "docs/B站书房.md"]
 
 def pack(make_zip: bool = True) -> Path:
     if not (ROOT / "backend/Cargo.toml").is_file() or not (ROOT / "web/package-lock.json").is_file():

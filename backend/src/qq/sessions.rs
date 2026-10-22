@@ -25,6 +25,7 @@ pub struct GroupSettings {
     pub system_prompt: String,
     pub reply_mentioned: Option<bool>,
     pub collect_memory: Option<bool>,
+    pub decision: super::decision::Policy,
 }
 impl Default for GroupSettings {
     fn default() -> Self {
@@ -35,11 +36,13 @@ impl Default for GroupSettings {
             system_prompt: String::new(),
             reply_mentioned: None,
             collect_memory: None,
+            decision: super::decision::Policy::default(),
         }
     }
 }
 impl GroupSettings {
     pub fn validate(&self) -> Result<()> {
+        self.decision.validate()?;
         if self.name.chars().count() > 80 || self.system_prompt.chars().count() > 2000 {
             return Err(invalid("群名称最多80字，群人设最多2000字"));
         }
@@ -95,7 +98,7 @@ fn ok(value: Value) -> Json<Value> {
     Json(json!({"ok":true,"data":value}))
 }
 pub fn reply_key(cfg: &Config, group: &str) -> String {
-    crate::db::digest(&json!({"owner":cfg.owner_qq,"bot":cfg.bot_qq,"profile":cfg.profile_id,"onebot":cfg.onebot,"group":cfg.group_settings.get(group)}).to_string())
+    crate::db::digest(&json!({"owner":cfg.owner_qq,"bot":cfg.bot_qq,"profile":cfg.profile_id,"onebot":cfg.onebot,"reply_mentioned":cfg.reply_mentioned,"decision":cfg.decision,"group":cfg.group_settings.get(group)}).to_string())
 }
 pub async fn list(State(app): State<App>, user: User) -> Result<Json<Value>> {
     let cfg = config(&app, &user).await?;
@@ -132,7 +135,7 @@ pub async fn conversation(
         return Err(Error::NotFound);
     }
     Ok(ok(
-        json!({"conversation":ensure(&app,&user,&group).await?,"history":history(&app,&user,&group,now()+300,100).await?}),
+        json!({"conversation":ensure(&app,&user,&group).await?,"history":history(&app,&user,&group,now()+300,100).await?,"decisions":super::decision::logs(&app,&user,&group).await?}),
     ))
 }
 // Compare the encrypted settings snapshot to avoid losing another simultaneous group edit.

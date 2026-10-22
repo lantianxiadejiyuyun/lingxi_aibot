@@ -1,5 +1,6 @@
 //! QQ group observations are isolated from the owner's personal assistant data.
 pub mod api;
+pub mod decision;
 pub mod sessions;
 pub mod stickers;
 pub mod store;
@@ -45,6 +46,7 @@ pub struct Config {
     pub reply_mentioned: bool,
     pub retention_days: i64,
     pub stickers: stickers::Settings,
+    pub decision: decision::Settings,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -64,6 +66,7 @@ impl Default for Config {
             reply_mentioned: true,
             retention_days: 30,
             stickers: stickers::Settings::default(),
+            decision: decision::Settings::default(),
         }
     }
 }
@@ -112,6 +115,7 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
     let cfg: Config =
         serde_json::from_value(value.clone()).map_err(|_| invalid("QQ 配置字段无效"))?;
     cfg.stickers.validate()?;
+    cfg.decision.validate()?;
     let unique: std::collections::HashSet<_> = cfg.groups.iter().collect();
     if unique.len() != cfg.groups.len() || cfg.groups.iter().any(|g| !valid_id(g)) {
         return Err(invalid("群号须为有效数字，不能重复添加同一个群"));
@@ -124,6 +128,20 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
             return Err(invalid("群设置须对应已添加的群号"));
         }
         settings.validate()?;
+        if settings.decision.mode != decision::Mode::Off {
+            crate::network::local_client(app, &cfg.decision.endpoint()?).await?;
+            if settings.decision.mode == decision::Mode::Auto && settings.enabled && cfg.enabled {
+                if cfg.onebot.url.is_empty() {
+                    return Err(invalid("自动接话需要 OneBot HTTP 地址"));
+                }
+                crate::settings::active_profile(
+                    app,
+                    user,
+                    settings.profile_id.as_deref().or(cfg.profile_id.as_deref()),
+                )
+                .await?;
+            }
+        }
         if let Some(profile) = &settings.profile_id {
             crate::settings::active_profile(app, user, Some(profile)).await?;
         }

@@ -1,0 +1,30 @@
+# Optional local reply classifier. Merge with docker-compose.fnos.yml or docker-compose.yml.
+# For the generic deployment, enable LINGXI_ALLOW_PRIVATE_NETWORK=true for app/worker.
+services:
+  ollama:
+    image: ollama/ollama:0.40.7
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_MAX_QUEUE: "1"
+      OLLAMA_CONTEXT_LENGTH: "2048"
+      OLLAMA_KEEP_ALIVE: 2m
+    volumes:
+      - local_decision_models:/root/.ollama
+    # No published port: reachable only by services on this Compose network.
+    cpus: 2.0
+    mem_limit: 1400m
+    memswap_limit: 1400m
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+volumes:
+  local_decision_models:

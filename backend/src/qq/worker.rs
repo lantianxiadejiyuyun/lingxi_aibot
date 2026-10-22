@@ -23,6 +23,7 @@ pub async fn reconcile(app: &App) -> Result<()> {
         }
     }
     let pool = store::pool(app).await?;
+    super::decision::prune(app).await?;
     super::stickers::reconcile(app).await?;
     sqlx::query("UPDATE facts SET deleted_at=?,revision=revision+1 WHERE expires_at<=? AND deleted_at IS NULL").bind(now()).bind(now()).execute(pool).await?;
     let facts: Vec<store::Fact> = sqlx::query_as(
@@ -110,7 +111,10 @@ async fn process_locked(
     }
     let mut delivered = event.delivery_status == "sent";
     if event.delivery_status == "pending" {
-        if event.triggered && cfg.reply_mentioned {
+        let mentioned = event.triggered && cfg.reply_mentioned;
+        let automatic =
+            !mentioned && super::decision::should_reply(app, user, &cfg, &event).await?;
+        if mentioned || automatic {
             // A durable per-group cooldown coordinates multiple worker processes.
             loop {
                 let allowed = sqlx::query("INSERT INTO qq_reply_limits(user_id,group_id,last_at) VALUES(?,?,?) ON CONFLICT(user_id,group_id) DO UPDATE SET last_at=excluded.last_at WHERE qq_reply_limits.last_at<=?")
@@ -198,7 +202,10 @@ async fn process_locked(
                 let fresh = config(app, user).await?.for_group(&event.group_id);
                 if !fresh.as_ref().is_some_and(|c| {
                     c.enabled
-                        && c.reply_mentioned
+                        && ((mentioned && c.reply_mentioned)
+                            || (automatic
+                                && super::decision::policy(c, &event.group_id).mode
+                                    == super::decision::Mode::Auto))
                         && sessions::reply_key(c, &event.group_id)
                             == sessions::reply_key(&cfg, &event.group_id)
                 }) {

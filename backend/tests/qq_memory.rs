@@ -24,6 +24,9 @@ struct Mock {
     requests: Arc<Mutex<Vec<Value>>>,
     sends: Arc<Mutex<Vec<Value>>>,
     model_requests: Arc<Mutex<Vec<Value>>>,
+    decision_requests: Arc<Mutex<Vec<Value>>>,
+    decision_response: Arc<Mutex<Option<String>>>,
+    decision_delay: Arc<std::sync::atomic::AtomicU64>,
     fail_send: Arc<Mutex<bool>>,
     model_response: Arc<Mutex<Option<String>>>,
     hold: Arc<std::sync::atomic::AtomicBool>,
@@ -32,6 +35,20 @@ struct Mock {
 }
 async fn embedding() -> Json<Value> {
     Json(json!({"data":[{"embedding":[1.0,0.0,0.0]}]}))
+}
+async fn decision(State(s): State<Mock>, Json(v): Json<Value>) -> Json<Value> {
+    s.decision_requests.lock().unwrap().push(v);
+    tokio::time::sleep(std::time::Duration::from_millis(
+        s.decision_delay.load(std::sync::atomic::Ordering::Relaxed),
+    ))
+    .await;
+    let content = s
+        .decision_response
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| r#"{"action":"reply"}"#.into());
+    Json(json!({"done":true,"done_reason":"stop","message":{"content":content}}))
 }
 async fn info() -> Json<Value> {
     Json(json!({"result":{"config":{"params":{"vectors":{"size":3}}}}}))
@@ -144,6 +161,7 @@ impl Fixture {
         let router = Router::new()
             .route("/v1/embeddings", post(embedding))
             .route("/v1/chat/completions", post(model))
+            .route("/api/chat", post(decision))
             .route("/send_group_msg", post(send))
             .route("/collections/{name}", get(info))
             .route("/collections/{name}/points", put(upsert))
@@ -211,6 +229,215 @@ impl Fixture {
         .await
         .unwrap()
     }
+    async fn decision_mode(&self, mode: &str) {
+        let mut cfg = integrations::config(&self.app, &self.user).await.unwrap();
+        cfg["qq"]["decision"] = json!({"url":cfg["qq"]["onebot"]["url"],"timeout_secs":3});
+        cfg["qq"]["group_settings"] =
+            json!({"30001":{"decision":{"mode":mode,"max_replies_per_hour":1}}});
+        integrations::save_config(&self.app, &self.user, cfg)
+            .await
+            .unwrap();
+    }
+    async fn process(&self, event: &Value) -> Value {
+        worker::process(
+            &self.app,
+            &self.user,
+            &json!({"id":event["event_id"],"owner":event["storage"]=="main"}),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn local_decision_observes_without_reply_and_only_sees_current_group() {
+    let f = Fixture::new().await;
+    f.decision_mode("observe").await;
+    f.fact("10001", "30001", "PRIVATE OWNER MEMORY").await;
+    f.ingest(300, "10002", "30002", "OTHER GROUP CONTENT", false)
+        .await;
+    f.ingest(301, "10001", "30001", "本群主人公开发言", false)
+        .await;
+    let event = f
+        .ingest(302, "10002", "30001", "想问大肥鱼喜欢什么？", false)
+        .await;
+    assert_eq!(f.process(&event).await["delivered"], false);
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+    assert!(f.mock.model_requests.lock().unwrap().is_empty());
+    let requests = f.mock.decision_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body = requests[0].to_string();
+    assert!(body.contains("本群主人公开发言"));
+    assert!(!body.contains("OTHER GROUP CONTENT"));
+    assert!(!body.contains("PRIVATE OWNER MEMORY"));
+    assert!(!body.contains("PRIVATE SYSTEM PROMPT"));
+    assert_eq!(requests[0]["think"], false);
+    drop(requests);
+    let (_, view) = f
+        .api(
+            &f.user,
+            "GET",
+            "/api/v2/qq/groups/30001/conversation",
+            json!({}),
+        )
+        .await;
+    assert_eq!(view["data"]["decisions"][0]["reason"], "observe");
+    assert_eq!(view["data"]["decisions"][0]["authorized"], false);
+}
+
+#[tokio::test]
+async fn local_decision_auto_replies_once_then_enforces_group_budget() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    let event = f.ingest(310, "10001", "30001", "大肥鱼来聊聊", false).await;
+    assert_eq!(f.process(&event).await["delivered"], true);
+    f.process(&event).await;
+    let next = f.ingest(311, "10002", "30001", "你再说说", false).await;
+    assert_eq!(f.process(&next).await["delivered"], false);
+    let other = f.ingest(312, "10002", "30002", "大肥鱼来聊聊", false).await;
+    assert_eq!(f.process(&other).await["delivered"], false);
+    assert_eq!(f.mock.decision_requests.lock().unwrap().len(), 1);
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 1);
+    let (_, view) = f
+        .api(
+            &f.user,
+            "GET",
+            "/api/v2/qq/groups/30001/conversation",
+            json!({}),
+        )
+        .await;
+    assert_eq!(view["data"]["decisions"][0]["reason"], "reply_limit");
+    let owner_in_member_db: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE qq_id='10001'")
+            .fetch_one(store::pool(&f.app).await.unwrap())
+            .await
+            .unwrap();
+    assert_eq!(owner_in_member_db, 0);
+}
+
+#[tokio::test]
+async fn local_decision_wait_ignore_invalid_and_timeout_never_send() {
+    for response in [
+        r#"{"action":"wait"}"#,
+        r#"{"action":"ignore"}"#,
+        "not JSON",
+        r#"{"action":"reply","confidence":1}"#,
+        "timeout",
+    ] {
+        let f = Fixture::new().await;
+        f.decision_mode("auto").await;
+        *f.mock.decision_response.lock().unwrap() = Some(response.into());
+        if response == "timeout" {
+            f.mock
+                .decision_delay
+                .store(4000, std::sync::atomic::Ordering::Relaxed);
+        }
+        let event = f.ingest(320, "10002", "30001", "大肥鱼等等", false).await;
+        assert_eq!(f.process(&event).await["delivered"], false);
+        assert!(f.mock.sends.lock().unwrap().is_empty());
+        assert!(f.mock.model_requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn direct_mentions_bypass_unavailable_classifier_and_stale_messages_do_not_infer() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    *f.mock.decision_response.lock().unwrap() = Some("broken".into());
+    let event = f.ingest(330, "10002", "30001", "你好", true).await;
+    assert_eq!(f.process(&event).await["delivered"], true);
+    assert!(f.mock.decision_requests.lock().unwrap().is_empty());
+    let stale = f.ingest(331, "10002", "30001", "旧消息", false).await;
+    sqlx::query("UPDATE events SET occurred_at=? WHERE id=?")
+        .bind(db::now() - 300)
+        .bind(stale["event_id"].as_str().unwrap())
+        .execute(store::pool(&f.app).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(f.process(&stale).await["delivered"], false);
+    assert!(f.mock.decision_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn turning_off_automatic_replies_during_generation_prevents_send() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    let event = f
+        .ingest(340, "10002", "30001", "大肥鱼帮我想想", false)
+        .await;
+    f.mock.hold.store(true, std::sync::atomic::Ordering::SeqCst);
+    let (app, user) = (f.app.clone(), f.user.clone());
+    let task = tokio::spawn(async move {
+        worker::process(
+            &app,
+            &user,
+            &json!({"id":event["event_id"],"owner":false}),
+            &CancellationToken::new(),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), f.mock.entered.notified())
+        .await
+        .unwrap();
+    f.decision_mode("off").await;
+    f.mock.release.notify_one();
+    assert_eq!(
+        task.await.unwrap().unwrap()["ignored"],
+        "group_settings_changed"
+    );
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn local_decision_rejects_public_endpoints_and_probe_does_not_send() {
+    let f = Fixture::new().await;
+    let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+    cfg["qq"]["decision"] = json!({"url":"http://8.8.8.8:11434"});
+    cfg["qq"]["group_settings"] = json!({"30001":{"decision":{"mode":"observe"}}});
+    assert!(
+        integrations::save_config(&f.app, &f.user, cfg)
+            .await
+            .is_err()
+    );
+    f.decision_mode("observe").await;
+    let (status, result) = f
+        .api(
+            &f.user,
+            "POST",
+            "/api/v2/qq/decision/probe",
+            json!({"text":"想听听你的建议"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["data"]["action"], "reply");
+    assert_eq!(result["data"]["sent"], false);
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn explicit_address_rules_work_without_inference_and_obey_the_reply_budget() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    *f.mock.decision_response.lock().unwrap() = Some("unavailable".into());
+    let waiting = f
+        .ingest(350, "10002", "30001", "鱼鱼，等我说完", false)
+        .await;
+    assert_eq!(f.process(&waiting).await["delivered"], false);
+    let quiet = f
+        .ingest(351, "10002", "30001", "鱼鱼，先别回复", false)
+        .await;
+    assert_eq!(f.process(&quiet).await["delivered"], false);
+    let addressed = f
+        .ingest(352, "10002", "30001", "大肥鱼，你喜欢什么颜色呀？", false)
+        .await;
+    assert_eq!(f.process(&addressed).await["delivered"], true);
+    let again = f
+        .ingest(353, "10002", "30001", "大肥鱼，你还在吗？", false)
+        .await;
+    assert_eq!(f.process(&again).await["delivered"], false);
+    assert!(f.mock.decision_requests.lock().unwrap().is_empty());
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

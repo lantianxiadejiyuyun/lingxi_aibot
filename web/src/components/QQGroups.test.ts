@@ -19,7 +19,7 @@ it('saves one group settings without replacing the shared integration config',as
  const w=setup();await flushPromises();await w.find('[aria-label="设置群 30002"]').trigger('click')
  const form=vi.mocked(openForm).mock.calls[0]![0]
  await form.save({group_id:'30002',name:'游戏群',enabled:'false',profile_id:'special',system_prompt:'轻松聊天',reply_mentioned:'true',collect_memory:'inherit'})
- expect(put).toHaveBeenCalledWith('/qq/groups/30002',{name:'游戏群',enabled:false,profile_id:'special',system_prompt:'轻松聊天',reply_mentioned:true,collect_memory:null})
+ expect(put).toHaveBeenCalledWith('/qq/groups/30002',{name:'游戏群',enabled:false,profile_id:'special',system_prompt:'轻松聊天',reply_mentioned:true,collect_memory:null,decision:{mode:'off',cooldown_secs:120,max_replies_per_hour:6}})
  expect(post).not.toHaveBeenCalled();w.unmount()
 })
 it('adds a group through its own endpoint and retains failures in the form',async()=>{

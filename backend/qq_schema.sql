@@ -44,3 +44,22 @@ CREATE TABLE IF NOT EXISTS sticker_review_limits (
  user_id TEXT NOT NULL, hour INTEGER NOT NULL, count INTEGER NOT NULL,
  PRIMARY KEY(user_id,hour)
 );
+-- Only decision metadata goes here; owner message text remains in the main database.
+CREATE TABLE IF NOT EXISTS reply_decisions (
+  event_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  model TEXT NOT NULL,
+  elapsed_ms INTEGER NOT NULL,
+  attempted INTEGER NOT NULL DEFAULT 0,
+  authorized INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reply_decisions_scope ON reply_decisions(user_id,group_id,created_at);
+CREATE TABLE IF NOT EXISTS decision_inference_lock (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  token TEXT NOT NULL,
+  until_at INTEGER NOT NULL
+);
