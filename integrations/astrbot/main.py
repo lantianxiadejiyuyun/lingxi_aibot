@@ -14,7 +14,7 @@ from .bridge import Bridge, BridgeError, Client, parse_accounts
 
 HELP = ("灵犀桥接：\n/lingxi 身份：查看当前私聊标识\n/lingxi 绑定：连接后台配置的灵犀账号"
         "\n/lingxi 状态：查看绑定状态\n/lingxi 解绑：停止本私聊的桥接和主动推送"
-        "\n绑定后直接聊天，也可使用灵犀的 /help、/model 等命令。")
+        "\n绑定后直接聊天；模型与人设在灵犀网页中设置。")
 
 
 class LingxiBridgePlugin(Star):

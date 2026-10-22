@@ -1,6 +1,4 @@
-# Standalone optional AstrBot. Run from the repository root:
-# docker compose -f docker-compose.astrbot.yml --profile astrbot up -d
-# Add it to the main compose only when sharing the same 'aibot' network:
+# Rust v2 companion bridge on the app's default Compose network.
 # docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile astrbot up -d astrbot
 services:
   astrbot:
@@ -19,7 +17,3 @@ services:
       - ./integrations/astrbot:/AstrBot/data/plugins/astrbot_plugin_lingxi:ro
     security_opt:
       - no-new-privileges:true
-    networks: [aibot]
-
-networks:
-  aibot:

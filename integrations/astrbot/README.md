@@ -4,10 +4,10 @@ AstrBot 连接聊天平台，灵犀继续负责模型、人设、记忆、日程
 
 ## 1. 启动 AstrBot
 
-从灵犀仓库根目录执行：
+Rust v2 从灵犀仓库根目录执行，AstrBot 与 app 共用默认网络：
 
 ```sh
-docker compose -f docker-compose.astrbot.yml --profile astrbot up -d
+docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile astrbot up -d astrbot
 ```
 
 固定使用 `soulter/astrbot:v4.29.1`。数据放在 `data/astrbot`，本目录自动挂载为插件。管理界面默认仅监听主机 `127.0.0.1:6185`；远程服务器可通过 SSH 转发到自己电脑后打开 `http://127.0.0.1:6185`：
@@ -20,13 +20,9 @@ ssh -L 6185:127.0.0.1:6185 your-user@your-server
 
 已有 AstrBot 时，把本目录完整复制到它的 `data/plugins/astrbot_plugin_lingxi/` 并重载插件即可。**不要把整个灵犀仓库当成单插件通过 URL 安装**；更新时同步本目录并重载，挂载安装则拉取灵犀代码后重启 AstrBot。
 
-如和仓库主编排共用 `aibot` 网络，可使用：
+v2 的 API 地址填写 `http://app:8000/api/v2`。独立部署 AstrBot 时填写实际可达的局域网或 HTTPS API 地址，不能把容器里的 `127.0.0.1` 当成宿主机。
 
-```sh
-docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile astrbot up -d astrbot
-```
-
-这种方式 API 地址可填 `http://app:8000/lingxi/api/v1`。独立编排时填灵犀实际可达的局域网地址或 HTTPS 地址，不能把容器里的 `127.0.0.1` 当成宿主机。`/lingxi` 应替换为你的后台入口；若没有入口前缀则直接使用 `/api/v1`。
+插件仍兼容独立运行的 Python v1 服务：基地址通常为 `http://旧主机:端口/lingxi/api/v1`，其中 `/lingxi` 按实际入口调整。当前仓库已移除 v1 后端和旧部署入口；相关历史配置见 `docs/legacy`。v1/v2 基地址决定插件使用的协议，请与实际服务版本一致。
 
 ## 2. 绑定自己的私聊
 
@@ -43,15 +39,17 @@ docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile ast
 | `/lingxi 绑定` | 明确绑定当前私聊；原会话被删除时重建会话 |
 | `/lingxi 状态` | 查看绑定情况 |
 | `/lingxi 解绑` | 停止当前私聊的灵犀桥接和主动推送 |
-| `/help`、`/model` 等 | 绑定后交给灵犀原有命令处理 |
+| 普通文字 | 绑定后交给灵犀 AI；v2 模型与人设在网页设置，v1 保留原命令 |
 
 Token 撤销或轮换后，在插件后台更新 Token，再检查绑定状态。AstrBot 的 `secret` 字段仅遮蔽后台输入框，配置文件仍保存原值；备份插件配置时同样需要保护它。
 
 ## 3. 主动消息
 
-在灵犀配置通知渠道 `astrbot`，并按需启用主动陪伴或简报。插件默认每 15 秒拉取当前账号的队列，只投递到已明确允许的同一个私聊。
+v2 在「主动陪伴」选择 AstrBot 并保存开启；未开启时不会主动发消息。目前 v2 桥接队列用于主动陪伴，v1 保留其主动陪伴与简报配置。插件默认每 15 秒拉取当前账号的队列，只投递到已明确允许的同一个私聊。
 
-投递成功才确认；发送失败交由灵犀退避重试，最多 5 次、最长 24 小时。长消息按每段最多 1800 字符发送，每完成一段就保存进度，断线后从下一段继续；总消息支持 12000 字符。确认请求丢失时只重试确认，不重复发送已记录的分段。
+v2 领取前检查时段与设置，领取后不会自动再次发放，发送失败或租约超时不会盲目重发。待发消息到用户当地午夜过期。插件持久保存 ACK，确认请求丢失时只重试确认。关闭陪伴、修改设置或解绑会取消尚未领取的消息。v1 仍沿用服务端退避重试，最多 5 次、最长 24 小时。
+
+长消息按每段最多 1800 字符发送，每完成一段就保存进度；总消息支持 12000 字符。v1 再次领取后可从未记录的分段继续，v2 以避免重复为优先，结果不确定时需人工核实。
 
 平台发送与本地进度写入无法组成一个事务，因此进程恰好在两步之间退出仍可能重复一段。不要让两个 AstrBot 实例同时使用同一灵犀账号。插件保存最近 512 个平台消息 ID 防止重投递；普通 AI 对话失败或超时**不会自动重发**，以免重复创建任务等操作。平台没有消息 ID 时无法提供该层去重。
 
@@ -66,20 +64,20 @@ Token 撤销或轮换后，在插件后台更新 Token，再检查绑定状态�
 
 本插件按 AstrBot `v4.29.1` 官方源码核对，声明兼容 `>=4.29.1,<5`；已完成离线模拟测试，真实平台仍需绑定后联调。
 
-| 灵犀接口（相对于 `/api/v1`） | 用途 |
+| 灵犀接口（相对于配置的 API 基地址） | 用途 |
 |---|---|
 | `GET/PUT/DELETE /integrations/astrbot/binding` | 查询、绑定、解绑私聊 |
-| `POST /chat` | 使用绑定的 conversation_id 运行灵犀 AI |
+| v2 `POST /integrations/astrbot/chat`；v1 `POST /chat` | 使用绑定的 conversation_id 运行灵犀 AI |
 | `POST /integrations/astrbot/outbox/claim` | 领取待发送消息和 300 秒租约 |
 | `POST /integrations/astrbot/outbox/{id}/ack` | 携带 lease_token，确认 sent 或 failed |
 
-API 请求使用账号 Token、禁止跟随 HTTP 重定向，凭据不进入消息或日志。聊天的 `request_id` 仅用于关联，服务端不把它作为幂等键。
+API 请求使用账号 Token、禁止跟随 HTTP 重定向，凭据不进入消息或日志。v2 的 conversation_id 是字符串 UUID，v1 是整数；插件保留对应类型。v2 聊天 request_id 参与请求去重，v1 仅用于关联。普通聊天失败后插件均不自动重发。
 
 开发验证：
 
 ```sh
-python -m unittest scripts.tests.test_astrbot_plugin -v
-docker compose -f docker-compose.astrbot.yml --profile astrbot config --quiet
+python -m unittest scripts.tests.test_astrbot_plugin scripts.tests.test_astrbot_v2 -v
+docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile astrbot config --quiet
 ```
 
 参考：[AstrBot 官方仓库](https://github.com/AstrBotDevs/AstrBot/tree/v4.29.1)、[事件 API](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.1/astrbot/core/platform/astr_message_event.py)、[主动发送 API](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.1/astrbot/core/star/context.py)、[插件配置](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.1/docs/en/dev/star/guides/plugin-config.md)。这里只调用公开接口，不复制 AstrBot 的实现。

@@ -1,23 +1,27 @@
-FROM python:3.11-slim
+FROM node:24-bookworm-slim AS frontend
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY web ./
+RUN npm run build
 
-WORKDIR /app
-ENV PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 PIP_NO_CACHE_DIR=1 \
-    TZ=Asia/Shanghai FLASK_APP=wsgi:app FLASK_SKIP_DOTENV=1 PORT=8000 \
-    AIBOT_ENV_FILE=/app/data/.env PAGE_BIND=0.0.0.0
+FROM rust:1.98-bookworm AS build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY backend ./backend
+COPY --from=frontend /web/dist ./web/dist
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --locked --release --bin lingxi && cp target/release/lingxi /build/lingxi
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt gunicorn
-
-COPY app ./app
-COPY run.py wsgi.py ./
-RUN mkdir -p data/backups data/images \
-    && useradd -m -u 1000 aibot \
-    && chown -R aibot:aibot /app
-USER aibot
-
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 lingxi && mkdir -p /data && chown lingxi:lingxi /data
+COPY --from=build /build/lingxi /usr/local/bin/lingxi
+ENV LINGXI_DATA_DIR=/data LINGXI_BIND=0.0.0.0:8000 RUST_LOG=lingxi=info,tower_http=info
+USER lingxi
 EXPOSE 8000
-# 单 worker + 多线程：APScheduler 随 worker 进程启动一次，避免多 worker 重复调度
-# WebSocket 每连接占用一个线程；最多 16 条连接，32 线程为 HTTP/SSE 保留余量
-# timeout 300：多轮工具调用的长对话（LLM_TIMEOUT=90 × 多轮）不会在 120s 被截断
-# 镜像以 uid 1000 运行；bind mount ./data 时请 chown -R 1000:1000 data
-CMD ["gunicorn", "-w", "1", "--threads", "32", "-b", "0.0.0.0:8000", "--timeout", "300", "wsgi:app"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -fsS http://127.0.0.1:8000/readyz || exit 1
+ENTRYPOINT ["lingxi"]
+CMD ["serve"]

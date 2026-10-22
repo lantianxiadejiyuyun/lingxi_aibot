@@ -1,0 +1,52 @@
+# Prebuilt Rust/Vue deployment for fnOS. Import the images before starting.
+name: lingxi-v2
+services:
+  app:
+    image: ${LINGXI_IMAGE:-lingxi:2.0.0-fnos-20261022-bili}
+    pull_policy: never
+    environment:
+      LINGXI_DATA_DIR: /data
+      LINGXI_BIND: 0.0.0.0:8000
+      LINGXI_ALLOW_PRIVATE_NETWORK: "true"
+      TZ: Asia/Shanghai
+      RUST_LOG: lingxi=info,tower_http=info
+    ports:
+      - "${LINGXI_NAS_IP:?Set the NAS LAN address}:${LINGXI_PORT:-18081}:8000"
+      - "127.0.0.1:${LINGXI_PORT:-18081}:8000"
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    stop_grace_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    pull_policy: never
+    environment:
+      QDRANT__SERVICE__API_KEY: ${LINGXI_QDRANT_API_KEY:?Set a vector database key}
+    volumes:
+      - qq_vectors:/qdrant/storage
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  qq_vectors:

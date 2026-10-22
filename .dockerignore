@@ -19,5 +19,11 @@ certs/
 *.zip
 instance/
 migrations/
+!backend/migrations/
+!backend/migrations/*.sql
+target/
 deploy/
+docs/legacy/
 release/
+web/node_modules/
+web/dist/

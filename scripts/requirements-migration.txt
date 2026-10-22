@@ -1,0 +1,3 @@
+# Only needed by export_legacy.py; the Rust server has no Python dependencies.
+SQLAlchemy>=2.0.43,<3
+PyMySQL>=1.1.1,<2

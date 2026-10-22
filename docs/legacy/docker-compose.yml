@@ -1,0 +1,94 @@
+# 灵犀 Docker 编排
+# 已有 MySQL / Caddy 用法见 docs/部署参考.md。
+# 全新 Docker 安装推荐 docker-compose.quickstart.yml，见 docs/部署.md。
+#
+#   接已有 MySQL、只要应用：  docker compose up -d --build app
+#   自带 MySQL 8：           docker compose --profile mysql up -d --build app db
+#   有域名 + Caddy HTTPS：   先改 docker/Caddyfile，再 docker compose up -d --build
+#                           （会同时启动 app 与 caddy；无域名请只启动 app）
+#
+# .env 必须存在（cp .env.example .env），首启导入 data/.env 作为运行配置。
+# 后续安装向导或手动修改运行配置均使用 data/.env。容器内连库：
+#   宿主机 MySQL → MYSQL_HOST=host.docker.internal
+#   本文件 db 服务 → MYSQL_HOST=db   （不要写 127.0.0.1）
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.legacy
+    environment:
+      FLASK_APP: wsgi:app
+      TZ: Asia/Shanghai
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      # 根 .env 仅作首启导入源；运行配置位于可写 data/.env，支持原子替换。
+      # 不使用 env_file，避免进程环境遮蔽安装向导保存的值。
+      - ./.env:/app/.env:ro
+    # gunicorn 监听 8000；Caddy 走内部网络，一般不必映射。
+    # 不用 Caddy、直接 IP 访问后台时：
+    #   ports: ["8000:8000"]
+    # 独立网页端口须与 data/.env / 设置页的 PAGE_PORT 一致：
+    #   ports: ["8000:8000", "8080:8080"]
+    # 镜像默认 PAGE_BIND=0.0.0.0，容器端口映射才可达。
+    restart: unless-stopped
+    networks: [aibot]
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    # 镜像内以 uid 1000（aibot）运行；bind mount 的 data 需属主匹配：
+    #   chown -R 1000:1000 data
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [aibot]
+
+  db:
+    image: mysql:8.0
+    profiles: ["mysql"]
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DB:-ai_bot}
+      MYSQL_USER: ${MYSQL_USER:-ai_bot}
+      # 不在全文件插值阶段强制密码，未启用 mysql profile 时只运行 app 无需 root 密码。
+      # 启用 db 时必须在根 .env 填写两项密码；MySQL 镜像会拒绝空 root 密码。
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    networks: [aibot]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+networks:
+  aibot:
+
+volumes:
+  caddy_data:
+  caddy_config:
+  mysql_data:

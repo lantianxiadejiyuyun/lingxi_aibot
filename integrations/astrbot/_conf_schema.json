@@ -13,7 +13,7 @@
         "items": {
           "enabled": {"description": "启用此组", "type": "bool", "default": true},
           "name": {"description": "名称", "type": "string", "default": "我的灵犀"},
-          "api_base": {"description": "灵犀 API 基地址（含入口和 /api/v1）", "type": "string", "default": "", "hint": "例如 http://app:8000/lingxi/api/v1；公网请用 HTTPS"},
+          "api_base": {"description": "灵犀 API 基地址（v2 使用 /api/v2，旧版使用 /api/v1）", "type": "string", "default": "", "hint": "例如 http://app:8000/api/v2；公网请用 HTTPS"},
           "api_token": {"description": "此账号的 API Token", "type": "string", "default": "", "secret": true},
           "private_session": {"description": "允许的私聊标识", "type": "string", "default": "", "hint": "先向 AstrBot 私聊发送 /lingxi 身份，把完整返回值粘贴到这里。"}
         }

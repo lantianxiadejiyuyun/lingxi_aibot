@@ -50,3 +50,11 @@ desktop.ini
 # ===== 发行包由 scripts/pack_release.py 生成，不入库 =====
 release/lingxi/
 release/*.zip
+release/lingxi-v2*/
+
+# Rust build output (SQL migrations are source files)
+/target/
+!/backend/migrations/
+!/backend/migrations/*.sql
+/web/node_modules/
+/web/dist/

@@ -1,0 +1,17 @@
+/* Shared palette. Pastel surfaces use dark ink for readable text. */
+:root {
+  --rose: #EABCDD;
+  --rose-soft: #F0DFEA;
+  --background: #F7F6F5;
+  --lavender: #DDD1E9;
+  --blue: #A4B5D5;
+  --ink: #403547;
+  --muted: #75677B;
+  --accent: #EABCDD;
+  --accent-strong: #71537E;
+  --surface: #FFFFFF;
+  --surface-soft: #FAF7FA;
+  --border: #E5DDE8;
+  --shadow-color: #66557414;
+  --shadow: 0 5px 22px var(--shadow-color);
+}

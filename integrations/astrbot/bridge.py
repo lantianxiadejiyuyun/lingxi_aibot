@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import uuid
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -63,12 +64,12 @@ def parse_accounts(config):
             url = urlsplit(base)
             valid_url = (url.scheme in {"http", "https"} and bool(url.hostname)
                          and not url.username and not url.password and not url.query
-                         and not url.fragment and url.path.endswith("/api/v1")
+                         and not url.fragment and url.path.endswith(("/api/v1", "/api/v2"))
                          and len(base) <= 2048 and (url.port is None or url.port > 0))
         except ValueError:
             valid_url = False
         if not valid_url:
-            raise ValueError(f"第 {index} 组地址须为完整的 HTTP(S) /api/v1 地址")
+            raise ValueError(f"第 {index} 组地址须为完整的 HTTP(S) /api/v2（或旧版 /api/v1）地址")
         if (not isinstance(token, str) or not 1 <= len(token) <= 4096
                 or any(ord(c) < 33 or ord(c) > 126 for c in token)):
             raise ValueError(f"第 {index} 组 API Token 无效")
@@ -89,7 +90,7 @@ class Client:
 
     async def request(self, method, path, body=None):
         kwargs = {"headers": {"Authorization": "Bearer " + self.account.api_token},
-                  "follow_redirects": False, "timeout": 300 if path == "/chat" else 30}
+                  "follow_redirects": False, "timeout": 300 if path.endswith("/chat") else 30}
         if body is not None:
             kwargs["json"] = body
         try:
@@ -111,7 +112,10 @@ class Client:
         if data.get("session") != self.account.session:
             raise BridgeError("binding_mismatch")
         conversation_id = data.get("conversation_id")
-        if conversation_id is not None and (type(conversation_id) is not int or conversation_id < 1):
+        valid_id = (isinstance(conversation_id, str) and 1 <= len(conversation_id) <= 64
+                    if self.account.api_base.endswith("/api/v2") else
+                    type(conversation_id) is int and conversation_id >= 1)
+        if conversation_id is not None and not valid_id:
             raise BridgeError("invalid_response")
         return data
 
@@ -173,7 +177,10 @@ class Bridge:
                         "stream": False}
                 if key:
                     body["request_id"] = "astrbot-" + key
-                data = await self.client.request("POST", "/chat", body)
+                elif self.client.account.api_base.endswith("/api/v2"):
+                    body["request_id"] = "astrbot-" + uuid.uuid4().hex
+                path = PREFIX + "/chat" if self.client.account.api_base.endswith("/api/v2") else "/chat"
+                data = await self.client.request("POST", path, body)
                 if (not isinstance(data, dict) or not isinstance(data.get("reply"), str)
                         or not data["reply"].strip()):
                     raise BridgeError("invalid_response")
@@ -194,10 +201,13 @@ class Bridge:
         async with self.lock:
             if not await self.client.binding():
                 return
+            state = await self.state()
+            if self.client.account.api_base.endswith("/api/v2"):
+                for ident, ack in list(state.get("acks", {}).items()):
+                    await self.acknowledge(state, ident, ack)
             items = await self.client.request("POST", PREFIX + "/outbox/claim", {"limit": 1})
             if not isinstance(items, list) or len(items) > 10:
                 raise BridgeError("invalid_response")
-            state = await self.state()
             for item in items:
                 if (not isinstance(item, dict) or type(item.get("id")) is not int
                         or item["id"] < 1 or not isinstance(item.get("lease_token"), str)
@@ -209,13 +219,13 @@ class Bridge:
                 if (item.get("session") != self.client.account.session
                         or not private_session(item.get("session"))
                         or not isinstance(text, str) or not text.strip() or len(text) > 12000):
-                    await self.client.request("POST", PREFIX + f"/outbox/{ident}/ack", ack)
+                    await self.acknowledge(state, ident, ack)
                     continue
                 digest = hashlib.sha256(text.encode()).hexdigest()
                 previous = state["outgoing"].get(ident, {})
                 if previous and previous.get("digest") != digest:
                     # A queue ID must never be reused for different content.
-                    await self.client.request("POST", PREFIX + f"/outbox/{ident}/ack", ack)
+                    await self.acknowledge(state, ident, ack)
                     continue
                 progress = previous.get("chunks", 0)
                 chunks = [text[i:i + CHUNK_SIZE] for i in range(0, len(text), CHUNK_SIZE)]
@@ -234,7 +244,17 @@ class Bridge:
                     raise
                 except Exception:
                     # Preserve completed chunks. The server backs off failed deliveries.
-                    await self.client.request("POST", PREFIX + f"/outbox/{ident}/ack", ack)
+                    await self.acknowledge(state, ident, ack)
                     continue
                 # An ACK loss retains completed chunks, so a new lease only retries ACK.
-                await self.client.request("POST", PREFIX + f"/outbox/{ident}/ack", ack)
+                await self.acknowledge(state, ident, ack)
+
+    async def acknowledge(self, state, ident, ack):
+        v2 = self.client.account.api_base.endswith("/api/v2")
+        if v2:
+            state.setdefault("acks", {})[ident] = ack
+            await self.save(state)
+        await self.client.request("POST", PREFIX + f"/outbox/{ident}/ack", ack)
+        if v2:
+            state["acks"].pop(ident, None)
+            await self.save(state)
