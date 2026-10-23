@@ -385,7 +385,7 @@ pub async fn send(
             let claimed=sqlx::query(&format!("UPDATE {table} SET status='sending',updated_at=? WHERE user_id=? AND delivery_key=? AND position=? AND status='pending' AND body=?")).bind(now()).bind(&user.id).bind(delivery_key).bind(i as i64).bind(body).execute(pool).await?.rows_affected();
             if claimed!=1{return Err(invalid("这条消息已尝试发送，不自动重发"));}
             let mut segments=vec![];
-            if i==0 {if let Some(qq)=mention {segments.push(json!({"type":"at","data":{"qq":qq}}));}}
+            if i==0 && group.is_some() && cfg.reply_mention_sender {if let Some(qq)=mention {segments.push(json!({"type":"at","data":{"qq":qq}}));}}
             segments.push(segment);
             let (action,payload)=if let Some(group)=group {("send_group_msg",json!({"group_id":group,"message":segments,"auto_escape":true}))}else{("send_private_msg",json!({"user_id":cfg.owner_qq.parse::<u64>().map_err(|_|invalid("主人QQ无效"))?,"message":segments,"auto_escape":true}))};
             let url=format!("{}/{action}",cfg.onebot.url.trim_end_matches('/'));

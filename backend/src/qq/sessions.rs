@@ -24,6 +24,7 @@ pub struct GroupSettings {
     pub profile_id: Option<String>,
     pub system_prompt: String,
     pub reply_mentioned: Option<bool>,
+    pub reply_mention_sender: Option<bool>,
     pub collect_memory: Option<bool>,
     pub decision: super::decision::Policy,
     pub reply_style: super::dialogue::Style,
@@ -38,6 +39,7 @@ impl Default for GroupSettings {
             profile_id: None,
             system_prompt: String::new(),
             reply_mentioned: None,
+            reply_mention_sender: None,
             collect_memory: None,
             decision: super::decision::Policy::default(),
             reply_style: Default::default(),
@@ -122,7 +124,7 @@ fn ok(value: Value) -> Json<Value> {
     Json(json!({"ok":true,"data":value}))
 }
 pub fn reply_key(cfg: &Config, group: &str) -> String {
-    crate::db::digest(&json!({"owner":cfg.owner_qq,"bot":cfg.bot_qq,"profile":cfg.profile_id,"onebot":cfg.onebot,"reply_mentioned":cfg.reply_mentioned,"decision":cfg.decision,"group":cfg.group_settings.get(group)}).to_string())
+    crate::db::digest(&json!({"owner":cfg.owner_qq,"bot":cfg.bot_qq,"profile":cfg.profile_id,"onebot":cfg.onebot,"reply_mentioned":cfg.reply_mentioned,"reply_mention_sender":cfg.reply_mention_sender,"decision":cfg.decision,"group":cfg.group_settings.get(group)}).to_string())
 }
 pub async fn list(State(app): State<App>, user: User) -> Result<Json<Value>> {
     let cfg = config(&app, &user).await?;
@@ -145,7 +147,7 @@ pub async fn list(State(app): State<App>, user: User) -> Result<Json<Value>> {
         .bind(group)
         .fetch_one(&app.pool)
         .await?;
-        groups.push(json!({"group_id":group,"settings":settings,"conversation":session,"messages":member.0+owner.0,"last_seen":member.1.max(owner.1),"active":effective.enabled,"profile_id":effective.profile_id,"reply_mentioned":effective.reply_mentioned,"collect_memory":effective.collect_memory}));
+        groups.push(json!({"group_id":group,"settings":settings,"conversation":session,"messages":member.0+owner.0,"last_seen":member.1.max(owner.1),"active":effective.enabled,"profile_id":effective.profile_id,"reply_mentioned":effective.reply_mentioned,"reply_mention_sender":effective.reply_mention_sender,"collect_memory":effective.collect_memory}));
     }
     Ok(ok(json!(groups)))
 }

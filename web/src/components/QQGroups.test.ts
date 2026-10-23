@@ -18,8 +18,8 @@ it('shows a separate conversation link and controls for each group',async()=>{
 it('saves one group settings without replacing the shared integration config',async()=>{
  const w=setup();await flushPromises();await w.find('[aria-label="设置群 30002"]').trigger('click')
  const form=vi.mocked(openForm).mock.calls[0]![0]
- await form.save({group_id:'30002',name:'游戏群',enabled:'false',profile_id:'special',system_prompt:'轻松聊天',reply_mentioned:'true',collect_memory:'inherit'})
- expect(put).toHaveBeenCalledWith('/qq/groups/30002',{name:'游戏群',enabled:false,profile_id:'special',system_prompt:'轻松聊天',reply_mentioned:true,collect_memory:null,decision:{mode:'off',cooldown_secs:120,max_replies_per_hour:6}})
+ await form.save({group_id:'30002',name:'游戏群',enabled:'false',profile_id:'special',system_prompt:'轻松聊天',reply_mentioned:'true',reply_mention_sender:'false',collect_memory:'inherit'})
+ expect(put).toHaveBeenCalledWith('/qq/groups/30002',{name:'游戏群',enabled:false,profile_id:'special',system_prompt:'轻松聊天',reply_mentioned:true,reply_mention_sender:false,collect_memory:null,decision:{mode:'off',cooldown_secs:120,max_replies_per_hour:6}})
  expect(post).not.toHaveBeenCalled();w.unmount()
 })
 it('adds a group through its own endpoint and retains failures in the form',async()=>{
@@ -27,7 +27,7 @@ it('adds a group through its own endpoint and retains failures in the form',asyn
  const form=vi.mocked(openForm).mock.calls[0]![0]
  vi.mocked(post).mockRejectedValueOnce(new Error('这个群已添加'))
  await expect(form.save({group_id:'30003',name:'新群',enabled:'true',profile_id:'',system_prompt:'',reply_mentioned:'inherit',collect_memory:'false'})).rejects.toThrow('这个群已添加')
- expect(post).toHaveBeenCalledWith('/qq/groups',{group_id:'30003',settings:expect.objectContaining({name:'新群',profile_id:null,collect_memory:false})})
+ expect(post).toHaveBeenCalledWith('/qq/groups',{group_id:'30003',settings:expect.objectContaining({name:'新群',profile_id:null,reply_mention_sender:null,collect_memory:false})})
  expect(w.emitted('changed')).toBeUndefined();w.unmount()
 })
 it('saves dialogue switches for one group while retaining its persona and reply policy',async()=>{

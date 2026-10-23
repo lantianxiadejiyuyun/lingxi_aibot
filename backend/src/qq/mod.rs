@@ -48,6 +48,7 @@ pub struct Config {
     pub profile_id: Option<String>,
     pub collect_memory: bool,
     pub reply_mentioned: bool,
+    pub reply_mention_sender: bool,
     pub retention_days: i64,
     pub stickers: stickers::Settings,
     pub decision: decision::Settings,
@@ -70,6 +71,7 @@ impl Default for Config {
             profile_id: None,
             collect_memory: true,
             reply_mentioned: true,
+            reply_mention_sender: false,
             retention_days: 30,
             stickers: stickers::Settings::default(),
             decision: decision::Settings::default(),
@@ -88,6 +90,9 @@ impl Config {
             cfg.enabled &= settings.enabled;
             cfg.profile_id = settings.profile_id.clone().or(cfg.profile_id);
             cfg.reply_mentioned = settings.reply_mentioned.unwrap_or(cfg.reply_mentioned);
+            cfg.reply_mention_sender = settings
+                .reply_mention_sender
+                .unwrap_or(cfg.reply_mention_sender);
             cfg.collect_memory = settings.collect_memory.unwrap_or(cfg.collect_memory);
         }
         Some(cfg)

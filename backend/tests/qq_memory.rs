@@ -257,6 +257,71 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn reply_mentions_default_off_and_group_override_controls_real_onebot_payloads() {
+    let f = Fixture::new().await;
+    for (id, global, local, group, expected) in [
+        (910, None, None, "30001", false),
+        (911, Some(true), None, "30001", true),
+        (912, Some(true), Some(false), "30001", false),
+        (913, Some(false), Some(true), "30001", true),
+        (914, Some(false), Some(true), "30002", false),
+    ] {
+        let prior = qq::config(&f.app, &f.user)
+            .await
+            .unwrap()
+            .for_group("30001")
+            .unwrap();
+        let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+        if let Some(global) = global {
+            cfg["qq"]["reply_mention_sender"] = json!(global);
+        }
+        integrations::save_config(&f.app, &f.user, cfg)
+            .await
+            .unwrap();
+        let (status, _) = f
+            .api(
+                &f.user,
+                "PUT",
+                "/api/v2/qq/groups/30001",
+                json!({"reply_mention_sender":local}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        if id == 912 {
+            assert!(
+                !qq::dialogue::unchanged(&f.app, &f.user, &prior, Some("30001"))
+                    .await
+                    .unwrap(),
+                "disable must cancel an already generated reply"
+            );
+        }
+        let (_, view) = f.api(&f.user, "GET", "/api/v2/qq/groups", json!({})).await;
+        let effective = view["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["group_id"] == group)
+            .unwrap();
+        assert_eq!(effective["reply_mention_sender"], expected);
+        // An inbound @ still triggers the reply even when outbound mentions are off.
+        let event = f.ingest(id, "10002", group, "群聊测试", true).await;
+        assert_eq!(f.process(&event).await["delivered"], true);
+        let sent = f.mock.sends.lock().unwrap().last().unwrap().clone();
+        assert_eq!(sent["group_id"], group);
+        let mentions: Vec<_> = sent["message"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|part| part["type"] == "at")
+            .collect();
+        assert_eq!(mentions.len(), usize::from(expected));
+        if expected {
+            assert_eq!(mentions[0]["data"]["qq"], "10002");
+        }
+    }
+}
+
+#[tokio::test]
 async fn local_decision_observes_without_reply_and_only_sees_current_group() {
     let f = Fixture::new().await;
     f.decision_mode("observe").await;
@@ -504,7 +569,7 @@ async fn multipart_tracks_each_send_and_never_replays_uncertain_parts() {
     );
     let sends = f.mock.sends.lock().unwrap().clone();
     assert_eq!(sends.len(), 2);
-    assert_eq!(sends[0]["message"][0]["type"], "at");
+    assert_eq!(sends[0]["message"][0]["type"], "text");
     assert_eq!(sends[1]["message"][0]["type"], "text");
     assert!(
         worker::process(&f.app, &f.user, &params, &CancellationToken::new())

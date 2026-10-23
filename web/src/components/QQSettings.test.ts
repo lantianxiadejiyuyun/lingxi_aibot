@@ -12,9 +12,12 @@ it('saves shared QQ settings without overwriting freshly changed group and chann
  vi.mocked(put).mockResolvedValue({})
  const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:{template:'<div />'}}]})
  const w=mount(QQSettings,{global:{plugins:[router],stubs:{NapCatConnect:true,QQGroups:true,QQDecision:true,QQPrivateRhythm:true}}});await flushPromises()
+ const mention=w.findAll('label').find(label=>label.text().includes('群回复时 @发送者'))!.get('input')
+ expect((mention.element as HTMLInputElement).checked).toBe(false)
+ await mention.setValue(true)
  await w.get('input[type="number"]').setValue(90)
  fresh={...original,feishu:{app_id:'current'},qq:{...original.qq,groups:['30001','30002'],group_settings:{'30002':{name:'新增群'}},followup:{enabled:true}}}
  await w.get('form').trigger('submit');await flushPromises()
- expect(put).toHaveBeenCalledWith('/integrations',expect.objectContaining({feishu:fresh.feishu,qq:expect.objectContaining({groups:fresh.qq.groups,group_settings:fresh.qq.group_settings,followup:{enabled:true},retention_days:90,onebot:original.qq.onebot})}))
+ expect(put).toHaveBeenCalledWith('/integrations',expect.objectContaining({feishu:fresh.feishu,qq:expect.objectContaining({groups:fresh.qq.groups,group_settings:fresh.qq.group_settings,followup:{enabled:true},retention_days:90,reply_mention_sender:true,onebot:original.qq.onebot})}))
  w.unmount()
 })

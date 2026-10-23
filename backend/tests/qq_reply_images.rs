@@ -225,6 +225,11 @@ async fn owner_reply_sends_saved_image_without_exposing_selection_or_changing_re
 #[tokio::test]
 async fn group_image_choices_are_scoped_and_preserve_text_bursts_and_mentions() {
     let f = Fixture::new().await;
+    let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+    cfg["qq"]["reply_mention_sender"] = json!(true);
+    integrations::save_config(&f.app, &f.user, cfg)
+        .await
+        .unwrap();
     f.insert(None, "owner-secret", "PRIVATE_IMAGE_NEVER_GROUP", None)
         .await;
     f.insert(Some("30001"), "group-cute", "本群可爱小鱼", None)
