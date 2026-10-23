@@ -130,20 +130,20 @@ fn feature(name: &str) -> Option<crate::permissions::Feature> {
     match name {
         "remember" | "list_memories" | "forget" | "search_history" => Some(Feature::Memory),
         "read_bilibili" | "bilibili_notes" => Some(Feature::Bilibili),
+        "web_search" | "fetch_url" => Some(Feature::WebSearch),
         _ => None,
     }
 }
 pub async fn permitted_definitions(app: &App, user: &User) -> Result<Vec<Value>> {
     use crate::permissions::{Feature, Scope};
     let access = crate::permissions::config(app, user).await?;
-    if !access.allows(Feature::Tools, Scope::Private) {
-        return Ok(vec![]);
-    }
     Ok(definitions()
         .into_iter()
         .filter(|v| {
-            feature(v["function"]["name"].as_str().unwrap_or(""))
-                .is_none_or(|f| access.allows(f, Scope::Private))
+            let name = v["function"]["name"].as_str().unwrap_or("");
+            (matches!(feature(name), Some(Feature::WebSearch | Feature::Bilibili))
+                || access.allows(Feature::Tools, Scope::Private))
+                && feature(name).is_none_or(|f| access.allows(f, Scope::Private))
         })
         .collect())
 }
@@ -155,7 +155,9 @@ pub async fn execute(
     cancel: &CancellationToken,
 ) -> Result<Value> {
     use crate::permissions::{Feature, Scope};
-    crate::permissions::require(app, user, Feature::Tools, Scope::Private).await?;
+    if !matches!(feature(name), Some(Feature::WebSearch | Feature::Bilibili)) {
+        crate::permissions::require(app, user, Feature::Tools, Scope::Private).await?;
+    }
     if let Some(feature) = feature(name) {
         crate::permissions::require(app, user, feature, Scope::Private).await?;
     }

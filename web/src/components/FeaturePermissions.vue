@@ -13,10 +13,11 @@ const items = [
  {key:'sticker_collection',name:'图片收藏',detail:'模型喜欢才收下，或按主人命令收藏',group:true},
  {key:'sticker_reply',name:'表情回复',detail:'按语境选用当前会话的收藏图片',group:true},
  {key:'memory',name:'长期记忆',detail:'自动提取与使用记忆；关闭后保留已有记录',group:true},
- {key:'persona_growth',name:'人设养成',detail:'学习并使用相处习惯；基础人设不变',group:false},
+ {key:'persona_growth',name:'人设养成',detail:'学习交流反馈；群内按成员保存习惯，基础人设不变',group:true},
  {key:'proactive',name:'主动消息与延迟补充',detail:'按已配置的时段和频率主动聊天',group:true},
- {key:'bilibili',name:'B 站阅读',detail:'手动或定时读字幕，聊天时参考阅读心得',group:false},
- {key:'tools',name:'AI 工具操作',detail:'查询和编辑记录、联网搜索、下载、生成图片等',group:false},
+ {key:'bilibili',name:'B 站阅读',detail:'个人：手动或定时阅读；群聊：读取群内提供的视频字幕，保存本群心得',group:true},
+ {key:'web_search',name:'联网搜索',detail:'搜索公开资料、打开网页；独立于 AI 工具操作',group:true},
+ {key:'tools',name:'AI 工具操作',detail:'个人：记录、下载、生成图片等；群聊：本群共享笔记、待办和日程',group:true},
 ]
 const {data,loading,error,load}=useResource(()=>api<Permissions>('/permissions'),{enabled:true,features:{}})
 const saving=ref(false), saveError=ref('')
@@ -40,8 +41,8 @@ async function change(key:string|null, field:keyof Grant, event:Event) {
   <p v-if="saveError" role="alert" class="form-error">{{saveError}}</p>
   <div class="permission-table" role="table" aria-label="功能权限">
    <div class="permission-row permission-head" role="row"><span role="columnheader">功能</span><span role="columnheader">允许使用</span><span role="columnheader"><MessageCircle :size="16" />个人会话<small>网页 / QQ / 飞书 / AstrBot</small></span><span role="columnheader"><UsersRound :size="16" />QQ 群聊<small>仅已接入的群</small></span></div>
-   <div v-for="item in items" :key="item.key" class="permission-row" role="row" :class="{'permission-muted':!data.enabled||!data.features[item.key]?.enabled}"><div role="cell"><strong>{{item.name}}</strong><p>{{item.detail}}</p></div><div v-for="field in (['enabled','private','group'] as const)" :key="field" role="cell"><label v-if="field!=='group'||item.group" class="control-switch"><input type="checkbox" role="switch" :aria-label="`${item.name} · ${field==='enabled'?'功能开关':field==='private'?'个人会话':'QQ 群聊'}`" :checked="data.features[item.key]?.[field]||false" :disabled="saving||!data.enabled||(field!=='enabled'&&!data.features[item.key]?.enabled)" @change="change(item.key,field,$event)" /><span aria-hidden="true" /></label><span v-else class="permission-unavailable">不开放</span></div></div>
+   <div v-for="item in items" :key="item.key" class="permission-row" role="row" :class="{'permission-muted':!data.enabled||!data.features[item.key]?.enabled}"><div role="cell"><strong>{{item.name}}</strong><p>{{item.detail}}</p></div><div v-for="field in (['enabled','private','group'] as const)" :key="field" role="cell"><label class="control-switch"><input type="checkbox" role="switch" :aria-label="`${item.name} · ${field==='enabled'?'功能开关':field==='private'?'个人会话':'QQ 群聊'}`" :checked="data.features[item.key]?.[field]||false" :disabled="saving||!data.enabled||(field!=='enabled'&&!data.features[item.key]?.enabled)" @change="change(item.key,field,$event)" /><span aria-hidden="true" /></label></div></div>
   </div>
-  <p class="muted small">个人会话使用主库，群聊使用各自上下文与独立人物库。群里不会开放私人工具或读取主人私聊。关闭识图后，主人仍可在允许收藏时明确命令保存图片。</p>
+  <p class="muted small">个人会话使用主库，群聊使用各自上下文与独立人物库。群人设习惯、共享记录和阅读心得按群隔离，可在群会话查看和删除；群聊无法浏览私人文件或下载目录。新增群权限默认关闭，由你选择开启。关闭识图后，主人仍可在允许收藏时明确命令保存图片。</p>
  </ResourceState>
 </template>

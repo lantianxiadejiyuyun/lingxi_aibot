@@ -30,6 +30,7 @@ struct Mock {
     fail_send: Arc<Mutex<bool>>,
     fail_after: Arc<std::sync::atomic::AtomicUsize>,
     model_response: Arc<Mutex<Option<String>>>,
+    model_deltas: Arc<Mutex<std::collections::VecDeque<Value>>>,
     hold: Arc<std::sync::atomic::AtomicBool>,
     entered: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
@@ -78,6 +79,15 @@ async fn model(State(s): State<Mock>, Json(v): Json<Value>) -> impl IntoResponse
     if wait {
         s.entered.notify_one();
         s.release.notified().await;
+    }
+    if let Some(delta) = s.model_deltas.lock().unwrap().pop_front() {
+        return (
+            [("content-type", "text/event-stream")],
+            format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                json!({"choices":[{"delta":delta}]})
+            ),
+        );
     }
     let content = s
         .model_response
@@ -369,6 +379,7 @@ async fn group_reply_limits_can_be_disabled_and_reenabled_without_resetting_usag
         (921, "30001", false),
         (922, "30002", true),
     ] {
+        *f.mock.model_response.lock().unwrap() = Some(format!("这是本轮独立回复 {id}，我在。"));
         let event = f.ingest(id, "10002", group, "鱼鱼，你在吗？", false).await;
         assert_eq!(f.process(&event).await["delivered"], expected);
     }
@@ -389,6 +400,7 @@ async fn group_reply_limits_can_be_disabled_and_reenabled_without_resetting_usag
         (925, "30002", "鱼鱼，你在吗？", false),
         (926, "30001", "鱼鱼，先别回复", false),
     ] {
+        *f.mock.model_response.lock().unwrap() = Some(format!("这是本轮独立回复 {id}，我在。"));
         let event = f.ingest(id, "10002", group, text, false).await;
         assert_eq!(f.process(&event).await["delivered"], expected);
     }
@@ -1650,4 +1662,477 @@ async fn real_qdrant_indexes_filters_and_deletes_member_vectors() {
         .unwrap()
         .error_for_status()
         .unwrap();
+}
+
+async fn enable_group_capabilities(f: &Fixture) {
+    let mut cfg = lingxi::permissions::Config::default();
+    for grant in cfg.features.values_mut() {
+        grant.group = true;
+    }
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+}
+#[tokio::test]
+async fn group_resources_tools_habits_and_web_access_are_scoped_and_revocable() {
+    use qq::capabilities as cap;
+    let f = Fixture::new().await;
+    let e = f
+        .ingest(
+            9901,
+            "30003",
+            "30001",
+            "以后请叫我小蓝，不要总是反问我。帮群里记下周末打球。",
+            false,
+        )
+        .await;
+    let event = store::event(&f.app, &f.user, e["event_id"].as_str().unwrap(), false)
+        .await
+        .unwrap();
+    let profile = settings::active_profile(&f.app, &f.user, None)
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    assert!(
+        cap::execute(
+            &f.app,
+            &f.user,
+            &event,
+            &profile,
+            0,
+            "list_group_records",
+            json!({}),
+            &cancel
+        )
+        .await
+        .is_err()
+    );
+    enable_group_capabilities(&f).await;
+    let args = json!({"kind":"notes","title":"群活动","content":"周末打球"});
+    let saved = cap::execute(
+        &f.app,
+        &f.user,
+        &event,
+        &profile,
+        0,
+        "save_group_record",
+        args.clone(),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved["saved"], true);
+    assert_eq!(
+        cap::execute(
+            &f.app,
+            &f.user,
+            &event,
+            &profile,
+            0,
+            "save_group_record",
+            args,
+            &cancel
+        )
+        .await
+        .unwrap(),
+        saved
+    );
+    assert_eq!(
+        cap::resources(&f.app, &f.user, "30001", "record")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        cap::resources(&f.app, &f.user, "30002", "record")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let personal: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE user_id=?")
+        .bind(&f.user.id)
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(personal, 0);
+    let learned = cap::execute(
+        &f.app,
+        &f.user,
+        &event,
+        &profile,
+        1,
+        "learn_group_habit",
+        json!({"content":"称呼小蓝，减少反问","quote":"以后请叫我小蓝，不要总是反问我"}),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert_eq!(learned["saved"], true);
+    assert!(
+        cap::context(&f.app, &f.user, "30001")
+            .await
+            .unwrap()
+            .contains("小蓝")
+    );
+    assert!(
+        !cap::context(&f.app, &f.user, "30002")
+            .await
+            .unwrap()
+            .contains("小蓝")
+    );
+    let fake = cap::execute(
+        &f.app,
+        &f.user,
+        &event,
+        &profile,
+        2,
+        "learn_group_habit",
+        json!({"content":"虚构偏好","quote":"不存在的原文"}),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert!(fake["error"].is_string());
+    assert!(
+        cap::execute(
+            &f.app,
+            &f.user,
+            &event,
+            &profile,
+            3,
+            "list_files",
+            json!({}),
+            &cancel
+        )
+        .await
+        .is_err()
+    );
+    let local = cap::execute(
+        &f.app,
+        &f.user,
+        &event,
+        &profile,
+        4,
+        "fetch_url",
+        json!({"url":"http://127.0.0.1:6099/"}),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert!(local["error"].as_str().unwrap().contains("公网"));
+    let mut other = event.clone();
+    other.group_id = "30002".into();
+    let deleted = cap::execute(
+        &f.app,
+        &f.user,
+        &other,
+        &profile,
+        0,
+        "delete_group_record",
+        json!({"id":saved["id"],"revision":1}),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert!(deleted["error"].is_string());
+    let (status, _) = f
+        .api(
+            &f.user,
+            "DELETE",
+            &format!(
+                "/api/v2/qq/groups/30001/resources/habit/{}?revision=1",
+                learned["id"].as_str().unwrap()
+            ),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        cap::resources(&f.app, &f.user, "30001", "habit")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut access = lingxi::permissions::config(&f.app, &f.user).await.unwrap();
+    access
+        .features
+        .get_mut(&lingxi::permissions::Feature::WebSearch)
+        .unwrap()
+        .group = false;
+    access
+        .features
+        .get_mut(&lingxi::permissions::Feature::Tools)
+        .unwrap()
+        .group = false;
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(access))
+        .await
+        .unwrap();
+    assert!(
+        cap::execute(
+            &f.app,
+            &f.user,
+            &event,
+            &profile,
+            0,
+            "list_group_records",
+            json!({}),
+            &cancel
+        )
+        .await
+        .is_err()
+    );
+    let defs = json!(cap::definitions(&f.app, &f.user).await.unwrap()).to_string();
+    assert!(!defs.contains("web_search"));
+    assert!(!defs.contains("list_group_records"));
+    assert!(defs.contains("read_bilibili"));
+    assert!(defs.contains("learn_group_habit"));
+}
+#[tokio::test]
+async fn group_model_tool_round_trip_does_not_load_private_tools() {
+    let f = Fixture::new().await;
+    enable_group_capabilities(&f).await;
+    f.mock.model_deltas.lock().unwrap().extend([
+        json!({"tool_calls":[{"index":0,"id":"group-save-1","function":{"name":"save_group_record","arguments":json!({"kind":"notes","title":"活动","content":"周末打球"}).to_string()}}]}),
+        json!({"content":"记下了，周末打球。"}),
+    ]);
+    let e = f
+        .ingest(9902, "30003", "30001", "帮群里记下周末打球", true)
+        .await;
+    let r = f.process(&e).await;
+    assert_eq!(r["delivered"], true);
+    let requests = f.mock.model_requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let first = requests[0].to_string();
+    assert!(!first.contains("PRIVATE SYSTEM PROMPT"));
+    assert!(!first.contains("list_storage"));
+    assert!(!first.contains("search_history"));
+    assert_eq!(
+        requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .count(),
+        1
+    );
+    assert!(
+        requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["role"] == "tool" && m["content"].as_str().unwrap().contains("saved"))
+    );
+}
+#[tokio::test]
+async fn automatic_group_reply_can_choose_silence_and_current_message_occurs_once() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    *f.mock.model_response.lock().unwrap() = Some(qq::conversation::SILENT.into());
+    let e = f
+        .ingest(9903, "30003", "30001", "唯一问题指纹：你们继续聊", false)
+        .await;
+    let r = f.process(&e).await;
+    assert_eq!(r["ignored"], "model_chose_silence");
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+    let requests = f.mock.model_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]["messages"]
+            .to_string()
+            .matches("唯一问题指纹")
+            .count(),
+        1
+    );
+}
+struct GroupVideoSource;
+impl lingxi::bilibili::client::Source for GroupVideoSource {
+    async fn search(
+        &self,
+        _: &str,
+        _: i64,
+    ) -> lingxi::error::Result<Vec<lingxi::bilibili::client::VideoId>> {
+        Ok(vec![])
+    }
+    async fn info(
+        &self,
+        _: &lingxi::bilibili::client::VideoId,
+    ) -> lingxi::error::Result<lingxi::bilibili::client::Video> {
+        Ok(lingxi::bilibili::client::Video {
+            title: "群视频".into(),
+            ..Default::default()
+        })
+    }
+    async fn captions(
+        &self,
+        _: &lingxi::bilibili::client::VideoId,
+        _: &lingxi::bilibili::client::Video,
+    ) -> lingxi::error::Result<Option<lingxi::bilibili::client::Captions>> {
+        Ok(Some(lingxi::bilibili::client::Captions {
+            language: "zh".into(),
+            segments: vec![lingxi::bilibili::client::Segment {
+                start: 0.0,
+                end: 2.0,
+                text: "群视频字幕".into(),
+            }],
+        }))
+    }
+}
+#[tokio::test]
+async fn group_bilibili_uses_own_notes_persona_and_permissions() {
+    let f = Fixture::new().await;
+    enable_group_capabilities(&f).await;
+    let mut access = lingxi::permissions::config(&f.app, &f.user).await.unwrap();
+    access
+        .features
+        .get_mut(&lingxi::permissions::Feature::Bilibili)
+        .unwrap()
+        .private = false;
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(access))
+        .await
+        .unwrap();
+    *f.mock.model_response.lock().unwrap()=Some(json!({"summary":"群视频摘要","thought":"群内感想","worth_reading":true,"tags":[],"points":[{"segment":0,"text":"字幕要点"}]}).to_string());
+    let e = f
+        .ingest(9904, "30003", "30001", "读一下 BV1xx411c7mD", true)
+        .await;
+    let event = store::event(&f.app, &f.user, e["event_id"].as_str().unwrap(), false)
+        .await
+        .unwrap();
+    let profile = settings::active_profile(&f.app, &f.user, None)
+        .await
+        .unwrap();
+    let read = qq::capabilities::read_video_with(
+        &f.app,
+        &f.user,
+        &event,
+        &profile,
+        "BV1xx411c7mD",
+        &GroupVideoSource,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(read["source"], "subtitles");
+    assert_eq!(
+        qq::capabilities::resources(&f.app, &f.user, "30001", "bilibili")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        qq::capabilities::resources(&f.app, &f.user, "30002", "bilibili")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !json!(*f.mock.model_requests.lock().unwrap())
+            .to_string()
+            .contains("PRIVATE SYSTEM PROMPT")
+    );
+    let personal: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bili_entries WHERE user_id=?")
+        .bind(&f.user.id)
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(personal, 0);
+    qq::capabilities::read_video_with(
+        &f.app,
+        &f.user,
+        &event,
+        &profile,
+        "BV1xx411c7mD",
+        &GroupVideoSource,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(f.mock.model_requests.lock().unwrap().len(), 1);
+    access
+        .features
+        .get_mut(&lingxi::permissions::Feature::Bilibili)
+        .unwrap()
+        .group = false;
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(access))
+        .await
+        .unwrap();
+    assert!(
+        qq::capabilities::read_video_with(
+            &f.app,
+            &f.user,
+            &event,
+            &profile,
+            "BV1xx411c7mD",
+            &GroupVideoSource,
+            &CancellationToken::new()
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn automatic_reply_abandons_stale_answer_when_a_new_message_arrives() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    f.mock.hold.store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = f
+        .ingest(9910, "30003", "30001", "大家聊聊晚饭吧", false)
+        .await;
+    let app = f.app.clone();
+    let user = f.user.clone();
+    let task = tokio::spawn(async move {
+        worker::process(
+            &app,
+            &user,
+            &json!({"id":e["event_id"],"owner":false}),
+            &CancellationToken::new(),
+        )
+        .await
+    });
+    f.mock.entered.notified().await;
+    f.ingest(9911, "30004", "30001", "等等，先聊明天的事", false)
+        .await;
+    f.mock.release.notify_one();
+    assert_eq!(
+        task.await.unwrap().unwrap()["ignored"],
+        "newer_group_message"
+    );
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn group_history_uses_assistant_roles_and_blocks_repeated_automatic_replies() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    let (status, _) = f
+        .api(
+            &f.user,
+            "PUT",
+            "/api/v2/qq/groups/30001",
+            json!({"decision":{"mode":"auto","limits_enabled":false},"collect_memory":false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let e = f
+        .ingest(9920, "30003", "30001", "鱼鱼，来聊聊晚饭", false)
+        .await;
+    assert_eq!(f.process(&e).await["delivered"], true);
+    sqlx::query("UPDATE qq_reply_limits SET last_at=0")
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    let e = f
+        .ingest(9921, "30004", "30001", "鱼鱼，你觉得呢？", false)
+        .await;
+    assert_eq!(f.process(&e).await["ignored"], "model_chose_silence");
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 1);
+    let requests = f.mock.model_requests.lock().unwrap();
+    let history = requests[1]["messages"].as_array().unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|m| m["role"] == "assistant" && m["content"] == "我在，欢迎聊聊今天的计划。")
+    );
+    assert_eq!(json!(history).to_string().matches("你觉得呢").count(), 1);
 }

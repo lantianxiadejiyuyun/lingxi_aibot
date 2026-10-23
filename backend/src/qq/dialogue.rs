@@ -111,28 +111,40 @@ pub async fn unchanged(app: &App, user: &User, cfg: &Config, group: Option<&str>
 
 pub fn split(text: &str, style: &Style) -> Vec<String> {
     let text = text.trim();
-    if !style.enabled || text.contains('`') || text.contains("http://") || text.contains("https://")
-    {
+    if !style.enabled {
         return vec![text.into()];
     }
-    let mut pieces: Vec<String> = text
-        .split("\n\n")
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(String::from)
-        .collect();
-    if pieces.len() == 1 && text.chars().count() > 60 {
-        pieces.clear();
-        let mut part = String::new();
-        for c in text.chars() {
-            part.push(c);
-            if "。！？!?".contains(c) && part.chars().count() >= 35 {
-                pieces.push(std::mem::take(&mut part));
+    // Split on paragraph boundaries only, preserving fenced code and complete sentences.
+    let mut pieces = Vec::new();
+    let mut part = String::new();
+    let mut fence: Option<&str> = None;
+    for line in text.lines() {
+        let marker = if line.trim_start().starts_with("```") {
+            Some("```")
+        } else if line.trim_start().starts_with("~~~") {
+            Some("~~~")
+        } else {
+            None
+        };
+        if let Some(marker) = marker {
+            if fence == Some(marker) {
+                fence = None;
+            } else if fence.is_none() {
+                fence = Some(marker);
             }
         }
-        if !part.is_empty() {
-            pieces.push(part);
+        if line.trim().is_empty() && fence.is_none() {
+            if !part.trim().is_empty() {
+                pieces.push(part.trim().to_owned());
+                part.clear();
+            }
+        } else {
+            part.push_str(line);
+            part.push('\n');
         }
+    }
+    if !part.trim().is_empty() {
+        pieces.push(part.trim().to_owned());
     }
     if pieces.len() > style.max_messages {
         let rest = pieces.split_off(style.max_messages - 1);
@@ -140,11 +152,14 @@ pub fn split(text: &str, style: &Style) -> Vec<String> {
     }
     pieces
 }
-pub fn prompt(style: &Style) -> &'static str {
+pub fn prompt(style: &Style) -> String {
     if style.enabled {
-        "用自然口语回复，可按完整意思用空行分成两三段，每段可以单独发送；简单问题一句即可，不凑条数，不输出分条标记或动作旁白。"
+        format!(
+            "用自然口语回复，有几个完整意思就用空行写成几段，每段单独发送。本轮最多{}段；短话一段即可，不凑条数、不把一句话切碎，不输出序号、分条标记或动作旁白。",
+            style.max_messages
+        )
     } else {
-        ""
+        String::new()
     }
 }
 
@@ -423,7 +438,21 @@ mod tests {
             vec!["第一句", "第二句\n\n第三句"]
         );
         let code = "运行 `print(1)`\n\n然后看结果";
-        assert_eq!(split(code, &s), vec![code]);
+        assert_eq!(split(code, &s), vec!["运行 `print(1)`", "然后看结果"]);
+        let fenced = "```rust\nfn main() {}\n\n// complete block\n```\n\n然后看结果";
+        assert_eq!(
+            split(fenced, &s),
+            vec![
+                "```rust\nfn main() {}\n\n// complete block\n```",
+                "然后看结果"
+            ]
+        );
+        let sentence = "这是一个没有分段的完整意思。".repeat(10);
+        assert_eq!(split(&sentence, &s), vec![sentence.as_str()]);
+        assert_eq!(
+            split("来源 https://example.com\n\n我的想法", &s),
+            vec!["来源 https://example.com", "我的想法"]
+        );
         assert_eq!(
             split("第一句\n\n第二句", &Style::default()),
             vec!["第一句\n\n第二句"]

@@ -85,16 +85,11 @@ async fn ask(
     user: &crate::auth::User,
     profile: &Profile,
     system: &str,
+    scope: crate::permissions::Scope,
     data: Value,
     cancel: &CancellationToken,
 ) -> Result<String> {
-    crate::permissions::require(
-        app,
-        user,
-        crate::permissions::Feature::Bilibili,
-        crate::permissions::Scope::Private,
-    )
-    .await?;
+    crate::permissions::require(app, user, crate::permissions::Feature::Bilibili, scope).await?;
     let result = provider::chat(
         app,
         profile,
@@ -122,6 +117,28 @@ pub async fn read(
     taste: &str,
     cancel: &CancellationToken,
 ) -> Result<Analysis> {
+    read_scoped(
+        app,
+        user,
+        profile,
+        title,
+        segments,
+        taste,
+        cancel,
+        crate::permissions::Scope::Private,
+    )
+    .await
+}
+pub async fn read_scoped(
+    app: &App,
+    user: &crate::auth::User,
+    profile: &Profile,
+    title: &str,
+    segments: &[Segment],
+    taste: &str,
+    cancel: &CancellationToken,
+    scope: crate::permissions::Scope,
+) -> Result<Analysis> {
     let mut p = profile.clone();
     p.max_output = p.max_output.min(2048);
     let system = format!(
@@ -148,6 +165,7 @@ pub async fn read(
                 user,
                 &p,
                 &system,
+                scope,
                 json!({"title":title,"subtitles":pieces[0]}),
                 cancel,
             )
@@ -162,6 +180,7 @@ pub async fn read(
             user,
             &p,
             &system,
+            scope,
             json!({"title":title,"part":index+1,"parts":pieces.len(),"subtitles":piece}),
             cancel,
         )
@@ -176,7 +195,7 @@ pub async fn read(
         }
         notes.push(a);
     }
-    let raw=ask(app,user,&p,&format!("{system}\n原始字幕已按顺序全部阅读。现在根据每段阅读笔记形成整体心得，不能把某一个片段当作全部，引用只能使用笔记中的字幕编号。"),json!({"title":title,"section_notes":notes}),cancel).await?;
+    let raw=ask(app,user,&p,&format!("{system}\n原始字幕已按顺序全部阅读。现在根据每段阅读笔记形成整体心得，不能把某一个片段当作全部，引用只能使用笔记中的字幕编号。"),scope,json!({"title":title,"section_notes":notes}),cancel).await?;
     let final_note = parse(&raw, segments.len())?;
     if final_note.points.iter().any(|p| {
         !notes

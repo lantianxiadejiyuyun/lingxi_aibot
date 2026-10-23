@@ -441,7 +441,7 @@ async fn sources(app: &App, user: &User, cfg: &Config, at: i64) -> Vec<Value> {
         || !crate::permissions::allowed(
             app,
             user,
-            crate::permissions::Feature::Tools,
+            crate::permissions::Feature::WebSearch,
             crate::permissions::Scope::Private,
         )
         .await

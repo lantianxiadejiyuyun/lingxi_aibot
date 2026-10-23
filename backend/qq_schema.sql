@@ -91,3 +91,19 @@ CREATE TABLE IF NOT EXISTS sticker_reply_turns (
 );
 CREATE INDEX IF NOT EXISTS sticker_reply_scope ON sticker_reply_turns(user_id,scope,image_at);
 CREATE INDEX IF NOT EXISTS sticker_reply_retention ON sticker_reply_turns(text_at);
+-- Group-owned resources never share the personal records/persona/Bilibili tables.
+CREATE TABLE IF NOT EXISTS group_resources (
+ user_id TEXT NOT NULL, group_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL,
+ value TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+ created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,group_id,kind,id)
+);
+CREATE TABLE IF NOT EXISTS group_tool_calls (
+ user_id TEXT NOT NULL, group_id TEXT NOT NULL, event_id TEXT NOT NULL, step INTEGER NOT NULL,
+ fingerprint TEXT NOT NULL, result TEXT, created_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,group_id,event_id,step)
+);
+CREATE TABLE IF NOT EXISTS group_read_limits (
+ user_id TEXT NOT NULL, group_id TEXT NOT NULL, day INTEGER NOT NULL, count INTEGER NOT NULL,
+ PRIMARY KEY(user_id,group_id,day)
+);

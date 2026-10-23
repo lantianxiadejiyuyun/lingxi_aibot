@@ -353,7 +353,7 @@ pub async fn process_qq(
                 message: analysis.message,
                 request_id: format!("qq-private:{key}"),
             }).await?;
-            session.profile.system_prompt.push_str(crate::qq::dialogue::prompt(&q.reply_style));
+            session.profile.system_prompt.push_str(&crate::qq::dialogue::prompt(&q.reply_style));
             if crate::qq::stickers::owner_command(&text) {
                 session.profile.system_prompt.push_str("\n主人请求收藏图片。收藏由独立任务处理，聊天文本本身不会保存图片；没有得到已保存状态时，不得声称收藏已经完成，可告知在图片与表情页面查看处理结果。");
             }

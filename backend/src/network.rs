@@ -71,6 +71,14 @@ pub async fn client(app: &App, url: &str) -> Result<reqwest::Client> {
     let (url, addresses) = validate_url(app, url).await?;
     pinned_client(&url, &addresses)
 }
+/// Group-controlled URLs cannot use the administrator's local-service allowance.
+pub async fn public_client(app: &App, text: &str) -> Result<reqwest::Client> {
+    let (url, addresses) = validate_url(app, text).await?;
+    if addresses.iter().any(|a| !is_public(a.ip())) {
+        return Err(invalid("群聊仅可读取公网网页"));
+    }
+    pinned_client(&url, &addresses)
+}
 /// Local inference must never fall back to a public address or an environment proxy.
 pub async fn local_client(app: &App, text: &str) -> Result<reqwest::Client> {
     let (url, addresses) = validate_url(app, text).await?;

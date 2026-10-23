@@ -91,6 +91,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/qq/groups",get(crate::qq::sessions::list).post(crate::qq::sessions::create))
         .route("/api/v2/qq/groups/{group}",axum::routing::put(crate::qq::sessions::update).delete(crate::qq::sessions::remove))
         .route("/api/v2/qq/groups/{group}/conversation",get(crate::qq::sessions::conversation))
+        .route("/api/v2/qq/groups/{group}/resources/{kind}/{key}",axum::routing::delete(crate::qq::capabilities::delete_api))
         .route("/api/v2/qq/person",get(crate::qq::api::person))
         .route("/api/v2/qq/memories",post(crate::qq::api::remember))
         .route("/api/v2/qq/memories/{id}",axum::routing::delete(crate::qq::api::forget))

@@ -700,14 +700,53 @@ async fn feature_permissions_are_account_scoped_validated_and_preserve_manual_da
             .unwrap()
             .is_empty()
     );
-    let mut invalid = json!(cfg);
-    invalid["features"]["tools"]["group"] = json!(true);
+    let mut expanded = json!(cfg);
+    expanded["features"]["tools"]["group"] = json!(true);
     assert!(
-        !f.request("PUT", "/api/v2/permissions", Some(&token), invalid)
+        f.request("PUT", "/api/v2/permissions", Some(&token), expanded)
             .await
             .0
             .is_success()
     );
+    cfg.features.get_mut(&Feature::Tools).unwrap().enabled = false;
+    let (status, _) = f
+        .request("PUT", "/api/v2/permissions", Some(&token), json!(cfg))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let defs = json!(tools::permitted_definitions(&f.app, &alice).await.unwrap()).to_string();
+    assert!(defs.contains("web_search"));
+    assert!(defs.contains("fetch_url"));
+    assert!(defs.contains("read_bilibili"));
+    assert!(!defs.contains("save_record"));
+    cfg.features.get_mut(&Feature::WebSearch).unwrap().private = false;
+    f.request("PUT", "/api/v2/permissions", Some(&token), json!(cfg))
+        .await;
+    let defs = json!(tools::permitted_definitions(&f.app, &alice).await.unwrap()).to_string();
+    assert!(!defs.contains("web_search"));
+    assert!(!defs.contains("fetch_url"));
+    assert!(
+        tools::execute(
+            &f.app,
+            &alice,
+            "web_search",
+            json!({"query":"test"}),
+            &tokio_util::sync::CancellationToken::new()
+        )
+        .await
+        .is_err()
+    );
+    // Old saved configs inherit the previous search access without enabling groups.
+    let mut legacy = json!(cfg);
+    legacy["features"]
+        .as_object_mut()
+        .unwrap()
+        .remove("web_search");
+    settings::put(&f.app, &alice, "feature_permissions", &legacy)
+        .await
+        .unwrap();
+    let migrated = permissions::config(&f.app, &alice).await.unwrap();
+    assert!(!migrated.allows(Feature::WebSearch, Scope::Private));
+    assert!(!migrated.allows(Feature::WebSearch, Scope::Group));
     let mut invalid = json!(cfg);
     invalid["features"]
         .as_object_mut()

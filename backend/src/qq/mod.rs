@@ -1,5 +1,7 @@
 //! QQ group observations are isolated from the owner's personal assistant data.
 pub mod api;
+pub mod capabilities;
+pub mod conversation;
 pub mod decision;
 pub mod dialogue;
 pub(crate) mod media;

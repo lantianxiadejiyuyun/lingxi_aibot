@@ -171,7 +171,7 @@ pub async fn conversation(
         );
     }
     Ok(ok(
-        json!({"conversation":ensure(&app,&user,&group).await?,"history":history,"reply_parts":parts,"outreach":super::outreach::logs(&app,&user,Some(&group)).await?,"decisions":super::decision::logs(&app,&user,&group).await?}),
+        json!({"conversation":ensure(&app,&user,&group).await?,"history":history,"resources":{"habit":super::capabilities::resources(&app,&user,&group,"habit").await?,"record":super::capabilities::resources(&app,&user,&group,"record").await?,"bilibili":super::capabilities::resources(&app,&user,&group,"bilibili").await?},"reply_parts":parts,"outreach":super::outreach::logs(&app,&user,Some(&group)).await?,"decisions":super::decision::logs(&app,&user,&group).await?}),
     ))
 }
 // Compare the encrypted settings snapshot to avoid losing another simultaneous group edit.

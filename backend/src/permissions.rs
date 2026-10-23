@@ -21,6 +21,7 @@ pub enum Feature {
     PersonaGrowth,
     Proactive,
     Bilibili,
+    WebSearch,
     Tools,
 }
 #[derive(Clone, Copy)]
@@ -37,7 +38,7 @@ impl Scope {
         }
     }
 }
-pub const FEATURES: [Feature; 9] = [
+pub const FEATURES: [Feature; 10] = [
     Feature::Chat,
     Feature::Vision,
     Feature::StickerCollection,
@@ -46,11 +47,15 @@ pub const FEATURES: [Feature; 9] = [
     Feature::PersonaGrowth,
     Feature::Proactive,
     Feature::Bilibili,
+    Feature::WebSearch,
     Feature::Tools,
 ];
 impl Feature {
-    pub fn group_supported(self) -> bool {
-        !matches!(self, Self::PersonaGrowth | Self::Bilibili | Self::Tools)
+    pub fn group_default(self) -> bool {
+        !matches!(
+            self,
+            Self::PersonaGrowth | Self::Bilibili | Self::Tools | Self::WebSearch
+        )
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -62,6 +67,7 @@ impl Feature {
             Self::PersonaGrowth => "人设养成",
             Self::Proactive => "主动消息与延迟补充",
             Self::Bilibili => "B 站阅读",
+            Self::WebSearch => "联网搜索",
             Self::Tools => "AI 工具操作",
         }
     }
@@ -91,7 +97,7 @@ impl Default for Config {
                         Grant {
                             enabled: true,
                             private: true,
-                            group: f.group_supported(),
+                            group: f.group_default(),
                         },
                     )
                 })
@@ -106,7 +112,7 @@ impl Config {
                 g.enabled
                     && match scope {
                         Scope::Private => g.private,
-                        Scope::Group => feature.group_supported() && g.group,
+                        Scope::Group => g.group,
                     }
             })
     }
@@ -116,20 +122,33 @@ impl Config {
         {
             return Err(invalid("请提交完整的功能权限设置"));
         }
-        if self
-            .features
-            .iter()
-            .any(|(f, g)| !f.group_supported() && g.group)
-        {
-            return Err(invalid("群聊不开放私人工具、B站书房和主人人设养成"));
-        }
         Ok(())
     }
 }
 pub async fn config(app: &App, user: &User) -> Result<Config> {
     match settings::get(app, user, "feature_permissions").await? {
         None => Ok(Config::default()),
-        Some(value) => serde_json::from_value(value).map_err(|_| invalid("功能权限配置无效")),
+        Some(value) => {
+            let mut config: Config =
+                serde_json::from_value(value).map_err(|_| invalid("功能权限配置无效"))?;
+            // Legacy search was gated by personal tools. Preserve its effective access;
+            // newly supported group capabilities remain opt-in.
+            if !config.features.contains_key(&Feature::WebSearch) {
+                let mut grant = config
+                    .features
+                    .get(&Feature::Tools)
+                    .cloned()
+                    .unwrap_or(Grant {
+                        enabled: false,
+                        private: false,
+                        group: false,
+                    });
+                grant.group = false;
+                config.features.insert(Feature::WebSearch, grant);
+            }
+            config.validate()?;
+            Ok(config)
+        }
     }
 }
 pub async fn allowed(app: &App, user: &User, feature: Feature, scope: Scope) -> Result<bool> {

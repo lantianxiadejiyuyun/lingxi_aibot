@@ -372,6 +372,7 @@ async fn process_inner(
     if cancel.is_cancelled() || !permitted(app, user, eid).await? {
         return Ok(false);
     }
+    let style = crate::qq::config(app, user).await?.reply_style;
     let (text, kind, chat_id): (String, String, String) =
         sqlx::query_as("SELECT text,kind,chat_id FROM feishu_events WHERE id=? AND user_id=?")
             .bind(eid)
@@ -405,7 +406,7 @@ async fn process_inner(
                 .bind(&user.id)
                 .execute(&app.pool)
                 .await?;
-            let session = chat::prepare(
+            let mut session = chat::prepare(
                 app,
                 user,
                 &cid,
@@ -415,6 +416,10 @@ async fn process_inner(
                 },
             )
             .await?;
+            session
+                .profile
+                .system_prompt
+                .push_str(&crate::qq::dialogue::prompt(&style));
             chat::run(app.clone(), session, None, cancel.clone()).await?
         }
     };
@@ -426,7 +431,10 @@ async fn process_inner(
     if reply.trim().is_empty() {
         return Err(invalid("模型未生成回复"));
     }
-    let parts = split_text(&reply);
+    let parts: Vec<String> = crate::qq::dialogue::split(&reply, &style)
+        .into_iter()
+        .flat_map(|p| split_text(&p))
+        .collect();
     for (i, body) in parts.iter().enumerate() {
         sqlx::query("INSERT INTO feishu_parts(event_id,part,body) VALUES(?,?,?)")
             .bind(eid)
@@ -438,6 +446,12 @@ async fn process_inner(
     let c = credentials(app, user).await?;
     let token = tenant_token(app, &c, origin).await?;
     for (i, body) in parts.iter().enumerate() {
+        if i > 0 && style.enabled {
+            tokio::select! {
+                _=cancel.cancelled()=>return Ok(false),
+                _=tokio::time::sleep(Duration::from_secs(style.interval_secs))=>(),
+            }
+        }
         if cancel.is_cancelled() || !permitted(app, user, eid).await? {
             return Ok(false);
         }
@@ -561,6 +575,7 @@ mod tests {
         models: Arc<Mutex<Vec<Value>>>,
         sends: Arc<Mutex<Vec<Value>>>,
         response: Arc<Mutex<Value>>,
+        model_text: Arc<Mutex<Option<String>>>,
     }
     struct Fixture {
         app: App,
@@ -612,7 +627,7 @@ mod tests {
                             [("content-type", "text/event-stream")],
                             format!(
                                 "data: {}\n\ndata: [DONE]\n\n",
-                                json!({"choices":[{"delta":{"content":"你好，这是回复。"}}]})
+                                json!({"choices":[{"delta":{"content":m.model_text.lock().unwrap().clone().unwrap_or_else(||"你好，这是回复。".into())}}]})
                             ),
                         )
                     }),
@@ -981,6 +996,36 @@ mod tests {
         let requests = f.m.models.lock().unwrap();
         assert!(requests[1].to_string().contains("第一条"));
         assert!(!requests[1].to_string().contains("大肥鱼"));
+    }
+    #[tokio::test]
+    async fn paragraphs_are_sent_in_order_and_not_replayed() {
+        let f = Fixture::new().await;
+        f.bind().await;
+        let mut cfg = crate::integrations::config(&f.app, &f.user).await.unwrap();
+        cfg["qq"] = json!({"reply_style":{"enabled":true,"max_messages":3,"interval_secs":1}});
+        crate::integrations::save_config(&f.app, &f.user, cfg)
+            .await
+            .unwrap();
+        *f.m.model_text.lock().unwrap() = Some("第一段完整意思。\n\n第二段完整意思。".into());
+        accept(&f.app, &f.user, f.event("paragraphs", "聊两句").await)
+            .await
+            .unwrap();
+        let event = f.latest().await;
+        reconcile(&f.app).await.unwrap();
+        assert_eq!(f.process(event).await.unwrap()["sent"], true);
+        assert_eq!(f.process(event).await.unwrap()["skipped"], true);
+        let sends = f.m.sends.lock().unwrap();
+        assert_eq!(sends.len(), 2);
+        for (send, text) in sends.iter().zip(["第一段完整意思。", "第二段完整意思。"])
+        {
+            let payload: Value = serde_json::from_str(send["content"].as_str().unwrap()).unwrap();
+            assert_eq!(payload["text"], text);
+        }
+        assert!(
+            json!(*f.m.models.lock().unwrap())
+                .to_string()
+                .contains("每段单独发送")
+        );
     }
     #[tokio::test]
     async fn unbind_and_changed_config_cancel_queued_work() {
