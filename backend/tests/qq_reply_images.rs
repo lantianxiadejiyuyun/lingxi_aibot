@@ -350,6 +350,88 @@ async fn uncertain_image_delivery_is_not_reselected_or_replayed() {
 }
 
 #[tokio::test]
+async fn group_image_limits_switch_preserves_willingness_delivery_dedup_and_other_scopes() {
+    let f = Fixture::new().await;
+    f.insert(Some("30001"), "a", "小鱼", None).await;
+    f.insert(Some("30002"), "b", "小鱼", None).await;
+    f.insert(None, "owner-p", "小鱼", None).await;
+    f.decide(Some("a"));
+    assert_eq!(
+        f.send(Some("30001"), "limited-first", "你好呀")
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        f.send(Some("30001"), "limited-next", "又见面啦")
+            .await
+            .unwrap(),
+        1
+    );
+    let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+    cfg["qq"]["group_settings"]["30001"]["sticker_limits_enabled"] = json!(false);
+    integrations::save_config(&f.app, &f.user, cfg.clone())
+        .await
+        .unwrap();
+    for n in 0..3 {
+        assert_eq!(
+            f.send(Some("30001"), &format!("unlimited-{n}"), "再来一只小鱼")
+                .await
+                .unwrap(),
+            2
+        );
+    }
+    assert!(
+        f.send(Some("30001"), "unlimited-0", "重复回调")
+            .await
+            .is_err()
+    );
+    *f.mock.decision.lock().unwrap() = json!({"sticker_id":"a","willingness":0.74}).to_string();
+    assert_eq!(
+        f.send(Some("30001"), "low-desire", "只有一点想发")
+            .await
+            .unwrap(),
+        1
+    );
+    cfg["qq"]["group_settings"]["30001"]["sticker_limits_enabled"] = json!(true);
+    integrations::save_config(&f.app, &f.user, cfg)
+        .await
+        .unwrap();
+    f.decide(Some("a"));
+    assert_eq!(
+        f.send(Some("30001"), "limited-again", "开启限频")
+            .await
+            .unwrap(),
+        1
+    );
+    for (group, image, prefix) in [(Some("30002"), "b", "other"), (None, "owner-p", "private")] {
+        f.decide(Some(image));
+        assert_eq!(
+            f.send(group, &format!("{prefix}-first"), "你好呀")
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            f.send(group, &format!("{prefix}-next"), "又见面啦")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+    let attempts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sticker_reply_turns WHERE scope='30001' AND image_at IS NOT NULL",
+    )
+    .fetch_one(store::pool(&f.app).await.unwrap())
+    .await
+    .unwrap();
+    assert_eq!(
+        attempts, 4,
+        "disabled pacing still records attempts for re-enabling limits"
+    );
+}
+
+#[tokio::test]
 async fn repeated_replies_are_text_only_and_pacing_survives_app_recreation() {
     let f = Fixture::new().await;
     f.insert(None, "owner-cute", "小鱼", None).await;

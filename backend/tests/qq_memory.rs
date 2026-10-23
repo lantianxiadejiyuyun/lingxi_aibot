@@ -357,6 +357,53 @@ async fn local_decision_observes_without_reply_and_only_sees_current_group() {
 }
 
 #[tokio::test]
+async fn group_reply_limits_can_be_disabled_and_reenabled_without_resetting_usage() {
+    let f = Fixture::new().await;
+    f.decision_mode("auto").await;
+    for group in ["30001", "30002"] {
+        let (status, _) = f.api(&f.user, "PUT", &format!("/api/v2/qq/groups/{group}"), json!({"collect_memory":false,"decision":{"mode":"auto","cooldown_secs":3600,"max_replies_per_hour":1}})).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    for (id, group, expected) in [
+        (920, "30001", true),
+        (921, "30001", false),
+        (922, "30002", true),
+    ] {
+        let event = f.ingest(id, "10002", group, "鱼鱼，你在吗？", false).await;
+        assert_eq!(f.process(&event).await["delivered"], expected);
+    }
+    let (status, _) = f.api(&f.user, "PUT", "/api/v2/qq/groups/30001", json!({"collect_memory":false,"decision":{"mode":"auto","limits_enabled":false,"cooldown_secs":3600,"max_replies_per_hour":1}})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, view) = f.api(&f.user, "GET", "/api/v2/qq/groups", json!({})).await;
+    let settings = &view["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["group_id"] == "30001")
+        .unwrap()["settings"];
+    assert_eq!(settings["decision"]["limits_enabled"], false);
+    assert_eq!(settings["sticker_limits_enabled"], true);
+    for (id, group, text, expected) in [
+        (923, "30001", "鱼鱼，你在吗？", true),
+        (924, "30001", "鱼鱼，你还在吗？", true),
+        (925, "30002", "鱼鱼，你在吗？", false),
+        (926, "30001", "鱼鱼，先别回复", false),
+    ] {
+        let event = f.ingest(id, "10002", group, text, false).await;
+        assert_eq!(f.process(&event).await["delivered"], expected);
+    }
+    // Turning limits back on uses the attempts recorded while disabled.
+    let (status, _) = f.api(&f.user, "PUT", "/api/v2/qq/groups/30001", json!({"collect_memory":false,"decision":{"mode":"auto","limits_enabled":true,"cooldown_secs":3600,"max_replies_per_hour":1}})).await;
+    assert_eq!(status, StatusCode::OK);
+    let event = f
+        .ingest(927, "10002", "30001", "鱼鱼，你在吗？", false)
+        .await;
+    assert_eq!(f.process(&event).await["delivered"], false);
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 4);
+    assert!(f.mock.decision_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn local_decision_auto_replies_once_then_enforces_group_budget() {
     let f = Fixture::new().await;
     f.decision_mode("auto").await;

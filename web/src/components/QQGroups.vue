@@ -8,7 +8,7 @@ import ResourceState from './ResourceState.vue'
 import EmptyState from './EmptyState.vue'
 import { rhythmFields, rhythmValue, type Rhythm } from '../lib/qq-dialogue'
 
-export interface GroupSettings extends Rhythm { name:string; enabled:boolean; profile_id:string|null; system_prompt:string; reply_mentioned:boolean|null; reply_mention_sender:boolean|null; collect_memory:boolean|null; decision?:{mode:'off'|'observe'|'auto';cooldown_secs:number;max_replies_per_hour:number} }
+export interface GroupSettings extends Rhythm { name:string; enabled:boolean; profile_id:string|null; system_prompt:string; reply_mentioned:boolean|null; reply_mention_sender:boolean|null; sticker_limits_enabled:boolean; collect_memory:boolean|null; decision?:{mode:'off'|'observe'|'auto';limits_enabled:boolean;cooldown_secs:number;max_replies_per_hour:number} }
 export interface QQGroup { group_id:string; settings:GroupSettings; conversation:{id:string;updated_at:number}; messages:number; last_seen:number|null; active:boolean; profile_id:string|null; reply_mentioned:boolean; reply_mention_sender:boolean; collect_memory:boolean }
 withDefaults(defineProps<{manage?:boolean}>(),{manage:true})
 const emit = defineEmits<{changed:[];filter:[group:string]}>()
@@ -30,10 +30,12 @@ function edit(group?:QQGroup) {
     {...choice('reply_mention_sender','回复时 @发送者',[['inherit','沿用接入设置'],['true','开启'],['false','关闭']],inherit(c?.reply_mention_sender)),hint:'默认关闭；只控制回复是否提醒发送者，不影响被 @ 时回复。'},
     choice('collect_memory','提取人物特点',[['inherit','沿用接入设置'],['true','开启'],['false','关闭']],inherit(c?.collect_memory)),
     {...choice('decision_mode','普通消息的接话判断',[['off','关闭'],['observe','只观察 · 记录判断，不主动回复'],['auto','自动接话']],c?.decision?.mode||'off'),hint:'先在群管理配置本地判断模型。等待表示等下一条消息再判断，不会定时补发。'},
-    {...field('decision_cooldown','自动接话间隔（秒）',c?.decision?.cooldown_secs??120,'number',true),min:30,max:3600},
-    {...field('decision_max','每小时最多自动接话',c?.decision?.max_replies_per_hour??6,'number',true),min:1,max:30,hint:'被 @ 的回复不占这个额度。'},
+    {...choice('decision_limits','自动接话频率限制',[['true','开启'],['false','关闭']],c?.decision?.limits_enabled??true),hint:'关闭后不按自动接话间隔和每小时条数拦截，仍需判断是否适合接话；不影响被 @ 回复。'},
+    {...choice('sticker_limits','表情发送频率限制',[['true','开启'],['false','关闭']],c?.sticker_limits_enabled??true),hint:'开启时：间隔5分钟、穿插两轮文字、同图30分钟不重复、每小时最多3次。关闭后仍需发图意愿达到75%。'},
+    {...field('decision_cooldown','自动接话间隔（秒）',c?.decision?.cooldown_secs??120,'number',true),min:30,max:3600,hint:'仅开启自动接话频率限制时生效。'},
+    {...field('decision_max','每小时最多自动接话',c?.decision?.max_replies_per_hour??6,'number',true),min:1,max:30,hint:'仅开启自动接话频率限制时生效，被 @ 的回复不占额度。'},
   ],save:async v=>{
-    const settings:GroupSettings={...c,name:v.name.trim(),enabled:v.enabled==='true',profile_id:v.profile_id||null,system_prompt:v.system_prompt.trim(),reply_mentioned:toggle(v.reply_mentioned),reply_mention_sender:toggle(v.reply_mention_sender??'inherit'),collect_memory:toggle(v.collect_memory),decision:{mode:(v.decision_mode||'off') as 'off'|'observe'|'auto',cooldown_secs:Number(v.decision_cooldown??120),max_replies_per_hour:Number(v.decision_max??6)}}
+    const settings:GroupSettings={...c,name:v.name.trim(),enabled:v.enabled==='true',profile_id:v.profile_id||null,system_prompt:v.system_prompt.trim(),reply_mentioned:toggle(v.reply_mentioned),reply_mention_sender:toggle(v.reply_mention_sender??'inherit'),sticker_limits_enabled:v.sticker_limits!=='false',collect_memory:toggle(v.collect_memory),decision:{limits_enabled:v.decision_limits!=='false',mode:(v.decision_mode||'off') as 'off'|'observe'|'auto',cooldown_secs:Number(v.decision_cooldown??120),max_replies_per_hour:Number(v.decision_max??6)}}
     if(group) await put(`/qq/groups/${group.group_id}`,settings)
     else await post('/qq/groups',{group_id:v.group_id.trim(),settings})
     notify(group?'群会话设置已保存':'群已添加，独立会话已建立')
@@ -57,7 +59,7 @@ defineExpose({load})
       <div v-else class="qq-groups-grid"><article v-for="g in data.groups" :key="g.group_id" class="qq-group-card">
         <div class="section-heading"><span class="stat-icon green"><MessageSquare :size="21" /></span><span :class="['tag',g.active?'green':'neutral']">{{g.active?'接入中':g.settings.enabled?'等待开启接入':'已暂停'}}</span></div>
         <h3>{{g.settings.name||`QQ 群 ${g.group_id}`}}</h3><p>群号 {{g.group_id}}</p>
-        <div class="qq-group-meta"><span>{{modelName(g)}}</span><span>{{g.reply_mentioned?'@ 时回复':'@ 回复关闭'}}</span><span>{{g.reply_mention_sender?'回复时 @发送者':'回复不 @发送者'}}</span><span v-if="g.settings.decision?.mode==='auto'">自动接话</span><span v-else-if="g.settings.decision?.mode==='observe'">接话观察中</span></div>
+        <div class="qq-group-meta"><span>{{modelName(g)}}</span><span>{{g.reply_mentioned?'@ 时回复':'@ 回复关闭'}}</span><span>{{g.reply_mention_sender?'回复时 @发送者':'回复不 @发送者'}}</span><span v-if="g.settings.decision?.mode==='auto'">自动接话</span><span v-else-if="g.settings.decision?.mode==='observe'">接话观察中</span><span v-if="g.settings.decision?.limits_enabled===false">接话限频关闭</span><span v-if="g.settings.sticker_limits_enabled===false">表情限频关闭</span></div>
         <p class="qq-group-persona">{{g.settings.system_prompt||'默认群聊风格，只参考这个群里的交流。'}}</p>
         <div class="qq-group-meta"><span v-if="g.settings.reply_style?.enabled">分条回复</span><span v-if="g.settings.followup?.enabled">可延迟补充</span><span>{{g.settings.proactive?.enabled?'主动开场已开启':'主动开场关闭'}}</span><button v-if="manage" class="text-link" :aria-label="`聊天节奏 ${g.group_id}`" @click="rhythm(g)">聊天节奏<Settings2 :size="14" /></button></div>
         <div class="qq-group-activity"><span>{{g.messages}} 条发言</span><span>{{g.last_seen?date(g.last_seen):'等待第一条消息'}}</span></div>

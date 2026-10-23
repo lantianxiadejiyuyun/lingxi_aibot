@@ -24,6 +24,7 @@ pub enum Mode {
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
     pub mode: Mode,
+    pub limits_enabled: bool,
     pub cooldown_secs: i64,
     pub max_replies_per_hour: i64,
 }
@@ -31,6 +32,7 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             mode: Mode::Off,
+            limits_enabled: true,
             cooldown_secs: 120,
             max_replies_per_hour: 6,
         }
@@ -299,6 +301,7 @@ async fn evaluate(
     let (checks, replies, last): (i64,i64,Option<i64>) = sqlx::query_as("SELECT COALESCE(SUM(attempted),0),COALESCE(SUM(authorized),0),MAX(CASE WHEN authorized=1 THEN created_at END) FROM reply_decisions WHERE user_id=? AND group_id=? AND created_at>?")
         .bind(&user.id).bind(&event.group_id).bind(now()-3600).fetch_one(pool).await?;
     if policy.mode == Mode::Auto
+        && policy.limits_enabled
         && (replies >= policy.max_replies_per_hour
             || last.is_some_and(|t| t + policy.cooldown_secs > now()))
     {
@@ -310,7 +313,10 @@ async fn evaluate(
             .bind(&event.group_id)
             .fetch_optional(&app.pool)
             .await?;
-    if policy.mode == Mode::Auto && recent.is_some_and(|t| t + policy.cooldown_secs > now()) {
+    if policy.mode == Mode::Auto
+        && policy.limits_enabled
+        && recent.is_some_and(|t| t + policy.cooldown_secs > now())
+    {
         return Ok((Action::Ignore, "cooldown", false));
     }
     if let Some(action) = addressed_action(&cfg.decision, &event.content) {

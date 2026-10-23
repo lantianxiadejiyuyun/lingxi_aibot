@@ -9,6 +9,15 @@ const REPEAT_WINDOW: i64 = 30 * 60;
 const HOURLY_LIMIT: i64 = 3;
 const TEXT_TURNS: i64 = 2;
 
+async fn limits_enabled(app: &App, user: &User, group: Option<&str>) -> Result<bool> {
+    let Some(group) = group else { return Ok(true) };
+    Ok(super::config(app, user)
+        .await?
+        .group_settings
+        .get(group)
+        .is_none_or(|settings| settings.sticker_limits_enabled))
+}
+
 async fn pool<'a>(app: &'a App, group: Option<&str>) -> Result<&'a SqlitePool> {
     if group.is_some() {
         store::pool(app).await
@@ -49,6 +58,9 @@ pub async fn candidates(
     group: Option<&str>,
     at: i64,
 ) -> Result<Option<Vec<String>>> {
+    if !limits_enabled(app, user, group).await? {
+        return Ok(Some(Vec::new()));
+    }
     let mut conn = pool(app, group).await?.acquire().await?;
     if !eligible(&mut conn, user, group.unwrap_or(""), at).await? {
         return Ok(None);
@@ -89,17 +101,18 @@ pub async fn claim(
     sticker: &str,
     at: i64,
 ) -> Result<bool> {
+    let limited = limits_enabled(app, user, group).await?;
     let scope = group.unwrap_or("");
     let mut tx = pool(app, group).await?.begin().await?;
     // Acquire SQLite's writer lock before checking limits across worker processes.
     let exists=sqlx::query("UPDATE sticker_reply_turns SET text_at=text_at WHERE user_id=? AND scope=? AND delivery_key=? AND image_at IS NULL")
         .bind(&user.id).bind(scope).bind(key).execute(&mut *tx).await?.rows_affected();
-    if exists != 1 || !eligible(&mut tx, user, scope, at).await? {
+    if exists != 1 || (limited && !eligible(&mut tx, user, scope, at).await?) {
         return Ok(false);
     }
     let repeated: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sticker_reply_turns WHERE user_id=? AND scope=? AND sticker_id=? AND image_at>?)")
         .bind(&user.id).bind(scope).bind(sticker).bind(at-REPEAT_WINDOW).fetch_one(&mut *tx).await?;
-    if repeated {
+    if limited && repeated {
         return Ok(false);
     }
     sqlx::query("UPDATE sticker_reply_turns SET sticker_id=?,image_at=?,image_turn=(SELECT COALESCE(MAX(id),0) FROM sticker_reply_turns WHERE user_id=? AND scope=?) WHERE user_id=? AND scope=? AND delivery_key=?")
