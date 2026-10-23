@@ -31,6 +31,29 @@ async fn model(State(mock): State<Mock>, Json(request): Json<Value>) -> Response
         }
         let source: Value =
             serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
+        let count = source["owner_messages"].as_array().unwrap().len();
+        let reflections = mock
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r["messages"][0]["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("养成记录员")
+            })
+            .count();
+        if (mode == "truncate-large" && count > 3)
+            || (mode == "fail-after-first" && reflections > 1)
+            || (mode == "needs-output-budget" && request["max_tokens"].as_u64().unwrap() < 4096)
+        {
+            let chunk = json!({"choices":[{"delta":{"content":"["},"finish_reason":"length"}]});
+            return Response::builder()
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from(format!("data: {chunk}\n\ndata: [DONE]\n\n")))
+                .unwrap();
+        }
         if mode == "skip" {
             "[]".into()
         } else if mode.starts_with("temperament") {
@@ -188,6 +211,34 @@ impl Fixture {
         )
         .await
         .unwrap();
+    }
+    fn reflections(&self) -> Vec<Value> {
+        self.mock
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r["messages"][0]["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("养成记录员")
+            })
+            .cloned()
+            .collect()
+    }
+    async fn queue(&self, request: &str) -> lingxi::error::Result<Value> {
+        growth::reflect_now(
+            State(self.app.clone()),
+            self.user.clone(),
+            Path(self.profile.id.clone()),
+            Json(growth::Manual {
+                revision: self.view().await["revision"].as_i64().unwrap(),
+                request_id: request.into(),
+            }),
+        )
+        .await
+        .map(|v| v.0["data"].clone())
     }
 }
 impl Drop for Fixture {
@@ -361,4 +412,188 @@ async fn disabling_during_generation_cancels_writes_and_profiles_are_isolated() 
         serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
     assert_eq!(material["owner_messages"].as_array().unwrap().len(), 6);
     assert!(material.get("assistant_messages").is_none());
+}
+
+#[tokio::test]
+async fn twenty_two_observations_are_processed_in_four_batches_using_profile_output_budget() {
+    let f = Fixture::new().await;
+    let mut profile = f.profile.clone();
+    profile.max_output = 8192;
+    settings::save_profiles(&f.app, &f.user, vec![profile])
+        .await
+        .unwrap();
+    f.enable(true).await;
+    for _ in 0..22 {
+        f.chat(&db::id()).await;
+    }
+    *f.mock.mode.lock().unwrap() = "needs-output-budget".into();
+    let result = f.reflect().await.unwrap();
+    assert_eq!(result["processed"], 22);
+    assert_eq!(f.view().await["pending"], 0);
+    let requests = f.reflections();
+    let sizes: Vec<usize> = requests
+        .iter()
+        .map(|r| {
+            assert_eq!(r["max_tokens"], 8192);
+            serde_json::from_str::<Value>(r["messages"][1]["content"].as_str().unwrap())
+                    .unwrap()["owner_messages"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+        })
+        .collect();
+    assert_eq!(sizes, vec![6, 6, 6, 4]);
+    assert!(f.view().await["next_at"].as_i64().unwrap() >= db::now() + 7199);
+}
+
+#[tokio::test]
+async fn truncated_batch_shrinks_without_skipping_observations() {
+    let f = Fixture::new().await;
+    f.enable(true).await;
+    f.six().await;
+    f.six().await;
+    *f.mock.mode.lock().unwrap() = "truncate-large".into();
+    assert_eq!(f.reflect().await.unwrap()["processed"], 12);
+    assert_eq!(f.view().await["pending"], 0);
+    let sizes: Vec<usize> = f
+        .reflections()
+        .iter()
+        .map(|r| {
+            serde_json::from_str::<Value>(r["messages"][1]["content"].as_str().unwrap())
+                    .unwrap()["owner_messages"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+        })
+        .collect();
+    assert_eq!(sizes, vec![6, 3, 3, 3, 3]);
+}
+
+#[tokio::test]
+async fn failed_later_batch_keeps_prior_progress_and_can_resume_manually() {
+    let f = Fixture::new().await;
+    f.enable(true).await;
+    f.six().await;
+    f.six().await;
+    *f.mock.mode.lock().unwrap() = "fail-after-first".into();
+    assert!(f.reflect().await.is_err());
+    assert_eq!(f.view().await["pending"], 6);
+    assert_eq!(f.view().await["traits"].as_array().unwrap().len(), 1);
+    *f.mock.mode.lock().unwrap() = "skip".into();
+    let queued = f.queue("resume").await.unwrap();
+    let job = lingxi::jobs::get(&f.app, &f.user, queued["job_id"].as_str().unwrap())
+        .await
+        .unwrap();
+    let result = growth::reflect(&f.app, &f.user, &job.params.0, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(result["processed"], 6);
+    assert_eq!(result["changed"], 0);
+    assert_eq!(f.view().await["pending"], 0);
+    assert_eq!(f.view().await["last_error"], "");
+}
+
+#[tokio::test]
+async fn small_context_splits_material_before_sending_to_provider() {
+    let f = Fixture::new().await;
+    f.enable(true).await;
+    f.six().await;
+    sqlx::query("UPDATE messages SET content=? WHERE role='user'")
+        .bind("长".repeat(1000))
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    let mut p = f.profile.clone();
+    p.context_window = 8192;
+    settings::save_profiles(&f.app, &f.user, vec![p])
+        .await
+        .unwrap();
+    *f.mock.mode.lock().unwrap() = "skip".into();
+    assert_eq!(f.reflect().await.unwrap()["processed"], 6);
+    assert_eq!(f.view().await["pending"], 0);
+    assert!(f.reflections().len() > 1);
+}
+
+#[tokio::test]
+async fn manual_reflection_bypasses_cadence_and_deduplicates_concurrent_requests() {
+    let f = Fixture::new().await;
+    f.enable(true).await;
+    f.chat("one").await;
+    sqlx::query("UPDATE persona_growth SET next_at=?")
+        .bind(db::now() + 7200)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(f.reflect().await.unwrap()["skipped"], true);
+    let (a, b) = tokio::join!(f.queue("click-a"), f.queue("click-b"));
+    let a = a.unwrap();
+    let b = b.unwrap();
+    assert_eq!(a["job_id"], b["job_id"]);
+    assert_eq!(f.view().await["job_status"], "queued");
+    let job = lingxi::jobs::get(&f.app, &f.user, a["job_id"].as_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        growth::reflect(&f.app, &f.user, &job.params.0, &CancellationToken::new())
+            .await
+            .unwrap()["processed"],
+        1
+    );
+    sqlx::query("UPDATE jobs SET status='completed' WHERE id=?")
+        .bind(&job.id)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    let first_request = if f.queue("click-a").await.is_ok() {
+        "click-a"
+    } else {
+        "click-b"
+    };
+    assert_eq!(f.queue(first_request).await.unwrap()["job_id"], job.id);
+    assert!(f.queue("empty").await.is_err());
+}
+
+#[tokio::test]
+async fn manual_reflection_requires_opt_in_permission_and_current_revision() {
+    let f = Fixture::new().await;
+    assert!(f.queue("disabled").await.is_err());
+    f.enable(true).await;
+    f.chat("one").await;
+    let stale = growth::reflect_now(
+        State(f.app.clone()),
+        f.user.clone(),
+        Path("fish".into()),
+        Json(growth::Manual {
+            revision: 0,
+            request_id: "stale".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(stale, Err(lingxi::error::Error::Conflict(_))));
+    let queued = f.queue("then-disabled").await.unwrap();
+    let job = lingxi::jobs::get(&f.app, &f.user, queued["job_id"].as_str().unwrap())
+        .await
+        .unwrap();
+    f.enable(false).await;
+    assert_eq!(
+        growth::reflect(&f.app, &f.user, &job.params.0, &CancellationToken::new())
+            .await
+            .unwrap()["skipped"],
+        true
+    );
+    f.enable(true).await;
+    f.chat("two").await;
+    let mut cfg = lingxi::permissions::Config::default();
+    cfg.features
+        .get_mut(&lingxi::permissions::Feature::PersonaGrowth)
+        .unwrap()
+        .private = false;
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+    assert!(
+        matches!(f.queue("forbidden").await, Err(lingxi::error::Error::Invalid(message)) if message.contains("权限已关闭"))
+    );
+    assert_eq!(f.view().await["can_reflect"], false);
+    assert!(f.reflections().is_empty());
 }

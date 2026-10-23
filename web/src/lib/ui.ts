@@ -31,6 +31,7 @@ export interface Field {
   key: string; label: string; type?: string; value?: string | number | boolean;
   required?: boolean; options?: [string, string][]; hint?: string; wide?: boolean;
   min?: number; max?: number; step?: string; readonly?: boolean;
+  presets?: [number, string][];
 }
 export const field = (key: string, label: string, value: Field['value'] = '', type = 'text', required = false): Field => ({ key, label, value, type, required })
 export const choice = (key: string, label: string, options: [string, string][], value: Field['value']): Field => ({ key, label, options, value, type: 'select' })

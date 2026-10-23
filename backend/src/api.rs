@@ -49,6 +49,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/profiles",get(profiles).put(save_profiles))
         .route("/api/v2/permissions",get(crate::permissions::view).put(crate::permissions::save))
         .route("/api/v2/persona/{profile}",get(crate::growth::view).put(crate::growth::save))
+        .route("/api/v2/persona/{profile}/reflect",post(crate::growth::reflect_now))
         .route("/api/v2/persona/{profile}/traits",post(crate::growth::write_trait))
         .route("/api/v2/persona/{profile}/traits/{id}",axum::routing::delete(crate::growth::forget))
         .route("/api/v2/integrations",get(integrations).put(save_integrations))

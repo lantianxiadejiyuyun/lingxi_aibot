@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+const BATCH_SIZE: usize = 6;
+const MAX_PER_RUN: usize = 24;
+const MAX_CALLS: usize = 8;
+
 #[derive(sqlx::FromRow, Serialize)]
 pub struct Trait {
     pub id: String,
@@ -97,9 +101,91 @@ pub async fn view(
     ensure(&app, &user, &profile).await?;
     let (enabled,revision,last,next,error):(bool,i64,Option<i64>,i64,String)=sqlx::query_as("SELECT enabled,revision,last_reflected_at,next_at,last_error FROM persona_growth WHERE user_id=? AND profile_id=?").bind(&user.id).bind(&profile).fetch_one(&app.pool).await?;
     let (turns,days,pending):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COUNT(DISTINCT date(o.created_at,'unixepoch')),COALESCE(SUM(o.id>g.watermark),0) FROM persona_observations o JOIN persona_growth g ON g.user_id=o.user_id AND g.profile_id=o.profile_id WHERE o.user_id=? AND o.profile_id=?").bind(&user.id).bind(&profile).fetch_one(&app.pool).await?;
+    let job_status: Option<String> = sqlx::query_scalar("SELECT status FROM jobs WHERE user_id=? AND action='persona_reflect' AND json_extract(params,'$.profile_id')=? AND status IN ('queued','running') AND cancel_requested=0 ORDER BY created_at DESC LIMIT 1")
+        .bind(&user.id).bind(&profile).fetch_optional(&app.pool).await?;
+    let can_reflect = crate::permissions::allowed(
+        &app,
+        &user,
+        crate::permissions::Feature::PersonaGrowth,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     Ok(ok(
-        json!({"enabled":enabled,"revision":revision,"last_reflected_at":last,"next_at":next,"last_error":error,"turns":turns,"days":days,"pending":pending,"traits":traits(&app,&user,&profile).await?}),
+        json!({"enabled":enabled,"revision":revision,"last_reflected_at":last,"next_at":next,"last_error":error,"turns":turns,"days":days,"pending":pending,"traits":traits(&app,&user,&profile).await?,"job_status":job_status,"can_reflect":can_reflect,"batch_size":BATCH_SIZE,"max_per_run":MAX_PER_RUN}),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Manual {
+    pub revision: i64,
+    pub request_id: String,
+}
+
+/// Queue an explicit reflection without changing the automatic learning cadence.
+pub async fn reflect_now(
+    State(app): State<App>,
+    user: User,
+    Path(profile): Path<String>,
+    Json(input): Json<Manual>,
+) -> Result<Json<Value>> {
+    ensure(&app, &user, &profile).await?;
+    crate::permissions::require(
+        &app,
+        &user,
+        crate::permissions::Feature::PersonaGrowth,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
+    if input.request_id.is_empty() || input.request_id.len() > 100 {
+        return Err(invalid("手动整理请求 ID 无效"));
+    }
+    let mut tx = app.pool.begin().await?;
+    // Serialize button presses and the worker's claim; only one task per persona is queued.
+    sqlx::query("UPDATE persona_growth SET revision=revision WHERE user_id=? AND profile_id=?")
+        .bind(&user.id)
+        .bind(&profile)
+        .execute(&mut *tx)
+        .await?;
+    let dedupe = format!("growth-manual:{}", input.request_id);
+    let replay: Option<(String, String, String)> =
+        sqlx::query_as("SELECT id,status,params FROM jobs WHERE user_id=? AND dedupe_key=?")
+            .bind(&user.id)
+            .bind(&dedupe)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some((jid, status, params)) = replay {
+        let params: Value =
+            serde_json::from_str(&params).map_err(|_| invalid("整理任务记录损坏"))?;
+        if params["profile_id"] != profile || params["revision"] != input.revision {
+            return Err(Error::Conflict("请求 ID 已用于其他整理任务".into()));
+        }
+        return Ok(ok(json!({"job_id":jid,"status":status})));
+    }
+    let (enabled, revision, lease_until, pending): (bool, i64, i64, i64) = sqlx::query_as("SELECT enabled,revision,lease_until,(SELECT COUNT(*) FROM persona_observations o WHERE o.user_id=g.user_id AND o.profile_id=g.profile_id AND o.id>g.watermark) FROM persona_growth g WHERE user_id=? AND profile_id=?")
+        .bind(&user.id).bind(&profile).fetch_one(&mut *tx).await?;
+    if revision != input.revision {
+        return Err(Error::Conflict("养成设置已更新，请刷新后再试".into()));
+    }
+    if !enabled {
+        return Err(invalid("请先开启这个人设的相处养成"));
+    }
+    let active: Option<(String, String)> = sqlx::query_as("SELECT id,status FROM jobs WHERE user_id=? AND action='persona_reflect' AND json_extract(params,'$.profile_id')=? AND status IN ('queued','running') AND cancel_requested=0 ORDER BY created_at LIMIT 1")
+        .bind(&user.id).bind(&profile).fetch_optional(&mut *tx).await?;
+    if let Some((jid, status)) = active {
+        return Ok(ok(json!({"job_id":jid,"status":status})));
+    }
+    if lease_until > now() {
+        return Err(Error::Conflict("正在整理，请等待当前任务完成".into()));
+    }
+    if pending == 0 {
+        return Err(invalid("还没有待整理的新片段"));
+    }
+    let jid = id();
+    sqlx::query("INSERT INTO jobs(id,user_id,action,params,max_attempts,run_at,dedupe_key,created_at,updated_at) VALUES(?,?,'persona_reflect',?,1,?,?,?,?)")
+        .bind(&jid).bind(&user.id).bind(json!({"profile_id":profile,"manual":true,"revision":revision}).to_string()).bind(now()).bind(dedupe).bind(now()).bind(now()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(ok(json!({"job_id":jid,"status":"queued"})))
 }
 pub async fn save(
     State(app): State<App>,
@@ -277,12 +363,19 @@ pub async fn reflect(
         .as_str()
         .ok_or_else(|| invalid("缺少人设配置"))?;
     let token = id();
-    let claim:Option<(i64,i64)>=sqlx::query_as("UPDATE persona_growth SET lease=?,lease_until=?,next_at=? WHERE user_id=? AND profile_id=? AND enabled=1 AND lease_until<=? AND next_at<=? AND (SELECT COUNT(*) FROM persona_observations WHERE user_id=? AND profile_id=? AND id>persona_growth.watermark)>=6 RETURNING revision,watermark")
- .bind(&token).bind(now()+600).bind(now()+7200).bind(&user.id).bind(pid).bind(now()).bind(now()).bind(&user.id).bind(pid).fetch_optional(&app.pool).await?;
+    let manual = params["manual"] == true;
+    let claim:Option<(i64,i64)>=sqlx::query_as("UPDATE persona_growth SET lease=?,lease_until=?,next_at=?,last_error='' WHERE user_id=? AND profile_id=? AND enabled=1 AND lease_until<=? AND (? OR next_at<=?) AND (NOT ? OR revision=?) AND (SELECT COUNT(*) FROM persona_observations WHERE user_id=? AND profile_id=? AND id>persona_growth.watermark)>=? RETURNING revision,watermark")
+ .bind(&token).bind(now()+600).bind(now()+7200).bind(&user.id).bind(pid).bind(now()).bind(manual).bind(now()).bind(manual).bind(params["revision"].as_i64().unwrap_or(-1)).bind(&user.id).bind(pid).bind(if manual {1} else {6}).fetch_optional(&app.pool).await?;
     let Some((revision, watermark)) = claim else {
         return Ok(json!({"skipped":true}));
     };
-    let result = reflect_inner(app, user, pid, &token, revision, watermark, cancel).await;
+    let result = tokio::select! {
+        _ = app.shutdown.cancelled() => Err(Error::Cancelled),
+        _ = cancel.cancelled() => Err(Error::Cancelled),
+        result = tokio::time::timeout(std::time::Duration::from_secs(480), reflect_inner(app, user, pid, &token, revision, watermark, cancel)) => {
+            result.unwrap_or_else(|_| Err(invalid("本次整理达到时间上限，剩余片段留待下次")))
+        }
+    };
     let last_error = match &result {
         Ok(_) => String::new(),
         Err(Error::Invalid(message) | Error::Provider(message)) => {
@@ -305,10 +398,94 @@ async fn reflect_inner(
     cancel: &CancellationToken,
 ) -> Result<Value> {
     let profile = settings::active_profile(app, user, Some(pid)).await?;
+    // Take a bounded snapshot. New messages arriving during reflection stay pending.
+    let rows:Vec<(i64,i64,String)>=sqlx::query_as("SELECT o.id,o.message_id,m.content FROM persona_observations o JOIN messages m ON m.id=o.message_id WHERE o.user_id=? AND o.profile_id=? AND o.id>? ORDER BY o.id LIMIT ?")
+        .bind(&user.id).bind(pid).bind(watermark).bind(MAX_PER_RUN as i64).fetch_all(&app.pool).await?;
+    let mut offset = 0;
+    let mut batch_size = BATCH_SIZE;
+    let mut changed = 0;
+    let mut through = watermark;
+    let mut calls = 0;
+    while offset < rows.len() && calls < MAX_CALLS {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::PersonaGrowth,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let count = batch_size.min(rows.len() - offset);
+        calls += 1;
+        let result = reflect_batch(
+            app,
+            user,
+            pid,
+            token,
+            revision,
+            &profile,
+            &rows[offset..offset + count],
+            cancel,
+        )
+        .await;
+        match result {
+            Ok(value) if value.get("cancelled").is_some() => return Ok(value),
+            Ok(value) => {
+                changed += value["changed"].as_u64().unwrap_or(0);
+                through = rows[offset + count - 1].0;
+                offset += count;
+            }
+            Err(Error::Provider(ref message) | Error::Invalid(ref message))
+                if count > 1
+                    && (message.contains("输出达到长度限制") || message.contains("上下文预算")) =>
+            {
+                batch_size = count / 2;
+                tracing::info!(
+                    batch_size,
+                    "Retrying persona reflection with fewer observations"
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    // Ending a run, including a partial run, starts the automatic two-hour cooldown.
+    sqlx::query("UPDATE persona_growth SET next_at=? WHERE user_id=? AND profile_id=? AND lease=?")
+        .bind(now() + 7200)
+        .bind(&user.id)
+        .bind(pid)
+        .bind(token)
+        .execute(&app.pool)
+        .await?;
+    Ok(json!({"changed":changed,"through":through,"processed":offset}))
+}
+
+async fn reflect_batch(
+    app: &App,
+    user: &User,
+    pid: &str,
+    token: &str,
+    revision: i64,
+    profile: &settings::Profile,
+    rows: &[(i64, i64, String)],
+    cancel: &CancellationToken,
+) -> Result<Value> {
     let core_hash = digest(&profile.system_prompt);
-    let rows:Vec<(i64,i64,String)>=sqlx::query_as("SELECT o.id,o.message_id,m.content FROM persona_observations o JOIN messages m ON m.id=o.message_id WHERE o.user_id=? AND o.profile_id=? AND o.id>? ORDER BY o.id LIMIT 20")
- .bind(&user.id).bind(pid).bind(watermark).fetch_all(&app.pool).await?;
-    let through = rows.last().map(|r| r.0).unwrap_or(watermark);
+    let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM persona_growth WHERE user_id=? AND profile_id=? AND enabled=1 AND revision=? AND lease=? AND lease_until>?)")
+        .bind(&user.id).bind(pid).bind(revision).bind(token).bind(now()).fetch_one(&app.pool).await?;
+    if !current {
+        return Ok(json!({"cancelled":"settings_changed"}));
+    }
+    if digest(
+        &settings::active_profile(app, user, Some(pid))
+            .await?
+            .system_prompt,
+    ) != core_hash
+    {
+        return Ok(json!({"cancelled":"persona_changed"}));
+    }
+    let through = rows.last().ok_or_else(|| invalid("没有待整理片段"))?.0;
     let existing = traits(app, user, pid).await?;
     let source:Vec<_>=rows.iter().map(|(_,mid,text)|json!({"message_id":mid,"text":text.chars().take(1000).collect::<String>()})).collect();
     let current: Vec<_> = existing
@@ -320,7 +497,15 @@ async fn reflect_inner(
         json!({"role":"user","content":json!({"core_persona":profile.system_prompt,"existing":current,"owner_messages":source}).to_string()}),
     ];
     let mut limited = profile.clone();
-    limited.max_output = limited.max_output.min(1800);
+    // Use the configured output budget, including any model reasoning tokens.
+    let input = crate::provider::token_estimate(&json!(messages))
+        + crate::provider::token_estimate(&json!([]));
+    let available = limited.context_window.saturating_sub(input);
+    if available < limited.max_output && rows.len() > 1 || available < limited.max_output.min(1024)
+    {
+        return Err(invalid("养成材料超过模型上下文预算，请增加上下文容量"));
+    }
+    limited.max_output = limited.max_output.min(available);
     let reply = tokio::time::timeout(
         std::time::Duration::from_secs(90),
         crate::provider::chat(app, &limited, &messages, &[], None, cancel, None),
@@ -393,7 +578,7 @@ async fn reflect_inner(
         return Ok(json!({"cancelled":"settings_changed"}));
     }
     // Source deletion during generation invalidates the whole reflection.
-    for (_, mid, _) in &rows {
+    for (_, mid, _) in rows {
         let exists:i64=sqlx::query_scalar("SELECT COUNT(*) FROM persona_observations WHERE user_id=? AND profile_id=? AND message_id=?").bind(&user.id).bind(pid).bind(mid).fetch_one(&mut *tx).await?;
         if exists == 0 {
             return Ok(json!({"cancelled":"source_deleted"}));
