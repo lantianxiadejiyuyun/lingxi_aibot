@@ -94,6 +94,16 @@ impl Decoder {
         let mut delta = None;
         if protocol == "anthropic" {
             match v["type"].as_str().unwrap_or("") {
+                "message_delta" if v["delta"]["stop_reason"] == "max_tokens" => {
+                    return Err(Error::Provider(
+                        "模型输出达到长度限制，请增大输出预算".into(),
+                    ));
+                }
+                "message_delta" if v["delta"]["stop_reason"] == "model_context_window_exceeded" => {
+                    return Err(Error::Provider(
+                        "模型上下文已用尽，请压缩会话或选择更大窗口".into(),
+                    ));
+                }
                 "message_stop" => self.done = true,
                 "content_block_start" if v["content_block"]["type"] == "tool_use" => {
                     let idx = v["index"].as_u64().unwrap_or(0) as usize;

@@ -271,7 +271,7 @@ async fn local_decision_observes_without_reply_and_only_sees_current_group() {
     assert_eq!(f.process(&event).await["delivered"], false);
     assert!(f.mock.sends.lock().unwrap().is_empty());
     assert!(f.mock.model_requests.lock().unwrap().is_empty());
-    let requests = f.mock.decision_requests.lock().unwrap();
+    let requests = f.mock.decision_requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 1);
     let body = requests[0].to_string();
     assert!(body.contains("本群主人公开发言"));
@@ -279,7 +279,6 @@ async fn local_decision_observes_without_reply_and_only_sees_current_group() {
     assert!(!body.contains("PRIVATE OWNER MEMORY"));
     assert!(!body.contains("PRIVATE SYSTEM PROMPT"));
     assert_eq!(requests[0]["think"], false);
-    drop(requests);
     let (_, view) = f
         .api(
             &f.user,
@@ -1215,7 +1214,7 @@ async fn group_reply_never_loads_owner_private_history_or_tools_and_sends_once()
         .await
         .unwrap();
     assert_eq!(f.mock.sends.lock().unwrap().len(), 1);
-    let requests = f.mock.model_requests.lock().unwrap();
+    let requests = f.mock.model_requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].to_string().contains("PRIVATE_OWNER_SECRET"));
     assert!(!requests[0].to_string().contains("PRIVATE SYSTEM"));

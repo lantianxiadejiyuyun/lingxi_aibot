@@ -224,8 +224,16 @@ pub async fn reflect(
         return Ok(json!({"skipped":true}));
     };
     let result = reflect_inner(app, user, pid, &token, revision, watermark, cancel).await;
+    let last_error = match &result {
+        Ok(_) => String::new(),
+        Err(Error::Invalid(message) | Error::Provider(message)) => {
+            format!("{message}；已有成长保留，下次整理会再试")
+        }
+        Err(Error::Cancelled) => "整理已中断，已有成长保留；下次整理会再试".into(),
+        Err(_) => "本次整理未完成，已有成长保留；请检查服务日志".into(),
+    };
     sqlx::query("UPDATE persona_growth SET lease=NULL,lease_until=0,last_error=? WHERE user_id=? AND profile_id=? AND lease=?")
- .bind(if result.is_err(){"本次整理未完成，已有成长保留；稍后会再试"}else{""}).bind(&user.id).bind(pid).bind(token).execute(&app.pool).await?;
+ .bind(last_error).bind(&user.id).bind(pid).bind(token).execute(&app.pool).await?;
     result
 }
 async fn reflect_inner(

@@ -31,14 +31,16 @@ async fn live_bilibili_endpoints() {
     source.prepare().await.unwrap();
     let ids = source.search("摄影", 30).await.unwrap();
     println!("LIVE search candidates: {}", ids.len());
-    if let Some(id) = ids.first() {
-        let video = source.info(id).await.unwrap();
-        let captions = source.captions(id, &video).await.unwrap();
-        println!(
-            "LIVE metadata retrieved, subtitle segments: {}",
-            captions.map(|c| c.segments.len()).unwrap_or(0)
-        );
-    }
+    // An empty recent search must not silently skip metadata/subtitle checks.
+    let fallback = bilibili::client::parse_video("BV17x411w7KC").unwrap();
+    let id = ids.first().unwrap_or(&fallback);
+    let video = source.info(id).await.unwrap();
+    assert!(!video.title.is_empty() && video.cid > 0);
+    let captions = source.captions(id, &video).await.unwrap();
+    println!(
+        "LIVE metadata retrieved, subtitle segments: {}",
+        captions.map(|c| c.segments.len()).unwrap_or(0)
+    );
     let (key, url) = source.qr_start().await.unwrap();
     assert!(
         url.starts_with("https://passport.bilibili.com/")
@@ -264,7 +266,7 @@ async fn actual_subtitles_become_notes_with_account_isolation() {
         .await
         .unwrap();
     assert_eq!(sources[0]["kind"], "bilibili_subtitles");
-    let calls = f.model.calls.lock().unwrap();
+    let calls = f.model.calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     assert!(
         calls[0]["messages"][0]["content"]
@@ -279,7 +281,6 @@ async fn actual_subtitles_become_notes_with_account_isolation() {
             .contains("测试字幕")
     );
     assert!(calls[0].get("tools").is_none());
-    drop(calls);
     let queued = f.queue("second", false).await;
     f.process(&queued, true).await.unwrap();
     assert_eq!(

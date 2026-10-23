@@ -291,7 +291,12 @@ async fn invented_evidence_is_rejected_without_advancing_or_replacing_growth() {
     let v = f.view().await;
     assert_eq!(v["pending"], 6);
     assert_eq!(v["traits"][0]["source"], "manual");
-    assert!(!v["last_error"].as_str().unwrap().is_empty());
+    assert!(
+        v["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("成长来源无法验证")
+    );
 }
 #[tokio::test]
 async fn disabling_during_generation_cancels_writes_and_profiles_are_isolated() {

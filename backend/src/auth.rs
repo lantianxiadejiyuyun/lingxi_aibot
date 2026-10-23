@@ -50,7 +50,7 @@ pub async fn user(app: &App, id: &str) -> Result<User> {
 }
 pub async fn hash_password(app: &App, password: String) -> Result<String> {
     if password.chars().count() < 12 || password.len() > 1024 {
-        return Err(invalid("密码长度须为 12–1024 字节"));
+        return Err(invalid("密码至少 12 个字符，且不超过 1024 字节"));
     }
     let permit = app
         .password_workers
@@ -123,7 +123,8 @@ pub async fn login(State(app): State<App>, Json(body): Json<Credentials>) -> Res
     if body.username.len() > 256 || body.password.len() > 1024 {
         return Err(Error::Unauthorized);
     }
-    if !app.allow_login(&body.username.to_lowercase()) {
+    let username = body.username.trim();
+    if !app.allow_login(&username.to_lowercase()) {
         return Err(Error::Busy);
     }
     let permit = app
@@ -133,7 +134,7 @@ pub async fn login(State(app): State<App>, Json(body): Json<Credentials>) -> Res
         .map_err(|_| Error::Busy)?;
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT id,password_hash FROM users WHERE username=? AND disabled=0")
-            .bind(body.username.trim())
+            .bind(username)
             .fetch_optional(&app.pool)
             .await?;
     let Some((uid, hash)) = row else {

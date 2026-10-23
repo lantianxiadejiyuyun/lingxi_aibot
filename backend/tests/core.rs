@@ -180,6 +180,22 @@ async fn login_checks_password_and_limits_attempts() {
         .0,
         StatusCode::TOO_MANY_REQUESTS
     );
+    // Lookup trims the username, so every spelling of the same account must
+    // share its attempt budget, including Unicode whitespace.
+    for name in [" alice", "alice ", "\t alice\n", "\u{3000}alice\u{3000}"] {
+        assert_eq!(
+            f.request(
+                "POST",
+                "/api/v2/login",
+                None,
+                json!({"username":name,"password":"a-long-test-password"})
+            )
+            .await
+            .0,
+            StatusCode::TOO_MANY_REQUESTS,
+            "account budget must also apply to {name:?}"
+        );
+    }
 }
 #[tokio::test]
 async fn records_use_optimistic_updates_and_real_chinese_search() {
@@ -435,6 +451,46 @@ fn stream_decoder_preserves_utf8_and_split_tool_arguments() {
         .unwrap();
     assert!(broken.finish().is_err());
 }
+#[test]
+fn truncated_model_streams_are_rejected() {
+    for (protocol, frames) in [
+        (
+            "openai",
+            vec![
+                json!({"choices":[{"delta":{"content":"部分回复"}}]}),
+                json!({"choices":[{"delta":{},"finish_reason":"length"}]}),
+            ],
+        ),
+        (
+            "anthropic",
+            vec![
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"部分回复"}}),
+                json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":128}}),
+            ],
+        ),
+        (
+            "anthropic",
+            vec![
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"部分回复"}}),
+                json!({"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded"}}),
+            ],
+        ),
+    ] {
+        let mut decoder = lingxi::provider::Decoder::default();
+        assert_eq!(
+            decoder
+                .feed(format!("data: {}\n\n", frames[0]).as_bytes(), protocol)
+                .unwrap(),
+            vec!["部分回复"]
+        );
+        assert!(matches!(
+            decoder.feed(format!("data: {}\n\n", frames[1]).as_bytes(), protocol),
+            Err(Error::Provider(_))
+        ));
+        assert!(decoder.finish().is_err());
+    }
+}
+
 #[test]
 fn anthropic_stream_decoder_handles_text_and_tools() {
     let frames = [
