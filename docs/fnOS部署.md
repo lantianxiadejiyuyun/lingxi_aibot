@@ -73,6 +73,8 @@ sudo bash scripts/deploy.sh backup
 
 `backup` 短暂停止当前运行的服务，复制 app 完整 `/data`（含主库、`master.key`、QQ 库、资源、内置飞书收件箱）、Qdrant 存储和 NapCat 配置/登录目录，保存 `.env` 与 Compose 文件，随后恢复原先运行的容器。备份目录权限为 `700`；若中途失败，会留下 `INCOMPLETE` 标记。备份不会删除数据卷。可选 Ollama 模型可重新下载，不包含在此备份中。
 
+同时保存权限为 `600` 的 `compose.resolved.yml`，将 `include`、`extends` 和覆盖文件合并为一份完整编排快照。该文件包含展开后的密钥和宿主机绝对路径，只能作为私密备份保存；恢复到另一目录或机器时先核对并调整挂载路径。不要将它提交到 Git 或公开分享。
+
 ```sh
 sudo docker load -i new-image.tar
 # 修改 .env 中的 LINGXI_IMAGE 为已导入的新标签后启动。

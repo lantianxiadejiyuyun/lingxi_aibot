@@ -175,6 +175,9 @@ case "$command_name" in
       printf '%s\n' "$file" >> "$backup_dir/compose-files.txt"
       index=$((index + 1))
     done
+    # Capture include/extends/overrides as one restorable definition. This
+    # contains resolved secrets and host paths, so keep it in the private backup.
+    dc config > "$backup_dir/compose.resolved.yml"
     dc config --images > "$backup_dir/images.txt"
     mapfile -t active < <(printf '%s\n' "$running_services" | sed '/^$/d')
     # start, rather than up, preserves the exact stopped containers/configuration.

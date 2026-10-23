@@ -21,6 +21,7 @@ case "$1" in
     case "${2:-}" in
       --services) printf 'app\nqdrant\nnapcat\n';;
       --images) printf 'lingxi:2.0.0\nqdrant/qdrant:v1.19.0\n';;
+      '') printf 'services:\n  included-service:\n    image: test-included-image\n    environment:\n      PRIVATE_TOKEN: synthetic-resolved-secret\n';;
     esac;;
   run) [[ ${MOCK_INIT_FAIL:-0} != 1 ]] || exit 37;;
   ps)
@@ -90,6 +91,11 @@ deploy init-account --username king >output
 deploy backup >output
 [[ $(find backups -name INCOMPLETE | wc -l) == 0 ]]
 [[ $(find backups -path '*/napcat/qq/copied-data' | wc -l) == 1 ]]
+resolved=$(find backups -name compose.resolved.yml)
+[[ $(stat -c %a "$resolved") == 600 ]]
+grep -q included-service "$resolved"
+grep -q synthetic-resolved-secret "$resolved"
+if grep -q synthetic-resolved-secret output; then printf 'Resolved Compose secret leaked to console\n' >&2; exit 1; fi
 grep -q 'start app napcat$' "$MOCK_LOG"
 if grep -q 'start .*qdrant' "$MOCK_LOG"; then printf 'Backup started a previously stopped service\n' >&2; exit 1; fi
 : > "$MOCK_LOG"
