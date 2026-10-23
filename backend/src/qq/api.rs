@@ -7,6 +7,7 @@ use crate::{
 };
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, Query, State},
     http::HeaderMap,
 };
@@ -55,28 +56,65 @@ pub async fn inbound(
     State(app): State<App>,
     Path(uid): Path<String>,
     headers: HeaderMap,
-    Json(value): Json<Value>,
+    body: Bytes,
 ) -> Result<Json<Value>> {
     let user = auth::user(&app, &uid)
         .await
         .map_err(|_| Error::Unauthorized)?;
     let cfg = config(&app, &user).await?;
+    if !authenticated(&cfg.inbound.secret, &headers, &body) {
+        return Err(Error::Unauthorized);
+    }
+    let value: Value =
+        serde_json::from_slice(&body).map_err(|_| invalid("QQ 事件须为有效 JSON"))?;
+    Ok(ok(ingest(&app, &user, &value).await?))
+}
+fn authenticated(secret: &str, headers: &HeaderMap, body: &[u8]) -> bool {
+    use hmac::{Hmac, Mac};
+    if !(32..=256).contains(&secret.len()) {
+        return false;
+    }
     let supplied = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
     let left = digest(supplied);
-    let right = digest(&cfg.inbound.secret);
+    let right = digest(secret);
     let equal = left
         .bytes()
         .zip(right.bytes())
         .fold(0u8, |a, (l, r)| a | (l ^ r))
         == 0;
-    if cfg.inbound.secret.len() < 32 || !equal {
-        return Err(Error::Unauthorized);
+    if equal {
+        return true;
     }
-    Ok(ok(ingest(&app, &user, &value).await?))
+    // NapCat's HTTP client uses the OneBot HMAC-SHA1 signature, not a Bearer
+    // header. Authenticate the original bytes before parsing JSON; whitespace
+    // and Unicode escaping are part of the signed message.
+    let Some(signature) = headers
+        .get("x-signature")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("sha1="))
+        .filter(|v| v.len() == 40 && v.is_ascii())
+    else {
+        return false;
+    };
+    let mut bytes = [0u8; 20];
+    for (i, pair) in signature.as_bytes().chunks_exact(2).enumerate() {
+        let Ok(s) = std::str::from_utf8(pair) else {
+            return false;
+        };
+        let Ok(value) = u8::from_str_radix(s, 16) else {
+            return false;
+        };
+        bytes[i] = value;
+    }
+    let Ok(mut mac) = Hmac::<sha1::Sha1>::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&bytes).is_ok()
 }
 pub async fn ingest(app: &App, user: &User, value: &Value) -> Result<Value> {
     let cfg = config(app, user).await?;

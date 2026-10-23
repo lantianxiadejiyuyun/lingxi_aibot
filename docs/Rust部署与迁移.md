@@ -29,7 +29,7 @@ Compose 从根目录 `.env` 读取端口等变量，可复制 `.env.docker.examp
 4. 进入「QQ 群与会话」，逐个添加群号。每个群对应一个固定会话，可设置群名称、模型、群人设和独立开关；再到「接入设置」填写共用的主人 QQ、机器人 QQ、默认模型、OneBot HTTP 地址、专用 Qdrant 地址及嵌入模型接口。
 
 旧群白名单会自动获得独立会话。移除群停止接收和回复，不删除历史；重新添加同一群会沿用会话 ID。群会话页显示最近 100 条群消息，主人发言从主库读取、成员发言从独立群库读取。同群消息串行处理，已发送的机器人回复进入后续上下文，各群不混用历史或私人记忆。
-5. 首次保存前复制回调密钥。在 NapCat 的 HTTP 客户端中，把该页面给出的 `/api/v2/qq/inbound/账户ID` 作为上报地址，并设置请求头 `Authorization: Bearer 回调密钥`。它是专用回调密钥，与灵犀登录 Token、OneBot 访问 Token 分开。
+5. 首次保存前复制回调密钥。在 NapCat 的 HTTP 客户端中，把该页面给出的 `/api/v2/qq/inbound/账户ID` 作为上报地址，在 Token 字段填入回调密钥原文（不加 `Bearer`），消息格式选择 `array`；NapCat 自动携带 `X-Signature: sha1=…`，后端按原始请求体验证 HMAC-SHA1。其他 OneBot 客户端仍可设置 `Authorization: Bearer 回调密钥`。它是专用回调密钥，与灵犀登录 Token、OneBot 访问 Token 分开。
 6. 启用接入。接收群内文字消息；被 `@` 时回复。每群回复最短间隔 5 秒，不处理自身消息或非白名单群。
 
 主人号一旦绑定不能直接换号，避免既有人物数据归错人。姓名、群名片或“我是主人”等文本不会改变身份判断。
@@ -69,7 +69,7 @@ Compose 从根目录 `.env` 读取端口等变量，可复制 `.env.docker.examp
 
 站内通知无需配置。飞书自定义机器人（可选签名）、飞书应用机器人（App ID / Secret、接收人类型与 ID）、Server酱（Turbo 或 Server酱³ SendKey）在「设置 → 通知渠道」配置。密钥加密保存，页面只显示掩码；保存渠道不发送测试消息。此处渠道选择目前用于主动陪伴，其他任务的站内提醒保持各自流程。
 
-**个人 QQ**：在陪伴页点击「配置 NapCat」，填写绑定的主人 QQ、机器人 QQ、OneBot HTTP 地址与 Token、事件回调密钥并开启私聊。按照页面回调地址配置 NapCat 的 HTTP 客户端及 `Authorization: Bearer 回调密钥`。私聊只接受绑定主人，使用主库对话、记忆和个人工具；无需启用群功能或 Qdrant。主人身份、连接和回调密钥与群接入共用，内网服务仍需 `LINGXI_ALLOW_PRIVATE_NETWORK=true`。QQ 文字回复与主动消息通过 `send_private_msg` 发送。
+**个人 QQ**：在陪伴页点击「配置 NapCat」，填写绑定的主人 QQ、机器人 QQ、OneBot HTTP 地址与 Token、事件回调密钥并开启私聊。按照页面回调地址配置 NapCat 的 HTTP 客户端，在 Token 字段填回调密钥原文。私聊只接受绑定主人，使用主库对话、记忆和个人工具；无需启用群功能或 Qdrant。主人身份、连接和回调密钥与群接入共用，内网服务仍需 `LINGXI_ALLOW_PRIVATE_NETWORK=true`。QQ 文字回复与主动消息通过 `send_private_msg` 发送。
 
 **AstrBot**：安装 `integrations/astrbot` 插件，私聊 `/lingxi 身份`，将返回的标识、v2 API 基地址和账号 Token 填入插件后台，再在同一私聊 `/lingxi 绑定`。回到陪伴页选择 AstrBot。Compose 覆盖文件为 `docker-compose.astrbot.yml`，完整部署步骤见 [插件说明](../integrations/astrbot/README.md)。
 

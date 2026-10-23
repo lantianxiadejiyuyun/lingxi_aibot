@@ -724,6 +724,117 @@ async fn identity_routes_owner_to_main_and_everyone_else_to_separate_db() {
     assert!(!jobs.join("").contains("群成员喜欢"));
 }
 #[tokio::test]
+async fn inbound_accepts_napcat_raw_body_signatures_and_legacy_bearer() {
+    let f = Fixture::new().await;
+    let path = format!("/api/v2/qq/inbound/{}", f.user.id);
+    // Generated independently with Node's createHmac, as used by NapCat.
+    let body = "{\n  \"post_type\": \"meta_event\",\n  \"meta_event_type\": \"heartbeat\",\n  \"note\": \"蓝色大肥鱼\"\n}\n";
+    let signature = "sha1=ea2850ac062ac7bb6cd6275846074355ad291d85";
+    let compact = serde_json::from_str::<Value>(body).unwrap().to_string();
+    let tampered = body.replace("蓝色", "红色");
+    for (payload, header, credential, expected) in [
+        (body, "x-signature", signature, StatusCode::OK),
+        (
+            compact.as_str(),
+            "x-signature",
+            signature,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            tampered.as_str(),
+            "x-signature",
+            signature,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            body,
+            "x-signature",
+            "sha1=0000000000000000000000000000000000000000",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            body,
+            "x-signature",
+            "sha1=zz2850ac062ac7bb6cd6275846074355ad291d85",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (body, "x-signature", "sha1=short", StatusCode::UNAUTHORIZED),
+        (
+            body,
+            "authorization",
+            "Bearer test-qq-inbound-secret-at-least-32-chars",
+            StatusCode::OK,
+        ),
+    ] {
+        let response = lingxi::api::router(f.app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header(header, credential)
+                    .body(Body::from(payload.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            expected,
+            "header={header}, credential={credential}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn inbound_signed_messages_are_deduplicated_and_malformed_json_is_rejected() {
+    use hmac::{Hmac, Mac};
+    let f = Fixture::new().await;
+    let path = format!("/api/v2/qq/inbound/{}", f.user.id);
+    let message = f
+        .message(42, "10002", "30001", "签名消息只接收一次", true)
+        .to_string();
+    let mut replies = Vec::new();
+    for (body, expected) in [
+        (message.as_str(), StatusCode::OK),
+        (message.as_str(), StatusCode::OK),
+        ("{invalid JSON", StatusCode::BAD_REQUEST),
+    ] {
+        let mut mac =
+            Hmac::<sha1::Sha1>::new_from_slice(b"test-qq-inbound-secret-at-least-32-chars")
+                .unwrap();
+        mac.update(body.as_bytes());
+        let signature = format!("sha1={:x}", mac.finalize().into_bytes());
+        let response = lingxi::api::router(f.app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-signature", signature)
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            replies.push(response.into_body().collect().await.unwrap().to_bytes());
+        }
+    }
+    assert_eq!(replies[0], replies[1]);
+    let events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
+        .fetch_one(store::pool(&f.app).await.unwrap())
+        .await
+        .unwrap();
+    let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE action='qq_event'")
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!((events, jobs), (1, 1));
+}
+
+#[tokio::test]
 async fn inbound_auth_whitelist_self_messages_and_duplicate_delivery() {
     let f = Fixture::new().await;
     let path = format!("/api/v2/qq/inbound/{}", f.user.id);
