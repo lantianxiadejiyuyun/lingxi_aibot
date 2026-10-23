@@ -12,7 +12,7 @@ docker pull --platform linux/amd64 qdrant/qdrant:v1.19.0
 docker save -o lingxi-fnos-images.tar lingxi:2.0.0 qdrant/qdrant:v1.19.0
 ```
 
-将镜像包、`docker-compose.fnos.yml`、`scripts/deploy.sh` 传到 NAS 部署目录，保持 `scripts/` 子目录，将 Compose 文件保存为 `compose.yml`。已有其他构建标签时可另行设置 `.env` 中的 `LINGXI_IMAGE`。
+将镜像包、`docker-compose.fnos.yml`、`scripts/deploy.sh` 和完整的 `integrations/napcat-webui-handoff/` 目录传到 NAS 部署目录，保持 `scripts/`、`integrations/napcat-webui-handoff/` 的相对位置，将 Compose 文件保存为 `compose.yml`。一键登录页面会只读挂载进 NapCat；缺少该目录时容器会拒绝启动，不会创建空目录掩盖文件缺失。已有其他构建标签时可另行设置 `.env` 中的 `LINGXI_IMAGE`。
 
 NapCat 固定为 `v4.18.37` 及镜像 digest，首次启动会拉取该镜像。离线 NAS 可在有网络的机器拉取并导出，再导入本地固定标签，并在 `.env` 的 `NAPCAT_IMAGE` 指定这个已验证的标签。
 
@@ -32,7 +32,11 @@ sudo bash scripts/deploy.sh status
 
 若首次初始化在配置生成后因构建或数据库初始化失败中断，修复原因后用 `sudo bash scripts/deploy.sh init-account --username admin` 继续创建首个账号。已有账号时后端会拒绝此命令，不会重置密码或数据。
 
-`status` / `urls` 会直接显示灵犀和 NapCat 地址。默认分别为 `http://你的NAS局域网IP:18081/`、`http://你的NAS局域网IP:6099/webui/`；QQ 页也可直接打开 NapCat。应用仅发布到指定 LAN IP 和回环地址，NapCat 只发布管理端口，OneBot 3000 和 Qdrant 6333 留在 Compose 内网。
+`status` / `urls` 会直接显示灵犀和 NapCat 地址。默认分别为 `http://你的NAS局域网IP:18081/`、`http://你的NAS局域网IP:6099/webui/`。登录灵犀管理员账号后，可从 QQ 接入页面一键登录 NapCat，无需到启动日志查找登录密钥。直接访问 NapCat 地址时，NapCat 自己的密钥认证仍然生效。应用仅发布到指定 LAN IP 和回环地址，NapCat 只发布管理端口，OneBot 3000 和 Qdrant 6333 留在 Compose 内网。
+
+Compose 将 NapCat 的 `config` 目录只读挂载到应用的 `/run/napcat-config`，通过 `LINGXI_NAPCAT_CONFIG_DIR` 读取当前 `webui.json`。管理员点击登录后，后台通过 `LINGXI_NAPCAT_WEBUI_INTERNAL_URL`（默认 `http://napcat:6099`）调用 NapCat 认证接口，浏览器只接收其标准会话凭据，并通过 NapCat 同源登录页面建立会话。长期登录密钥只在服务端使用，不进入浏览器或 URL；会话凭据也不放入 URL。NapCat 原有认证和会话有效期保持生效。
+
+该入口仅向已登录的灵犀管理员提供，无需挂载 Docker socket 或 QQ 登录目录。新安装由初始化脚本设置 UID 1000 的配置目录归属；迁移时保留现有密钥和目录权限，应用须能读取此配置。登录页面目录只读挂载在 NapCat 的 `/app/napcat/static/lingxi-login`，不会覆盖 NapCat 自带页面。外部 NapCat（`LINGXI_NAPCAT_MANAGED=false`）仍使用普通管理地址。反向代理部署时，需完整转发 NapCat 的 `/webui/` 路径及其子目录，包括 `/webui/lingxi-login/`。
 
 打开 NapCat 后仍需登录机器人 QQ。在灵犀 QQ 接入中采用部署提供的 OneBot 连接，填写主人和机器人 QQ，并按页面复制的回调地址/密钥设置 NapCat HTTP 客户端。初始化不会自动发送 QQ 消息或开启群回复。向量地址为 `http://qdrant:6333`，密钥与 `.env` 的 `LINGXI_QDRANT_API_KEY` 一致。该编排允许访问内网服务，适用于可信账号环境。
 
@@ -71,17 +75,18 @@ sudo bash scripts/deploy.sh status
 sudo bash scripts/deploy.sh backup
 ```
 
-`backup` 短暂停止当前运行的服务，复制 app 完整 `/data`（含主库、`master.key`、QQ 库、资源、内置飞书收件箱）、Qdrant 存储和 NapCat 配置/登录目录，保存 `.env` 与 Compose 文件，随后恢复原先运行的容器。备份目录权限为 `700`；若中途失败，会留下 `INCOMPLETE` 标记。备份不会删除数据卷。可选 Ollama 模型可重新下载，不包含在此备份中。
+`backup` 短暂停止当前运行的服务，复制 app 完整 `/data`（含主库、`master.key`、QQ 库、资源、内置飞书收件箱）、Qdrant 存储和 NapCat 配置/登录目录，保存 `.env`、Compose 文件与已存在的 `integrations/napcat-webui-handoff/` 页面资源，随后恢复原先运行的容器。备份目录权限为 `700`；若中途失败，会留下 `INCOMPLETE` 标记。备份不会删除数据卷。可选 Ollama 模型可重新下载，不包含在此备份中。
 
 同时保存权限为 `600` 的 `compose.resolved.yml`，将 `include`、`extends` 和覆盖文件合并为一份完整编排快照。该文件包含展开后的密钥和宿主机绝对路径，只能作为私密备份保存；恢复到另一目录或机器时先核对并调整挂载路径。不要将它提交到 Git 或公开分享。
 
 ```sh
 sudo docker load -i new-image.tar
+# 同步发行包中的 integrations/napcat-webui-handoff/，保留原目录结构。
 # 修改 .env 中的 LINGXI_IMAGE 为已导入的新标签后启动。
 sudo bash scripts/deploy.sh up
 ```
 
-脚本每次创建独立备份目录，升级时保留上一镜像。回退时停止服务，先另存升级后数据，再将 `app-data` 恢复到 `data/`，NapCat 三个目录恢复到原位置，Qdrant 存储恢复到原 `lingxi-v2_qq_vectors` 卷，并恢复对应配置和镜像。数据库与 `master.key` 必须成套恢复。不要运行 `docker compose down -v` 作为升级步骤。
+脚本每次创建独立备份目录，升级时保留上一镜像。回退时停止服务，先另存升级后数据，再将 `app-data` 恢复到 `data/`，NapCat 三个目录恢复到原位置，备份中的 `napcat-webui-handoff/` 恢复到部署目录的 `integrations/napcat-webui-handoff/`，Qdrant 存储恢复到原 `lingxi-v2_qq_vectors` 卷，并恢复对应配置和镜像。数据库与 `master.key` 必须成套恢复。不要运行 `docker compose down -v` 作为升级步骤。
 
 已有 Ollama 等覆盖文件时，对 `up/status/backup` 使用一致的文件参数：
 

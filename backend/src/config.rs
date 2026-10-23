@@ -66,6 +66,10 @@ pub struct Cli {
         global = true
     )]
     pub napcat_http_token: Option<String>,
+    #[arg(long, env = "LINGXI_NAPCAT_CONFIG_DIR", global = true)]
+    pub napcat_config_dir: Option<PathBuf>,
+    #[arg(long, env = "LINGXI_NAPCAT_WEBUI_INTERNAL_URL", global = true)]
+    pub napcat_webui_internal_url: Option<String>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }

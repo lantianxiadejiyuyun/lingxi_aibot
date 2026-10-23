@@ -11,6 +11,8 @@ services:
       LINGXI_FEISHU_EMBEDDED: ${LINGXI_FEISHU_EMBEDDED:-true}
       LINGXI_PUBLIC_URL: ${LINGXI_PUBLIC_URL:-http://${LINGXI_NAS_IP}:${LINGXI_PORT:-18081}}
       LINGXI_NAPCAT_MANAGED: ${LINGXI_NAPCAT_MANAGED:-false}
+      LINGXI_NAPCAT_CONFIG_DIR: /run/napcat-config
+      LINGXI_NAPCAT_WEBUI_INTERNAL_URL: ${LINGXI_NAPCAT_WEBUI_INTERNAL_URL:-http://napcat:6099}
       LINGXI_NAPCAT_WEBUI_URL: ${LINGXI_NAPCAT_WEBUI_URL:-}
       LINGXI_NAPCAT_HTTP_URL: ${LINGXI_NAPCAT_HTTP_URL:-http://napcat:3000}
       LINGXI_NAPCAT_HTTP_TOKEN: ${LINGXI_NAPCAT_HTTP_TOKEN:-}
@@ -25,6 +27,8 @@ services:
         target: /data
         bind:
           create_host_path: false
+      # Configuration only; the app never needs the QQ login directory.
+      - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/config:/run/napcat-config:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -53,6 +57,12 @@ services:
       - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/qq:/app/.config/QQ
       - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/config:/app/napcat/config
       - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/plugins:/app/napcat/plugins
+      - type: bind
+        source: ./integrations/napcat-webui-handoff
+        target: /app/napcat/static/lingxi-login
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped
     security_opt: [no-new-privileges:true]
     healthcheck:

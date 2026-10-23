@@ -35,7 +35,7 @@ Compose 从根目录 `.env` 读取端口等变量，可复制 `.env.docker.examp
 
 ## QQ 群与主人记忆
 
-1. 在 QQ 页直接打开部署提供的 NapCat 地址，登录机器人 QQ；也可使用已有 NapCat 或其他 OneBot v11 实现。启用正向 HTTP API 和 HTTP 客户端事件上报。新部署脚本会创建 HTTP API 初始配置，回调仍按下面步骤配置。
+1. 管理员在 QQ 页一键登录统一部署的 NapCat 管理界面，无需从日志复制登录密钥，再扫码登录机器人 QQ；也可使用已有 NapCat 或其他 OneBot v11 实现。Compose 将 NapCat 的 `config` 目录只读挂载到应用，后台使用当前 WebUI 密钥向 NapCat 换取标准会话，长期密钥留在服务端，浏览器 URL 不携带任何凭据。保留源码中的 `integrations/napcat-webui-handoff/` 目录：它会只读挂载到 NapCat，负责建立浏览器会话。NapCat 本身仍要求认证，外部 NapCat 保留普通管理地址入口。启用正向 HTTP API 和 HTTP 客户端事件上报。新部署脚本会创建 HTTP API 初始配置，回调仍按下面步骤配置。
 2. 专用向量库随默认 Compose 启动，不向宿主机发布端口，容器内地址为 `http://qdrant:6333`。`LINGXI_QDRANT_API_KEY` 使用部署生成的随机密钥。
 3. 统一 Compose 默认开启 `LINGXI_ALLOW_PRIVATE_NETWORK=true`，使应用可访问容器内的 NapCat、Qdrant 和嵌入服务。此选项允许已认证用户配置内网服务地址，仅用于可信用户环境；原生 Rust 默认仍关闭。
 4. 进入「QQ 群与会话」，逐个添加群号。每个群对应一个固定会话，可设置群名称、模型、群人设和独立开关；再到「接入设置」填写共用的主人 QQ、机器人 QQ、默认模型、OneBot HTTP 地址、专用 Qdrant 地址及嵌入模型接口。

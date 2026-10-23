@@ -19,6 +19,9 @@ FILES = ["Cargo.toml", "Cargo.lock", "Dockerfile", "docker-compose.yml",
 def pack(make_zip: bool = True) -> Path:
     if not (ROOT / "backend/Cargo.toml").is_file() or not (ROOT / "web/package-lock.json").is_file():
         raise SystemExit("Rust/Vue source or lockfile is missing")
+    for name in ("index.html", "bridge.js"):
+        if not (ROOT / "integrations/napcat-webui-handoff" / name).is_file():
+            raise SystemExit(f"NapCat login asset is missing: {name}")
     RELEASE_DIR.mkdir(exist_ok=True)
     stem = f"lingxi-v{VERSION}-{date.today():%Y%m%d}"
     destination = RELEASE_DIR / stem
@@ -28,7 +31,7 @@ def pack(make_zip: bool = True) -> Path:
         number += 1
     destination.mkdir()
     copied = 0
-    for folder in ("backend", "web", "integrations/astrbot", "integrations/feishu"):
+    for folder in ("backend", "web", "integrations/astrbot", "integrations/feishu", "integrations/napcat-webui-handoff"):
         for source in (ROOT / folder).rglob("*"):
             relative = source.relative_to(ROOT)
             if not source.is_file() or any(part in SKIP for part in relative.parts) or source.name.startswith(".env"):

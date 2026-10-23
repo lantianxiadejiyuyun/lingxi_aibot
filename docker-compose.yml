@@ -11,6 +11,8 @@ services:
       LINGXI_FEISHU_EMBEDDED: ${LINGXI_FEISHU_EMBEDDED:-true}
       LINGXI_PUBLIC_URL: ${LINGXI_PUBLIC_URL:-http://localhost:8000}
       LINGXI_NAPCAT_MANAGED: ${LINGXI_NAPCAT_MANAGED:-false}
+      LINGXI_NAPCAT_CONFIG_DIR: /run/napcat-config
+      LINGXI_NAPCAT_WEBUI_INTERNAL_URL: ${LINGXI_NAPCAT_WEBUI_INTERNAL_URL:-http://napcat:6099}
       LINGXI_NAPCAT_WEBUI_URL: ${LINGXI_NAPCAT_WEBUI_URL:-}
       LINGXI_NAPCAT_HTTP_URL: ${LINGXI_NAPCAT_HTTP_URL:-http://napcat:3000}
       LINGXI_NAPCAT_HTTP_TOKEN: ${LINGXI_NAPCAT_HTTP_TOKEN:-}
@@ -19,6 +21,9 @@ services:
       - "${LINGXI_BIND_HOST:-127.0.0.1}:${LINGXI_PORT:-8000}:8000"
     volumes:
       - lingxi_rust_data:/data
+      # Read the current WebUI key for authenticated administrator login.
+      # Mount the directory: NapCat may atomically replace webui.json.
+      - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/config:/run/napcat-config:ro
       # Optional NAS/local media folder; grant it in Settings -> Storage after mounting.
       # - /your/media:/media
     restart: unless-stopped
@@ -76,6 +81,12 @@ services:
       - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/qq:/app/.config/QQ
       - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/config:/app/napcat/config
       - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/plugins:/app/napcat/plugins
+      - type: bind
+        source: ./integrations/napcat-webui-handoff
+        target: /app/napcat/static/lingxi-login
+        read_only: true
+        bind:
+          create_host_path: false
     restart: unless-stopped
     security_opt: [no-new-privileges:true]
     healthcheck:

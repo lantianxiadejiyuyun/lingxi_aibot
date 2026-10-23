@@ -26,6 +26,7 @@ jobs:
       - run: npm test --prefix web
       - run: npm ci --prefix integrations/feishu --ignore-scripts
       - run: npm test --prefix integrations/feishu
+      - run: node --test integrations/napcat-webui-handoff/bridge.test.mjs
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::await_holding_lock
       - run: cargo test --workspace --locked

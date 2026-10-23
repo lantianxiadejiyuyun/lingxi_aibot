@@ -98,8 +98,18 @@ grep -q synthetic-resolved-secret "$resolved"
 if grep -q synthetic-resolved-secret output; then printf 'Resolved Compose secret leaked to console\n' >&2; exit 1; fi
 grep -q 'start app napcat$' "$MOCK_LOG"
 if grep -q 'start .*qdrant' "$MOCK_LOG"; then printf 'Backup started a previously stopped service\n' >&2; exit 1; fi
+# Older deployments without the handoff directory still back up successfully.
+[[ $(find backups -type d -name napcat-webui-handoff | wc -l) == 0 ]]
+mkdir -p integrations/napcat-webui-handoff
+printf '<!doctype html>synthetic login page\n' > integrations/napcat-webui-handoff/index.html
+printf 'synthetic bridge source\n' > integrations/napcat-webui-handoff/bridge.js
+deploy backup >output
+handoff=$(find backups -type d -name napcat-webui-handoff)
+[[ -n "$handoff" ]]
+cmp integrations/napcat-webui-handoff/index.html "$handoff/index.html"
+cmp integrations/napcat-webui-handoff/bridge.js "$handoff/bridge.js"
 : > "$MOCK_LOG"
 expect_fail env MOCK_COPY_FAIL=1 bash "$root/scripts/deploy.sh" backup
 [[ $(find backups -name INCOMPLETE | wc -l) == 1 ]]
 grep -q 'start app napcat$' "$MOCK_LOG"
-printf 'Deployment helper tests passed (fresh init, preservation, resume, URL redaction, backup recovery).\n'
+printf 'Deployment helper tests passed (fresh init, preservation, resume, URL redaction, handoff assets, backup recovery).\n'

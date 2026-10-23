@@ -9,6 +9,7 @@ export interface DeploymentInfo {
     callback_url: string
     internal_callback_url?: string | null
     configure_available?: boolean
+    login_available?: boolean
   }
   feishu: { managed: boolean }
 }

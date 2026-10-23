@@ -169,6 +169,11 @@ case "$command_name" in
     chmod 700 "$backup_dir"
     touch "$backup_dir/INCOMPLETE"
     cp -- .env "$backup_dir/env"
+    # Keep the host-mounted login page with the Compose snapshot so a restore
+    # does not depend on files left behind in the previous deployment directory.
+    if [[ -d integrations/napcat-webui-handoff ]]; then
+      cp -a -- integrations/napcat-webui-handoff "$backup_dir/napcat-webui-handoff"
+    fi
     index=0
     for file in "${files[@]}"; do
       cp -- "$file" "$backup_dir/compose-$index.yml"
