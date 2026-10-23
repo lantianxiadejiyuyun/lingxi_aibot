@@ -131,7 +131,15 @@ pub async fn reconcile(app: &App) -> Result<()> {
     for uid in users {
         let user = crate::auth::user(app, &uid).await?;
         let cfg = config(app, &user).await?;
-        if !cfg.enabled {
+        if !cfg.enabled
+            || !crate::permissions::allowed(
+                app,
+                &user,
+                crate::permissions::Feature::Proactive,
+                crate::permissions::Scope::Group,
+            )
+            .await?
+        {
             continue;
         }
         for group in &cfg.groups {
@@ -215,6 +223,20 @@ async fn guard(
     a: &Attempt,
     private: bool,
 ) -> Result<Option<&'static str>> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Proactive,
+        if private {
+            crate::permissions::Scope::Private
+        } else {
+            crate::permissions::Scope::Group
+        },
+    )
+    .await?
+    {
+        return Ok(Some("permission_disabled"));
+    }
     let at = now();
     let group = (!private).then_some(a.group_id.as_str());
     if at < a.due_at {

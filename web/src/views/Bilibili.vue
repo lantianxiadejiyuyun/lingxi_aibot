@@ -38,22 +38,6 @@ async function submit(value = video.value, retry = false) {
   catch (e) { submitError.value = e instanceof Error ? e.message : '提交失败' }
   finally { submitting.value = false }
 }
-async function configure() {
-  const profiles = await api<Profile[]>('/profiles'), c = data.value.config
-  openForm({ title: '安排一点阅读时间', description: `按 ${data.value.timezone} 运行，保存后从下一次约定时间开始。每次读取字幕会调用你选择的模型。`, fields: [
-    choice('enabled', '每天自动发现', [['false', '关闭，仅手动阅读'], ['true', '开启']], c.enabled),
-    {...field('daily_at', '每天几点开始', c.daily_at, 'time', true)},
-    {...field('keywords', '感兴趣的内容', c.keywords.join('\n'), 'textarea'), hint: '一行一个，或用逗号分隔。最多 8 项，每项 40 字。'},
-    {...choice('profile_id', '阅读模型与人设', [['', '沿用默认模型'], ...profiles.map(p => [p.id, p.name] as [string, string])], c.profile_id || ''), wide: true},
-    {...field('taste', '想从视频中发现什么', c.taste, 'textarea'), hint: '例如：喜欢真实经验和有新意的观点，留意和日常生活有关的小发现。最多 1000 字。'},
-    {...field('daily_limit', '每天最多尝试几条', c.daily_limit, 'number', true), min: 1, max: 20},
-    {...field('per_run', '每次最多几条', c.per_run, 'number', true), min: 1, max: 5},
-    {...field('recent_days', '发现最近几天的视频', c.recent_days, 'number', true), min: 1, max: 30},
-  ], save: async v => {
-    await put('/bilibili', { enabled: v.enabled === 'true', daily_at: v.daily_at, keywords: v.keywords.split(/[,，\r\n]+/).map(s => s.trim()).filter(Boolean), daily_limit: Number(v.daily_limit), per_run: Number(v.per_run), recent_days: Number(v.recent_days), profile_id: v.profile_id || null, taste: v.taste })
-    notify('阅读安排已保存'); await load()
-  } })
-}
 async function openEntry(entry: Entry) {
   const epoch = ++detailEpoch; selected.value = entry; detail.value = null; detailError.value = ''; detailLoading.value = true
   await nextTick(); detailDialog.value?.showModal()
@@ -100,7 +84,7 @@ function disconnect() { confirmAction('断开 B 站账号？', '会清除本机�
 </script>
 <template>
   <PageHeading title="看见新鲜，也留下想法" description="让灵犀读一读你喜欢的视频，带着自己的理解回来。" eyebrow="A QUIET CORNER FOR CURIOSITY">
-    <button class="button secondary" @click="run(configure)"><Settings2 :size="16" />阅读安排</button>
+    <RouterLink class="button secondary" to="/settings?tab=activities"><Settings2 :size="16" />阅读设置</RouterLink>
   </PageHeading>
   <section class="bili-hero">
     <div class="bili-hero-copy"><span class="bili-eyebrow"><TvMinimalPlay :size="16" />灵犀的 B 站书房</span><h2>好内容，<br />值得慢慢读。</h2><p>从兴趣出发，读原始字幕，记下感想。<br />下一次聊天，也许就有了新的话题。</p><div class="bili-keywords"><span v-for="kw in data.config.keywords.slice(0, 4)" :key="kw">{{ kw }}</span><span v-if="!data.config.keywords.length">好奇心，从一个视频开始</span></div></div>

@@ -80,6 +80,12 @@ pub enum Scope {
     OwnerPrivate,
 }
 impl Scope {
+    fn permission_scope(self) -> crate::permissions::Scope {
+        match self {
+            Self::OwnerPrivate => crate::permissions::Scope::Private,
+            Self::Group => crate::permissions::Scope::Group,
+        }
+    }
     fn exists(self, app: &App) -> bool {
         self == Self::OwnerPrivate
             || app.qq_pool.get().is_some()
@@ -333,7 +339,15 @@ async fn receive_scoped(
     text: &str,
     message: &Value,
 ) -> Result<usize> {
-    if !cfg.stickers.enabled {
+    if !cfg.stickers.enabled
+        || !crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::StickerCollection,
+            scope.permission_scope(),
+        )
+        .await?
+    {
         return Ok(0);
     }
     let forced = qq == cfg.owner_qq && owner_command(text);
@@ -776,6 +790,13 @@ async fn process_inner(
         .await?;
         return Ok(json!({"skipped":true}));
     }
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::StickerCollection,
+        scope.permission_scope(),
+    )
+    .await?;
     let source: Source = serde_json::from_str(&app.secrets.decrypt(&row.source)?)
         .map_err(|_| invalid("图片来源记录损坏"))?;
     if let Some(reply) = source.reply_id {
@@ -823,6 +844,22 @@ async fn process_inner(
         .await?;
         return Ok(json!({"queued":count}));
     }
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::StickerCollection,
+        scope.permission_scope(),
+    )
+    .await?;
+    if !row.forced {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Vision,
+            scope.permission_scope(),
+        )
+        .await?;
+    }
     let bytes = download(app, &cfg, &source).await?;
     let picture = tokio::task::spawn_blocking(move || prepare(bytes))
         .await
@@ -840,6 +877,22 @@ async fn process_inner(
             .bind(&picture.hash)
             .fetch_optional(pool)
             .await?;
+    if !row.forced {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Vision,
+            scope.permission_scope(),
+        )
+        .await?;
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::StickerCollection,
+            scope.permission_scope(),
+        )
+        .await?;
+    }
     let judgment = if row.forced {
         Decision {
             collect: true,
@@ -905,6 +958,13 @@ async fn process_inner(
         status(app, user, scope, row, "rejected", &judgment.reason).await?;
         return Ok(json!({"collected":false}));
     }
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::StickerCollection,
+        scope.permission_scope(),
+    )
+    .await?;
     save_picture(app, user, scope, row, &cfg.stickers, &picture, &judgment).await
 }
 async fn save_picture(
@@ -994,6 +1054,16 @@ fn reply_scope(cfg: &Config, group: Option<&str>) -> Option<Scope> {
 /// Only metadata from this destination is offered to the model. Private pictures never
 /// become group candidates, and one group's pictures are not offered to another group.
 pub async fn reply_candidates(app: &App, user: &User, group: Option<&str>) -> Result<Vec<Value>> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::StickerReply,
+        crate::permissions::Scope::for_group(group),
+    )
+    .await?
+    {
+        return Ok(vec![]);
+    }
     let cfg = config(app, user).await?;
     let Some(scope) = reply_scope(&cfg, group) else {
         return Ok(vec![]);
@@ -1009,6 +1079,13 @@ pub async fn reply_candidates(app: &App, user: &User, group: Option<&str>) -> Re
 /// Recheck authorization and deletion immediately before sending; model output is
 /// never accepted as an image URL or filesystem path.
 pub async fn reply_image(app: &App, user: &User, group: Option<&str>, id: &str) -> Result<Vec<u8>> {
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::StickerReply,
+        crate::permissions::Scope::for_group(group),
+    )
+    .await?;
     let cfg = config(app, user).await?;
     let scope = reply_scope(&cfg, group).ok_or(Error::NotFound)?;
     if Scope::for_id(id) != scope {

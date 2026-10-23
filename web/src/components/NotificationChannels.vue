@@ -4,7 +4,6 @@ import { api, put } from '../lib/api'
 import { useResource } from '../lib/resource'
 import { choice, field, notify, openForm, run, type Field } from '../lib/ui'
 import FeishuConnect from './FeishuConnect.vue'
-import NapCatConnect from './NapCatConnect.vue'
 import ResourceState from './ResourceState.vue'
 const services = [{id:'feishu', name:'飞书', description:'自定义机器人 Webhook，支持签名。'}, {id:'feishu_app', name:'飞书机器人（应用）', description:'使用应用身份，发送到指定用户或群。'}, {id:'serverchan', name:'Server酱', description:'支持 Turbo / Server酱³ SendKey。'}]
 const { data, loading, error, load } = useResource(() => api<Record<string,any>>('/notification-channels'), {})
@@ -20,5 +19,5 @@ async function configure(id: string) {
 </script>
 <template>
   <div class="section-heading"><div><h2>通知渠道</h2><p>主动消息会发送到你选择的接收人，请按需配置。</p></div><Bell :size="21" /></div>
-  <ResourceState :loading="loading" :error="error" @retry="load"><div class="integration-grid"><article v-for="s in services" :key="s.id" class="integration-card"><div class="section-heading"><span class="stat-icon green"><Bell :size="22" /></span><span :class="['tag', configured(s.id) ? 'green' : 'neutral']">{{ configured(s.id) ? '已配置' : '待配置' }}</span></div><h3>{{ s.name }}</h3><p>{{ s.description }}</p><button class="text-link" @click="run(()=>configure(s.id))"><Settings2 :size="15" />{{ configured(s.id) ? '管理连接' : '连接服务' }}</button></article></div><div class="panel spaced"><h3>站内通知、QQ 与 AstrBot</h3><p class="muted small">站内通知始终可用。QQ 私聊与 AstrBot 的绑定入口在主动陪伴页。</p><RouterLink to="/companion" class="text-link">前往主动陪伴<ArrowUpRight :size="15" /></RouterLink></div><NapCatConnect class="spaced" /><FeishuConnect /></ResourceState>
+  <ResourceState :loading="loading" :error="error" @retry="load"><div class="integration-grid"><article v-for="s in services" :key="s.id" class="integration-card"><div class="section-heading"><span class="stat-icon green"><Bell :size="22" /></span><span :class="['tag', configured(s.id) ? 'green' : 'neutral']">{{ configured(s.id) ? '已配置' : '待配置' }}</span></div><h3>{{ s.name }}</h3><p>{{ s.description }}</p><button class="text-link" @click="run(()=>configure(s.id))"><Settings2 :size="15" />{{ configured(s.id) ? '管理连接' : '连接服务' }}</button></article></div><div class="panel spaced"><h3>站内通知、QQ 与 AstrBot</h3><p class="muted small">QQ 的连接与私聊在「QQ 与群聊」中统一配置；AstrBot 在「习惯与偏好」中绑定。</p><RouterLink to="/settings?tab=qq" class="text-link">管理 QQ 连接<ArrowUpRight :size="15" /></RouterLink></div><FeishuConnect /></ResourceState>
 </template>

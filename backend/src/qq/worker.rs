@@ -151,7 +151,15 @@ async fn process_locked(
                     public.push(json!({"qq":row.qq_id,"name":row.name,"text":row.content,"assistant_reply":reply}));
                 }
                 public.reverse();
-                let facts = if owner {
+                let facts = if owner
+                    || !crate::permissions::allowed(
+                        app,
+                        user,
+                        crate::permissions::Feature::Memory,
+                        crate::permissions::Scope::Group,
+                    )
+                    .await?
+                {
                     Vec::new()
                 } else {
                     match vector::recall(app, user, &event.group_id, &event.qq_id, &event.content)
@@ -187,6 +195,13 @@ async fn process_locked(
                     json!({"role":"system","content":format!("你正在负责一个独立的QQ群会话，只可使用当前群的公开内容。不能访问或声称访问私人记忆及工具。当前群的人设与交流风格：{persona}\n{}",dialogue::prompt(&dialogue::style(&cfg,Some(&event.group_id))))}),
                     json!({"role":"user","content":prompt}),
                 ];
+                crate::permissions::require(
+                    app,
+                    user,
+                    crate::permissions::Feature::Chat,
+                    crate::permissions::Scope::Group,
+                )
+                .await?;
                 let generated = tokio::time::timeout(
                     std::time::Duration::from_secs(90),
                     crate::provider::chat(app, &profile, &messages, &[], None, cancel, None),
@@ -268,7 +283,15 @@ async fn process_locked(
             set_no_reply(pool, table, &event.id).await?;
         }
     }
-    if cfg.collect_memory {
+    if cfg.collect_memory
+        && crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::Memory,
+            crate::permissions::Scope::Group,
+        )
+        .await?
+    {
         let count: i64 = sqlx::query_scalar(&format!(
             "SELECT COUNT(*) FROM {table} WHERE user_id=? AND group_id=? AND qq_id=?"
         ))
@@ -361,6 +384,16 @@ pub async fn extract(
     params: &Value,
     cancel: &CancellationToken,
 ) -> Result<Value> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Memory,
+        crate::permissions::Scope::Group,
+    )
+    .await?
+    {
+        return Ok(json!({"skipped":"permission_disabled"}));
+    }
     let cfg = config(app, user).await?;
     let group = params["group_id"]
         .as_str()
@@ -406,6 +439,13 @@ pub async fn extract(
         .map_err(|_| invalid("人物记忆提取未返回有效JSON"))?;
     validate_observations(&observations, &sources)?;
     for fact in &observations {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Memory,
+            crate::permissions::Scope::Group,
+        )
+        .await?;
         store::save_fact(
             app,
             user,

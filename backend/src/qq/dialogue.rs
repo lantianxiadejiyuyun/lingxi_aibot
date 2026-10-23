@@ -277,6 +277,13 @@ async fn check_delivery(
         return Err(invalid("会话设置已修改，停止剩余消息"));
     }
     if let Some(anchor) = anchor {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Proactive,
+            crate::permissions::Scope::for_group(group),
+        )
+        .await?;
         if super::outreach::anchor(app, user, group).await? != anchor {
             return Err(invalid("收到新消息，取消补充"));
         }

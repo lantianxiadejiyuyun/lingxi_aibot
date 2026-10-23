@@ -660,3 +660,31 @@ async fn qq_private_model_directed_followup_stays_in_main_database() {
     assert!(req.contains("PERSONA:"));
     assert!(req.contains("私人的摄影计划"));
 }
+
+#[tokio::test]
+async fn revoking_proactive_permission_while_model_runs_prevents_all_delivery() {
+    let f = Fixture::new().await;
+    f.enable().await;
+    f.m.hold.store(true, Ordering::Relaxed);
+    let app = f.app.clone();
+    let user = f.user.clone();
+    let t = db::now();
+    let task = tokio::spawn(async move {
+        companion::tick(&app, &user, &CancellationToken::new(), Some(t))
+            .await
+            .unwrap()
+    });
+    f.m.entered.notified().await;
+    let mut cfg = lingxi::permissions::Config::default();
+    cfg.features
+        .get_mut(&lingxi::permissions::Feature::Proactive)
+        .unwrap()
+        .private = false;
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+    f.m.release.notify_one();
+    task.await.unwrap();
+    assert_eq!(f.count("notifications").await, 0);
+    assert!(f.m.pushes.lock().unwrap().is_empty());
+}

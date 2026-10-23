@@ -10,6 +10,7 @@ import { rhythmFields, rhythmValue, type Rhythm } from '../lib/qq-dialogue'
 
 export interface GroupSettings extends Rhythm { name:string; enabled:boolean; profile_id:string|null; system_prompt:string; reply_mentioned:boolean|null; collect_memory:boolean|null; decision?:{mode:'off'|'observe'|'auto';cooldown_secs:number;max_replies_per_hour:number} }
 export interface QQGroup { group_id:string; settings:GroupSettings; conversation:{id:string;updated_at:number}; messages:number; last_seen:number|null; active:boolean; profile_id:string|null; reply_mentioned:boolean; collect_memory:boolean }
+withDefaults(defineProps<{manage?:boolean}>(),{manage:true})
 const emit = defineEmits<{changed:[];filter:[group:string]}>()
 const {data,loading,error,load}=useResource(async()=>{
   const [groups,profiles]=await Promise.all([api<QQGroup[]>('/qq/groups'),api<Profile[]>('/profiles')])
@@ -49,17 +50,17 @@ defineExpose({load})
 </script>
 <template>
   <section class="qq-groups">
-    <div class="section-heading"><div><h2>群与独立会话</h2><p>每个群都有自己的上下文、模型与交流方式。</p></div><button class="button" @click="edit()"><Plus :size="16" />添加群</button></div>
+    <div class="section-heading"><div><h2>群与独立会话</h2><p>每个群都有自己的上下文、模型与交流方式。</p></div><button v-if="manage" class="button" @click="edit()"><Plus :size="16" />添加群</button></div>
     <ResourceState :loading="loading" :error="error" @retry="load">
-      <EmptyState v-if="!data.groups.length" title="为每个群，留一个会话" description="先添加群号，再配置 NapCat 接入。可以添加多个群，分别管理。"><button class="button secondary" @click="edit()">添加第一个群</button></EmptyState>
+      <EmptyState v-if="!data.groups.length" title="为每个群，留一个会话" description="先添加群号，再配置 NapCat 接入。可以添加多个群，分别管理。"><button v-if="manage" class="button secondary" @click="edit()">添加第一个群</button></EmptyState>
       <div v-else class="qq-groups-grid"><article v-for="g in data.groups" :key="g.group_id" class="qq-group-card">
         <div class="section-heading"><span class="stat-icon green"><MessageSquare :size="21" /></span><span :class="['tag',g.active?'green':'neutral']">{{g.active?'接入中':g.settings.enabled?'等待开启接入':'已暂停'}}</span></div>
         <h3>{{g.settings.name||`QQ 群 ${g.group_id}`}}</h3><p>群号 {{g.group_id}}</p>
         <div class="qq-group-meta"><span>{{modelName(g)}}</span><span>{{g.reply_mentioned?'@ 时回复':'@ 回复关闭'}}</span><span v-if="g.settings.decision?.mode==='auto'">自动接话</span><span v-else-if="g.settings.decision?.mode==='observe'">接话观察中</span></div>
         <p class="qq-group-persona">{{g.settings.system_prompt||'默认群聊风格，只参考这个群里的交流。'}}</p>
-        <div class="qq-group-meta"><span v-if="g.settings.reply_style?.enabled">分条回复</span><span v-if="g.settings.followup?.enabled">可延迟补充</span><span>{{g.settings.proactive?.enabled?'主动开场已开启':'主动开场关闭'}}</span><button class="text-link" :aria-label="`聊天节奏 ${g.group_id}`" @click="rhythm(g)">聊天节奏<Settings2 :size="14" /></button></div>
+        <div class="qq-group-meta"><span v-if="g.settings.reply_style?.enabled">分条回复</span><span v-if="g.settings.followup?.enabled">可延迟补充</span><span>{{g.settings.proactive?.enabled?'主动开场已开启':'主动开场关闭'}}</span><button v-if="manage" class="text-link" :aria-label="`聊天节奏 ${g.group_id}`" @click="rhythm(g)">聊天节奏<Settings2 :size="14" /></button></div>
         <div class="qq-group-activity"><span>{{g.messages}} 条发言</span><span>{{g.last_seen?date(g.last_seen):'等待第一条消息'}}</span></div>
-        <div class="qq-group-actions"><RouterLink :to="`/qq/groups/${g.group_id}`" class="text-link">打开会话<ArrowUpRight :size="14" /></RouterLink><button class="icon-button" :aria-label="`查看群 ${g.group_id} 的人物`" @click="emit('filter',g.group_id)"><UsersRound :size="15" /></button><button class="icon-button" :aria-label="`设置群 ${g.group_id}`" @click="edit(g)"><Settings2 :size="15" /></button><button class="icon-button danger" :aria-label="`移除群 ${g.group_id}`" @click="disconnect(g)"><Trash2 :size="15" /></button></div>
+        <div class="qq-group-actions"><RouterLink :to="`/qq/groups/${g.group_id}`" class="text-link">打开会话<ArrowUpRight :size="14" /></RouterLink><button class="icon-button" :aria-label="`查看群 ${g.group_id} 的人物`" @click="emit('filter',g.group_id)"><UsersRound :size="15" /></button><button v-if="manage" class="icon-button" :aria-label="`设置群 ${g.group_id}`" @click="edit(g)"><Settings2 :size="15" /></button><button v-if="manage" class="icon-button danger" :aria-label="`移除群 ${g.group_id}`" @click="disconnect(g)"><Trash2 :size="15" /></button></div>
       </article></div>
     </ResourceState>
   </section>

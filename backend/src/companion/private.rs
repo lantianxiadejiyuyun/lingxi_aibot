@@ -166,6 +166,13 @@ pub async fn claim_api(
     user: User,
     Json(v): Json<Claim>,
 ) -> Result<Json<Value>> {
+    crate::permissions::require(
+        &app,
+        &user,
+        crate::permissions::Feature::Proactive,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     if !(1..=10).contains(&v.limit) {
         return Err(invalid("limit 为1–10"));
     }

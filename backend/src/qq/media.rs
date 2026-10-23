@@ -214,6 +214,17 @@ pub(crate) async fn describe(
     )
     .await;
     for attachment in &mut envelope.images {
+        if !crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::Vision,
+            crate::permissions::Scope::Private,
+        )
+        .await?
+        {
+            attachment.error = "图片识别权限已关闭，未读取图片".into();
+            continue;
+        }
         let picture = tokio::select! {
             _ = cancel.cancelled() => return Err(Error::Cancelled),
             _ = app.shutdown.cancelled() => return Err(Error::Cancelled),
@@ -239,6 +250,17 @@ pub(crate) async fn describe(
             attachment.error = "未配置可用的看图模型；未识别内容".into();
             continue;
         };
+        if !crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::Vision,
+            crate::permissions::Scope::Private,
+        )
+        .await?
+        {
+            attachment.error = "图片识别权限已关闭，未交给模型识别".into();
+            continue;
+        }
         let result = tokio::select! {
             _ = cancel.cancelled() => return Err(Error::Cancelled),
             _ = app.shutdown.cancelled() => return Err(Error::Cancelled),
@@ -282,7 +304,7 @@ pub(crate) async fn describe(
     message.push_str("[附件说明结束]");
     let mut notice = if failed > 0 {
         format!(
-            "有 {failed} 张图片没能看清，可能是下载失败、图片超过限制或看图模型不支持图片。可以重新发送，或在 QQ 设置中选择支持图片的看图模型。"
+            "有 {failed} 张图片未识别；请查看附件处理说明，并在设置中心检查看图权限、图片限制及模型配置。"
         )
     } else {
         String::new()

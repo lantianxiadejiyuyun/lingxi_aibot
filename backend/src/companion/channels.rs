@@ -174,6 +174,16 @@ async fn ready_to_send(
     revision: i64,
     fixed: Option<i64>,
 ) -> Result<bool> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Proactive,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        return Ok(false);
+    }
     if !snapshot(app, user, ch)
         .await
         .is_ok_and(|(_, hash)| hash == expected)
@@ -359,6 +369,13 @@ pub async fn dispatch(
     let clock = || fixed.unwrap_or_else(now);
     let rows:Vec<(i64,String,String,String,i64)>=sqlx::query_as("SELECT id,channel,target,config_digest,revision FROM companion_delivery WHERE user_id=? AND activity_id=? AND channel<>'astrbot' AND status='pending' ORDER BY id").bind(&user.id).bind(aid).fetch_all(&app.pool).await?;
     for (did, ch, target, hash, revision) in rows {
+        let permission = crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::Proactive,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
         let current = snapshot(app, user, &ch).await;
         let mut tx = app.pool.begin().await?;
         sqlx::query("UPDATE companion_state SET revision=revision WHERE user_id=?")
@@ -372,7 +389,8 @@ pub async fn dispatch(
                 .await?;
         let cfg: Config = serde_json::from_str(&raw).map_err(|_| invalid("陪伴设置无效"))?;
         let block = guard(&mut tx, user, &cfg, clock(), false, false).await?;
-        if cancel.is_cancelled()
+        if !permission
+            || cancel.is_cancelled()
             || rev != revision
             || !cfg.channels.contains(&ch)
             || current.ok() != Some((target, hash.clone()))

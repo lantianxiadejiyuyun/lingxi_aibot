@@ -94,8 +94,18 @@ impl Config {
 }
 pub async fn config(app: &App, user: &User) -> Result<Config> {
     let value = crate::integrations::config(app, user).await?;
-    serde_json::from_value(value.get("qq").cloned().unwrap_or(json!({})))
-        .map_err(|_| invalid("QQ 配置无效"))
+    let mut cfg: Config = serde_json::from_value(value.get("qq").cloned().unwrap_or(json!({})))
+        .map_err(|_| invalid("QQ 配置无效"))?;
+    let access = crate::permissions::config(app, user).await?;
+    cfg.enabled &= access.allows(
+        crate::permissions::Feature::Chat,
+        crate::permissions::Scope::Group,
+    );
+    cfg.private_enabled &= access.allows(
+        crate::permissions::Feature::Chat,
+        crate::permissions::Scope::Private,
+    );
+    Ok(cfg)
 }
 pub fn numeric_id(value: &Value) -> Option<String> {
     let id = match value {

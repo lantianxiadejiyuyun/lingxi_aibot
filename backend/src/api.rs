@@ -47,6 +47,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/memories/{id}",axum::routing::delete(forget))
         .route("/api/v2/skills/{id}/run",post(run_skill))
         .route("/api/v2/profiles",get(profiles).put(save_profiles))
+        .route("/api/v2/permissions",get(crate::permissions::view).put(crate::permissions::save))
         .route("/api/v2/persona/{profile}",get(crate::growth::view).put(crate::growth::save))
         .route("/api/v2/persona/{profile}/traits",post(crate::growth::write_trait))
         .route("/api/v2/persona/{profile}/traits/{id}",axum::routing::delete(crate::growth::forget))

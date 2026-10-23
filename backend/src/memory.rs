@@ -77,6 +77,16 @@ pub async fn forget(app: &App, user: &User, id: &str) -> Result<()> {
     Ok(())
 }
 pub async fn context(app: &App, user: &User, query: &str, budget: usize) -> Result<String> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Memory,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        return Ok(String::new());
+    }
     let mut rows = list(app, user).await?;
     // Deterministic relevance boost supplements importance, within a hard token budget.
     let terms: Vec<&str> = query.split_whitespace().filter(|s| s.len() > 1).collect();
@@ -106,6 +116,16 @@ pub async fn extract(
     profile: &Profile,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<usize> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Memory,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        return Ok(0);
+    }
     let conversations: Vec<(String, String)> = sqlx::query_as(
         "SELECT c.id,c.summary FROM conversations c WHERE c.user_id=? AND NOT EXISTS (SELECT 1 FROM channel_bindings b WHERE b.conversation_id=c.id AND b.channel='qq_owner') ORDER BY c.updated_at DESC LIMIT 30",
     )
@@ -200,6 +220,13 @@ pub async fn extract(
         }
     }
     for fact in &facts {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Memory,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
         remember(app, user, fact, "auto", &json!(provenance)).await?;
     }
     Ok(facts.len())

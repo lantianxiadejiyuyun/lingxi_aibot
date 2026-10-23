@@ -7,12 +7,10 @@ vi.mock('../lib/api',()=>({api:vi.fn(),put:vi.fn(),post:vi.fn(),remove:vi.fn()})
 vi.mock('../lib/ui',()=>({choice:vi.fn(),field:vi.fn(),openForm:vi.fn(),confirmAction:vi.fn(),date:()=>'',notify:vi.fn(),run:(fn:()=>Promise<void>)=>fn()}))
 const growth={enabled:false,revision:2,turns:0,days:0,pending:0,last_reflected_at:null,last_error:'',traits:[]}
 beforeEach(()=>{vi.clearAllMocks();vi.mocked(api).mockImplementation(async(path:string)=>path==='/profiles'?[{id:'fish',name:'大肥鱼',system_prompt:'甜甜的核心人设'},{id:'other',name:'其他人设',system_prompt:'另一份底色'}]:growth)})
-it('enables only the selected persona and carries its revision',async()=>{
+it('links to the centralized persona settings without changing learning',async()=>{
  const w=mount(Persona,{global:{stubs:{RouterLink:true}}});await flushPromises()
- vi.mocked(put).mockResolvedValue({...growth,enabled:true,revision:3})
- await w.get('.persona-toggle').trigger('click');await flushPromises()
- expect(put).toHaveBeenCalledWith('/persona/fish',{enabled:true,revision:2})
- expect(w.text()).toContain('暂停自动学习');expect(w.text()).toContain('甜甜的核心人设');w.unmount()
+ expect(w.get('.persona-toggle').attributes('to')).toBe('/settings?tab=models')
+ expect(put).not.toHaveBeenCalled();expect(w.text()).toContain('甜甜的核心人设');w.unmount()
 })
 it('a pending edit stays attached to its original persona after switching',async()=>{
  const w=mount(Persona,{global:{stubs:{RouterLink:true}}});await flushPromises()

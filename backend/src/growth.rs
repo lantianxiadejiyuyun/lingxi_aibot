@@ -160,6 +160,16 @@ pub async fn forget(
     Ok(ok(json!({"deleted":true})))
 }
 pub async fn context(app: &App, user: &User, profile: &str) -> Result<String> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::PersonaGrowth,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        return Ok(String::new());
+    }
     let rows = traits(app, user, profile).await?;
     if rows.is_empty() {
         return Ok(String::new());
@@ -182,6 +192,16 @@ pub async fn context(app: &App, user: &User, profile: &str) -> Result<String> {
     ))
 }
 pub async fn observe(app: &App, s: &crate::chat::Session) -> Result<()> {
+    if !crate::permissions::allowed(
+        app,
+        &s.user,
+        crate::permissions::Feature::PersonaGrowth,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        return Ok(());
+    }
     if s.input.message.starts_with('/') || s.input.request_id.starts_with("job:") {
         return Ok(());
     }
@@ -208,6 +228,16 @@ pub async fn reconcile(app: &App) -> Result<()> {
  .bind(now()).bind(now()).fetch_all(&app.pool).await?;
     for (uid, pid, rev, water, next) in rows {
         let user = crate::auth::user(app, &uid).await?;
+        if !crate::permissions::allowed(
+            app,
+            &user,
+            crate::permissions::Feature::PersonaGrowth,
+            crate::permissions::Scope::Private,
+        )
+        .await?
+        {
+            continue;
+        }
         crate::jobs::enqueue(
             app,
             &user,
@@ -228,6 +258,21 @@ pub async fn reflect(
     params: &Value,
     cancel: &CancellationToken,
 ) -> Result<Value> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::PersonaGrowth,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        // A queued task may be revoked after enqueue. Advance its dedupe cursor so
+        // re-enabling learning can schedule the still-pending observations again.
+        if let Some(pid) = params["profile_id"].as_str() {
+            sqlx::query("UPDATE persona_growth SET next_at=MAX(next_at+1,?) WHERE user_id=? AND profile_id=?").bind(now()).bind(&user.id).bind(pid).execute(&app.pool).await?;
+        }
+        return Ok(json!({"skipped":"permission_disabled"}));
+    }
     let pid = params["profile_id"]
         .as_str()
         .ok_or_else(|| invalid("缺少人设配置"))?;
@@ -334,6 +379,13 @@ async fn reflect_inner(
     {
         return Ok(json!({"cancelled":"persona_changed"}));
     }
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::PersonaGrowth,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     let mut tx = app.pool.begin().await?;
     let n=sqlx::query("UPDATE persona_growth SET watermark=?,last_reflected_at=? WHERE user_id=? AND profile_id=? AND enabled=1 AND revision=? AND lease=? AND lease_until>?")
  .bind(through).bind(now()).bind(&user.id).bind(pid).bind(revision).bind(token).bind(now()).execute(&mut *tx).await?.rows_affected();

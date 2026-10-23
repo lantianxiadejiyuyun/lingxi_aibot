@@ -82,11 +82,19 @@ pub fn chunks(segments: &[Segment], budget: usize) -> Result<Vec<Vec<Value>>> {
 }
 async fn ask(
     app: &App,
+    user: &crate::auth::User,
     profile: &Profile,
     system: &str,
     data: Value,
     cancel: &CancellationToken,
 ) -> Result<String> {
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::Bilibili,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     let result = provider::chat(
         app,
         profile,
@@ -107,6 +115,7 @@ async fn ask(
 }
 pub async fn read(
     app: &App,
+    user: &crate::auth::User,
     profile: &Profile,
     title: &str,
     segments: &[Segment],
@@ -136,6 +145,7 @@ pub async fn read(
         return parse(
             &ask(
                 app,
+                user,
                 &p,
                 &system,
                 json!({"title":title,"subtitles":pieces[0]}),
@@ -149,6 +159,7 @@ pub async fn read(
     for (index, piece) in pieces.iter().enumerate() {
         let raw = ask(
             app,
+            user,
             &p,
             &system,
             json!({"title":title,"part":index+1,"parts":pieces.len(),"subtitles":piece}),
@@ -165,7 +176,7 @@ pub async fn read(
         }
         notes.push(a);
     }
-    let raw=ask(app,&p,&format!("{system}\n原始字幕已按顺序全部阅读。现在根据每段阅读笔记形成整体心得，不能把某一个片段当作全部，引用只能使用笔记中的字幕编号。"),json!({"title":title,"section_notes":notes}),cancel).await?;
+    let raw=ask(app,user,&p,&format!("{system}\n原始字幕已按顺序全部阅读。现在根据每段阅读笔记形成整体心得，不能把某一个片段当作全部，引用只能使用笔记中的字幕编号。"),json!({"title":title,"section_notes":notes}),cancel).await?;
     let final_note = parse(&raw, segments.len())?;
     if final_note.points.iter().any(|p| {
         !notes

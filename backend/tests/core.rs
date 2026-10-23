@@ -624,3 +624,229 @@ async fn legacy_import_is_atomic_and_archives_all_original_rows() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn feature_permissions_are_account_scoped_validated_and_preserve_manual_data() {
+    use lingxi::{
+        permissions::{self, Config, Feature, Scope},
+        tools,
+    };
+    let f = Fixture::new().await;
+    let alice = f.user("permission-alice").await;
+    let bob = f.user("permission-bob").await;
+    let token = auth::issue_token(&f.app, &alice, "test", 3600)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.request("GET", "/api/v2/permissions", None, Value::Null)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let defaults = f
+        .request("GET", "/api/v2/permissions", Some(&token), Value::Null)
+        .await
+        .1["data"]
+        .clone();
+    assert_eq!(defaults, json!(Config::default()));
+    let mut cfg = Config::default();
+    cfg.features.get_mut(&Feature::Memory).unwrap().private = false;
+    let (status, body) = f
+        .request("PUT", "/api/v2/permissions", Some(&token), json!(cfg))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !permissions::allowed(&f.app, &alice, Feature::Memory, Scope::Private)
+            .await
+            .unwrap()
+    );
+    assert!(
+        permissions::allowed(&f.app, &alice, Feature::Memory, Scope::Group)
+            .await
+            .unwrap()
+    );
+    assert!(
+        permissions::allowed(&f.app, &bob, Feature::Memory, Scope::Private)
+            .await
+            .unwrap()
+    );
+    let names = json!(tools::permitted_definitions(&f.app, &alice).await.unwrap()).to_string();
+    assert!(!names.contains("search_history"));
+    assert!(!names.contains("remember"));
+    assert!(names.contains("save_record"));
+    assert!(
+        tools::execute(
+            &f.app,
+            &alice,
+            "remember",
+            json!({"content":"不应自动写入"}),
+            &tokio_util::sync::CancellationToken::new()
+        )
+        .await
+        .is_err()
+    );
+    let memory = memory::Input {
+        content: "仍然可以手动整理的记忆".into(),
+        importance: 3,
+        expires_at: None,
+    };
+    memory::remember(&f.app, &alice, &memory, "manual", &json!({}))
+        .await
+        .unwrap();
+    assert_eq!(memory::list(&f.app, &alice).await.unwrap().len(), 1);
+    assert!(
+        memory::context(&f.app, &alice, "记忆", 1000)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut invalid = json!(cfg);
+    invalid["features"]["tools"]["group"] = json!(true);
+    assert!(
+        !f.request("PUT", "/api/v2/permissions", Some(&token), invalid)
+            .await
+            .0
+            .is_success()
+    );
+    let mut invalid = json!(cfg);
+    invalid["features"]
+        .as_object_mut()
+        .unwrap()
+        .remove("vision");
+    assert!(
+        !f.request("PUT", "/api/v2/permissions", Some(&token), invalid)
+            .await
+            .0
+            .is_success()
+    );
+    cfg.enabled = false;
+    assert_eq!(
+        f.request("PUT", "/api/v2/permissions", Some(&token), json!(cfg))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert!(
+        tools::permitted_definitions(&f.app, &alice)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        tools::execute(
+            &f.app,
+            &alice,
+            "list_records",
+            json!({"kind":"notes"}),
+            &tokio_util::sync::CancellationToken::new()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        f.request(
+            "POST",
+            "/api/v2/records/notes",
+            Some(&token),
+            json!(note("手动记录不受 AI 开关影响"))
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        f.request("GET", "/api/v2/permissions", Some(&token), Value::Null)
+            .await
+            .1["data"],
+        json!(cfg)
+    );
+}
+
+#[tokio::test]
+async fn permissions_gate_qq_scopes_and_background_features_without_rewriting_connections() {
+    use lingxi::{
+        bilibili, companion, growth, integrations,
+        permissions::{self, Config, Feature},
+        qq,
+    };
+    let f = Fixture::new().await;
+    let user = f.user("permission-qq").await;
+    let raw = json!({"qq":{"enabled":true,"private_enabled":true,"groups":["30001"],"owner_qq":"10001","bot_qq":"20001","collect_memory":false}});
+    // Store a fixture directly: execution should not reach any network endpoint.
+    settings::put(
+        &f.app,
+        &user,
+        "integrations",
+        &json!(f.app.secrets.encrypt(&raw.to_string()).unwrap()),
+    )
+    .await
+    .unwrap();
+    let mut cfg = Config::default();
+    cfg.features.get_mut(&Feature::Chat).unwrap().group = false;
+    settings::put(&f.app, &user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+    let effective = qq::config(&f.app, &user).await.unwrap();
+    assert!(!effective.enabled);
+    assert!(effective.private_enabled);
+    let group = json!({"post_type":"message","message_type":"group","group_id":30001,"self_id":20001,"user_id":10001,"message_id":1,"message":[{"type":"text","data":{"text":"不要回复"}}]});
+    assert_eq!(
+        qq::api::ingest(&f.app, &user, &group).await.unwrap()["ignored"],
+        true
+    );
+    cfg.features.get_mut(&Feature::Chat).unwrap().group = true;
+    cfg.features.get_mut(&Feature::Chat).unwrap().private = false;
+    settings::put(&f.app, &user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+    let effective = qq::config(&f.app, &user).await.unwrap();
+    assert!(effective.enabled);
+    assert!(!effective.private_enabled);
+    let private = json!({"post_type":"message","message_type":"private","self_id":20001,"user_id":10001,"message_id":2,"message":[{"type":"text","data":{"text":"不要回复"}}]});
+    assert_eq!(
+        qq::api::ingest(&f.app, &user, &private).await.unwrap()["ignored"],
+        true
+    );
+    cfg.enabled = false;
+    settings::put(&f.app, &user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+    assert_eq!(integrations::config(&f.app, &user).await.unwrap(), raw);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    assert_eq!(
+        companion::tick(&f.app, &user, &cancel, None).await.unwrap()["reason"],
+        "permission_disabled"
+    );
+    assert_eq!(
+        growth::reflect(&f.app, &user, &json!({}), &cancel)
+            .await
+            .unwrap()["skipped"],
+        "permission_disabled"
+    );
+    assert!(
+        bilibili::queue(
+            &f.app,
+            &user,
+            bilibili::Input {
+                video: "BV1234567890".into(),
+                retry: false,
+                request_id: "permission-test".into()
+            },
+            false
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        qq::stickers::reply_candidates(&f.app, &user, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        qq::stickers::reply_image(&f.app, &user, None, "arbitrary")
+            .await
+            .is_err()
+    );
+    assert!(!permissions::config(&f.app, &user).await.unwrap().enabled);
+}

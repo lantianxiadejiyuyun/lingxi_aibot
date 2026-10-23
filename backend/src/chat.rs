@@ -226,6 +226,13 @@ pub async fn compact(
     let mut summary = String::new();
     let mut start = 0;
     while start < source.len() {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Chat,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
         lease.check().await?;
         let mut end = (start + chunk_limit).min(source.len());
         while !source.is_char_boundary(end) {
@@ -305,6 +312,13 @@ pub struct Session {
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 pub async fn prepare(app: &App, user: &User, cid: &str, input: Send) -> Result<Session> {
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::Chat,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     if input.message.trim().is_empty()
         || input.message.len() > 500_000
         || input.request_id.is_empty()
@@ -495,9 +509,16 @@ async fn run_inner(
         emit(tx, "delta", json!(result)).await?;
         return Ok(());
     }
-    let definitions = crate::tools::definitions();
     let mut tools_used = 0;
     for _ in 0..8 {
+        crate::permissions::require(
+            app,
+            &s.user,
+            crate::permissions::Feature::Chat,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
+        let definitions = crate::tools::permitted_definitions(app, &s.user).await?;
         s.lease.check().await?;
         let reply = provider::chat(
             app,

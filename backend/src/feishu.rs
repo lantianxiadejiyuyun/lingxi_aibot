@@ -304,6 +304,23 @@ pub async fn reconcile(app: &App) -> Result<()> {
     Ok(())
 }
 async fn permitted(app: &App, user: &User, eid: i64) -> Result<bool> {
+    let kind: Option<String> =
+        sqlx::query_scalar("SELECT kind FROM feishu_events WHERE id=? AND user_id=?")
+            .bind(eid)
+            .bind(&user.id)
+            .fetch_optional(&app.pool)
+            .await?;
+    if kind.as_deref() != Some("binding")
+        && !crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::Chat,
+            crate::permissions::Scope::Private,
+        )
+        .await?
+    {
+        return Ok(false);
+    }
     let c = credentials(app, user).await?;
     let key = config_key(app, user, &c).await?;
     Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM feishu_events e JOIN feishu_state s ON s.user_id=e.user_id WHERE e.id=? AND e.user_id=? AND s.enabled=1 AND e.owner_id=s.owner_id AND e.chat_id=s.chat_id AND s.binding_key=? AND e.config_key=?)").bind(eid).bind(&user.id).bind(app_key(&c)).bind(key).fetch_one(&app.pool).await?)
@@ -892,6 +909,34 @@ mod tests {
                 .unwrap();
         assert!(text.is_empty());
         assert!(f.m.models.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn permissions_revoke_queued_feishu_reply_without_unbinding() {
+        let f = Fixture::new().await;
+        f.bind().await;
+        accept(&f.app, &f.user, f.event("permission-message", "你好").await)
+            .await
+            .unwrap();
+        let eid = f.latest().await;
+        let mut cfg = crate::permissions::Config::default();
+        cfg.features
+            .get_mut(&crate::permissions::Feature::Chat)
+            .unwrap()
+            .private = false;
+        crate::settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+            .await
+            .unwrap();
+        f.process(eid).await.unwrap();
+        assert!(f.m.models.lock().unwrap().is_empty());
+        assert!(!permitted(&f.app, &f.user, eid).await.unwrap());
+        cfg.features
+            .get_mut(&crate::permissions::Feature::Chat)
+            .unwrap()
+            .private = true;
+        crate::settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+            .await
+            .unwrap();
+        assert!(permitted(&f.app, &f.user, eid).await.unwrap());
     }
     #[tokio::test]
     async fn private_chat_is_durable_ordered_deduplicated_and_uses_main_history() {

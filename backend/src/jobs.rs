@@ -273,6 +273,28 @@ async fn run_job(app: App, job: Job, token: String) {
 }
 async fn execute(app: &App, job: &Job, cancel: &CancellationToken) -> Result<Value> {
     let user = auth::user(app, &job.user_id).await?;
+    if [
+        "image", "download", "webhook", "skill", "briefing", "research",
+    ]
+    .contains(&job.action.as_str())
+    {
+        crate::permissions::require(
+            app,
+            &user,
+            crate::permissions::Feature::Tools,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
+    }
+    if job.action == "consolidate" {
+        crate::permissions::require(
+            app,
+            &user,
+            crate::permissions::Feature::Memory,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
+    }
     let params = &job.params.0;
     match job.action.as_str() {
         "feishu_message" => crate::feishu::process(app, &user, params, cancel).await,

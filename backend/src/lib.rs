@@ -13,6 +13,7 @@ pub mod media;
 pub mod memory;
 pub mod migration;
 pub mod network;
+pub mod permissions;
 pub mod provider;
 pub mod records;
 pub mod search;

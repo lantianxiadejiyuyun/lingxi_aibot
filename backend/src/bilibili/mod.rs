@@ -152,6 +152,13 @@ pub struct Input {
     pub request_id: String,
 }
 pub async fn queue(app: &App, user: &User, input: Input, automatic: bool) -> Result<Value> {
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::Bilibili,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     if input.request_id.is_empty() || input.request_id.len() > 100 {
         return Err(invalid("请求标识无效"));
     }
@@ -252,6 +259,16 @@ pub async fn reconcile(app: &App) -> Result<()> {
             .rows_affected()
             == 1
         {
+            if !crate::permissions::allowed(
+                app,
+                &user,
+                crate::permissions::Feature::Bilibili,
+                crate::permissions::Scope::Private,
+            )
+            .await?
+            {
+                continue;
+            }
             if let Err(e) = queue(
                 app,
                 &user,
@@ -480,6 +497,17 @@ pub async fn process(
     params: &Value,
     cancel: &CancellationToken,
 ) -> Result<Value> {
+    if let Err(error) = crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::Bilibili,
+        crate::permissions::Scope::Private,
+    )
+    .await
+    {
+        sqlx::query("UPDATE bili_runs SET status='failed',progress=?,updated_at=? WHERE id=? AND user_id=? AND status='queued'").bind(error.to_string()).bind(now()).bind(params["run_id"].as_str().unwrap_or("")).bind(&user.id).execute(&app.pool).await?;
+        return Err(error);
+    }
     let mut source = Bili::new(app, credential(app, user).await?);
     if let Err(error) = source.prepare().await {
         let message = match &error {
@@ -543,6 +571,13 @@ async fn run_inner(
     cancel: &CancellationToken,
     source: &impl Source,
 ) -> Result<(String, String)> {
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::Bilibili,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     let input: Input = serde_json::from_str(input).map_err(|_| invalid("阅读输入损坏"))?;
     let cfg: Config = serde_json::from_str(cfg).map_err(|_| invalid("阅读设置损坏"))?;
     if mode == "automatic" {
@@ -564,6 +599,13 @@ async fn run_inner(
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
+            crate::permissions::require(
+                app,
+                user,
+                crate::permissions::Feature::Bilibili,
+                crate::permissions::Scope::Private,
+            )
+            .await?;
             progress(app, rid, &format!("正在发现：{kw}")).await?;
             match source.search(kw, cfg.recent_days).await {
                 Ok(v) => {
@@ -585,6 +627,13 @@ async fn run_inner(
     let mut completed = 0;
     let mut failed = 0;
     for video_id in candidates {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Bilibili,
+            crate::permissions::Scope::Private,
+        )
+        .await?;
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -698,6 +747,7 @@ async fn read_one(
     };
     let analysis = reader::read(
         app,
+        user,
         profile,
         &video.title,
         &captions.segments,
@@ -712,6 +762,16 @@ async fn read_one(
     Ok(Some((video.title, analysis)))
 }
 pub async fn companion_sources(app: &App, user: &User, at: i64) -> Result<Vec<Value>> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Bilibili,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        return Ok(vec![]);
+    }
     let rows:Vec<(String,String,i64,String,sqlx::types::Json<Value>,i64)>=sqlx::query_as("SELECT id,bvid,page,title,analysis,updated_at FROM bili_entries WHERE user_id=? AND status='completed' AND updated_at>=? AND json_extract(analysis,'$.worth_reading')=1 ORDER BY updated_at DESC LIMIT 3").bind(&user.id).bind(at-7*86400).fetch_all(&app.pool).await?;
     Ok(rows.into_iter().map(|(id,bvid,page,title,a,t)|json!({"id":format!("bili-read:{id}"),"kind":"bilibili_subtitles","title":title,"snippet":a.0["summary"],"thought":a.0["thought"],"url":client::video_url(&bvid,page as u32),"observed_at":t})).collect())
 }

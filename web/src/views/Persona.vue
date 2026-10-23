@@ -9,7 +9,7 @@ type Profile = { id: string; name: string; system_prompt: string }
 type Trait = { id: string; kind: string; name: string; content: string; locked: boolean; source: string; evidence: { message_id: number; quote: string }[]; updated_at: number }
 type Growth = { enabled: boolean; revision: number; turns: number; days: number; pending: number; last_reflected_at: number | null; last_error: string; traits: Trait[] }
 const kinds: [string,string][] = [['temperament','性格细节'],['address','专属称呼'],['habit','相处习惯'],['interest','共同兴趣'],['memory','共同回忆']]
-const profiles = ref<Profile[]>([]), selected = ref(''), data = ref<Growth | null>(null), loading = ref(true), busy = ref(false), error = ref('')
+const profiles = ref<Profile[]>([]), selected = ref(''), data = ref<Growth | null>(null), loading = ref(true), error = ref('')
 const profile = computed(() => profiles.value.find(p => p.id === selected.value))
 const stage = computed(() => !data.value?.turns ? '故事才刚开始' : data.value.days >= 7 && data.value.turns >= 30 ? '攒下了许多日常' : '一点点熟悉起来')
 let sequence = 0
@@ -21,7 +21,6 @@ async function load() {
 }
 async function boot() { try { profiles.value = await api<Profile[]>('/profiles'); selected.value = profiles.value[0]?.id || ''; await load() } catch(e) { error.value = e instanceof Error ? e.message : '读取配置失败'; loading.value = false } }
 onMounted(boot)
-async function toggle() { if (!data.value || busy.value) return; const pid = selected.value; busy.value = true; try { const result = await put<Growth>(`/persona/${encodeURIComponent(pid)}`, { enabled: !data.value.enabled, revision: data.value.revision }); if (selected.value === pid) data.value = result; notify(result.enabled ? '开始记录新的相处片段' : '已暂停学习，已有成长继续保留') } finally { busy.value = false } }
 function edit(t?: Trait) {
  const pid = selected.value
  openForm({ title: t ? '调整这份默契' : '写下一个相处习惯', description: '固定后，自动学习不会覆盖这条内容。解开固定后，新的明确偏好可以更新它。', fields: [
@@ -39,13 +38,13 @@ function forget(t: Trait) { const pid = selected.value; confirmAction('忘记这
    <section class="persona-hero">
     <div class="persona-fish" aria-hidden="true"><Fish :size="66" :stroke-width="1.25"/><span>慢慢来，也很好</span></div>
     <div class="persona-hero-copy"><span class="persona-eyebrow"><Sprout :size="14"/> {{ stage }}</span><h2>那些只属于我们的习惯</h2><p>也许是一个新称呼，一句懂你的玩笑，或是聊起某件小事时，自然而然想起你。</p>
-     <label class="persona-select">当前人设 <select v-model="selected" :disabled="busy" @change="load"><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
+     <label class="persona-select">当前人设 <select v-model="selected" @change="load"><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
     </div>
     <div class="persona-stat"><strong>{{ data?.traits.length || 0 }}</strong><span>份相处印记</span><small>{{ data?.turns || 0 }} 次对话 · {{ data?.days || 0 }} 个有聊天的日子</small></div>
    </section>
    <div v-if="data" class="persona-layout">
     <aside class="persona-sidebar">
-     <section class="panel persona-panel"><div class="persona-section-title"><Heart :size="18"/><h3>随相处慢慢成长</h3></div><p>从开启后的网页聊天、主人 QQ 私聊，以及绑定的飞书和 AstrBot 私聊中学习。</p><button class="button persona-toggle" :class="{secondary:data.enabled}" :disabled="busy" :aria-pressed="data.enabled" @click="run(toggle)">{{ busy ? '正在保存…' : data.enabled ? '暂停自动学习' : '开启自动学习' }}</button><small>每积累 6 次成功对话再整理，两次整理至少间隔 2 小时。没有值得记住的变化，也可以什么都不添。</small><p class="persona-status"><Clock3 :size="14"/>{{ data.last_reflected_at ? '上次整理 ' + date(data.last_reflected_at) : '还没有整理记录' }}</p><small v-if="data.enabled">当前有 {{ data.pending }} 个新片段等待整理。</small><p v-if="data.last_error" class="persona-error" role="status">{{ data.last_error }}</p></section>
+     <section class="panel persona-panel"><div class="persona-section-title"><Heart :size="18"/><h3>随相处慢慢成长</h3></div><p>从开启后的网页聊天、主人 QQ 私聊，以及绑定的飞书和 AstrBot 私聊中学习。</p><RouterLink class="button persona-toggle" to="/settings?tab=models">养成设置</RouterLink><small>每积累 6 次成功对话再整理，两次整理至少间隔 2 小时。没有值得记住的变化，也可以什么都不添。</small><p class="persona-status"><Clock3 :size="14"/>{{ data.last_reflected_at ? '上次整理 ' + date(data.last_reflected_at) : '还没有整理记录' }}</p><small v-if="data.enabled">当前有 {{ data.pending }} 个新片段等待整理。</small><p v-if="data.last_error" class="persona-error" role="status">{{ data.last_error }}</p></section>
      <section class="panel persona-panel"><div class="persona-section-title"><LockKeyhole :size="18"/><h3>初见时的底色</h3></div><p>身份、世界观和核心性格由你设定。养成只补充日常相处，不自动改写这部分。</p><details><summary>看看核心人设</summary><pre>{{ profile?.system_prompt || '尚未填写专属人设' }}</pre></details><RouterLink class="persona-text-link" to="/settings?tab=models">编辑核心人设 →</RouterLink></section>
      <p class="persona-note">成长按账号和人设分别保存在主库，仅用于私聊与主动陪伴。群里的话题留在各自的群里。</p>
     </aside>

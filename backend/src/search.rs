@@ -45,9 +45,16 @@ pub async fn search(app: &App, user: &User, query: &str) -> Result<Value> {
     }
     let cfg = crate::integrations::config(app, user).await?;
     let mut mode = "keyword";
-    if cfg["embedding"]["url"]
-        .as_str()
-        .is_some_and(|s| !s.is_empty())
+    if crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Tools,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+        && cfg["embedding"]["url"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty())
     {
         match semantic(app, user, &cfg["embedding"], query).await {
             Ok(items) => {
@@ -113,6 +120,13 @@ pub async fn index(app: &App, user: &User, kind: &str, rid: &str) -> Result<()> 
     };
     let text = format!("{}\n{}", record.title, record.content);
     let hash = crate::db::digest(&text);
+    crate::permissions::require(
+        app,
+        user,
+        crate::permissions::Feature::Tools,
+        crate::permissions::Scope::Private,
+    )
+    .await?;
     let vector = embed(app, cfg, &text).await?;
     // Discard an embedding if its source changed while the provider was running.
     sqlx::query("INSERT INTO embeddings(user_id,source_id,source_kind,model,content_hash,vector) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM records WHERE id=? AND user_id=? AND revision=? AND deleted_at IS NULL) ON CONFLICT(user_id,source_kind,source_id) DO UPDATE SET model=excluded.model,content_hash=excluded.content_hash,vector=excluded.vector")

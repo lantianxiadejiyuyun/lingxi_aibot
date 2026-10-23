@@ -420,7 +420,16 @@ pub fn bilibili_url(raw: &str) -> Option<String> {
     Some(format!("https://www.bilibili.com/video/{code}"))
 }
 async fn sources(app: &App, user: &User, cfg: &Config, at: i64) -> Vec<Value> {
-    if !cfg.share_bilibili {
+    if !cfg.share_bilibili
+        || !crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::Bilibili,
+            crate::permissions::Scope::Private,
+        )
+        .await
+        .unwrap_or(false)
+    {
         return vec![];
     }
     if let Ok(read) = crate::bilibili::companion_sources(app, user, at).await {
@@ -428,7 +437,16 @@ async fn sources(app: &App, user: &User, cfg: &Config, at: i64) -> Vec<Value> {
             return read;
         }
     }
-    if cfg.interests.is_empty() {
+    if cfg.interests.is_empty()
+        || !crate::permissions::allowed(
+            app,
+            user,
+            crate::permissions::Feature::Tools,
+            crate::permissions::Scope::Private,
+        )
+        .await
+        .unwrap_or(false)
+    {
         return vec![];
     }
     let query = &cfg.interests[(at / 3600).unsigned_abs() as usize % cfg.interests.len()];
@@ -477,6 +495,16 @@ pub async fn tick(
     cancel: &CancellationToken,
     fixed: Option<i64>,
 ) -> Result<Value> {
+    if !crate::permissions::allowed(
+        app,
+        user,
+        crate::permissions::Feature::Proactive,
+        crate::permissions::Scope::Private,
+    )
+    .await?
+    {
+        return Ok(json!({"status":"skip","reason":"permission_disabled"}));
+    }
     let clock = || fixed.unwrap_or_else(now);
     let at = clock();
     ensure(app, user).await?;

@@ -92,6 +92,13 @@ pub async fn index(app: &App, user: &User, fid: &str) -> Result<()> {
             crate::integrations::json_response(response).await?;
         }
     } else {
+        crate::permissions::require(
+            app,
+            user,
+            crate::permissions::Feature::Memory,
+            crate::permissions::Scope::Group,
+        )
+        .await?;
         let vector = crate::search::embed(
             app,
             &serde_json::to_value(&cfg.embedding).unwrap(),

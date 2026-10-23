@@ -611,3 +611,51 @@ async fn separate_vision_profile_works_with_collection_disabled_and_partial_imag
     assert!(history.contains("图片 2：图片未能读取"));
     assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
 }
+
+#[tokio::test]
+async fn disabled_vision_does_not_download_or_send_images_to_model() {
+    use lingxi::permissions::{Config, Feature};
+    let f = Fixture::new().await;
+    let event = f.event(71, json!([f.image("/image", "image")]));
+    qq::api::ingest(&f.app, &f.user, &event).await.unwrap();
+    // Revoke after receipt: the queued message must use the latest permissions.
+    let mut cfg = Config::default();
+    cfg.features.get_mut(&Feature::Vision).unwrap().private = false;
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+    f.process(71).await;
+    assert!(f.mock.image_requests.lock().unwrap().is_empty());
+    assert!(
+        f.mock
+            .models
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|v| !v.to_string().contains("image_url"))
+    );
+    assert!(!f.history().await.contains("一条蓝色圆滚滚的小鱼"));
+    let mut qqcfg = qq::config(&f.app, &f.user).await.unwrap();
+    qqcfg.stickers.enabled = true;
+    cfg.features
+        .get_mut(&Feature::StickerCollection)
+        .unwrap()
+        .private = false;
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+        .await
+        .unwrap();
+    assert_eq!(
+        qq::stickers::receive_private(
+            &f.app,
+            &f.user,
+            &qqcfg,
+            "collection-revoked",
+            "10001",
+            "收藏这张图片",
+            &json!([f.image("/image", "image")])
+        )
+        .await
+        .unwrap(),
+        0
+    );
+}
