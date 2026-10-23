@@ -185,6 +185,20 @@ pub async fn observe(app: &App, s: &crate::chat::Session) -> Result<()> {
     if s.input.message.starts_with('/') || s.input.request_id.starts_with("job:") {
         return Ok(());
     }
+    if let Some(event) = s.input.request_id.strip_prefix("qq-private:") {
+        let has_media: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM qq_private_events WHERE id=? AND user_id=? AND media<>'')",
+        )
+        .bind(event)
+        .bind(&s.user.id)
+        .fetch_one(&app.pool)
+        .await?;
+        if has_media {
+            // Visual descriptions are model observations, not owner-authored
+            // evidence of preferences or personality, even in a mixed message.
+            return Ok(());
+        }
+    }
     sqlx::query("INSERT INTO persona_observations(user_id,profile_id,turn_id,message_id,created_at) SELECT ?,?,?,m.id,? FROM messages m JOIN persona_growth g ON g.user_id=? AND g.profile_id=? AND g.enabled=1 WHERE m.conversation_id=? AND m.role='user' ORDER BY m.id DESC LIMIT 1 ON CONFLICT(turn_id) DO NOTHING")
  .bind(&s.user.id).bind(&s.profile.id).bind(&s.turn_id).bind(now()).bind(&s.user.id).bind(&s.profile.id).bind(&s.conversation_id).execute(&app.pool).await?;
     Ok(())

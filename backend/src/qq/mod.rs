@@ -2,6 +2,7 @@
 pub mod api;
 pub mod decision;
 pub mod dialogue;
+pub(crate) mod media;
 pub mod outreach;
 pub mod sessions;
 pub mod stickers;
@@ -188,6 +189,9 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
             return Err(invalid("个人 QQ 需要 OneBot 地址和32–256字符回调密钥"));
         }
         crate::settings::active_profile(app, user, cfg.profile_id.as_deref()).await?;
+        if cfg.stickers.profile_id.is_some() {
+            crate::settings::active_profile(app, user, cfg.stickers.profile_id.as_deref()).await?;
+        }
     }
     for endpoint in [&cfg.onebot, &cfg.vector, &cfg.embedding] {
         if !endpoint.url.is_empty() {
@@ -229,7 +233,7 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
     {
         return Err(invalid("主动会话需要 OneBot HTTP 地址"));
     }
-    if cfg.enabled && cfg.stickers.enabled && cfg.stickers.auto_review {
+    if (cfg.enabled || cfg.private_enabled) && cfg.stickers.enabled && cfg.stickers.auto_review {
         crate::settings::active_profile(
             app,
             user,

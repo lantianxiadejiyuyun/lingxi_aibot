@@ -157,6 +157,37 @@ impl Fixture {
             .await
             .unwrap();
     }
+    async fn enable_private(&self, group_enabled: bool) {
+        let mut cfg = integrations::config(&self.app, &self.user).await.unwrap();
+        cfg["qq"]["private_enabled"] = json!(true);
+        cfg["qq"]["enabled"] = json!(group_enabled);
+        integrations::save_config(&self.app, &self.user, cfg)
+            .await
+            .unwrap();
+    }
+    async fn private_receive(&self, event: &str, qq_id: &str, text: &str, message: Value) -> usize {
+        let cfg = qq::config(&self.app, &self.user).await.unwrap();
+        stickers::receive_private(&self.app, &self.user, &cfg, event, qq_id, text, &message)
+            .await
+            .unwrap()
+    }
+    async fn private_pending(&self) -> Vec<String> {
+        sqlx::query_scalar("SELECT id FROM sticker_inbox WHERE user_id=? AND status='pending' ORDER BY created_at,id").bind(&self.user.id).fetch_all(&self.app.pool).await.unwrap()
+    }
+    async fn private_process(&self, id: &str) -> lingxi::error::Result<Value> {
+        stickers::process(
+            &self.app,
+            &self.user,
+            &json!({"id":id,"scope":"owner_private"}),
+            &CancellationToken::new(),
+        )
+        .await
+    }
+    async fn private_drain(&self) {
+        for id in self.private_pending().await {
+            self.private_process(&id).await.unwrap();
+        }
+    }
     fn event(&self, n: i64, qq: &str, text: &str, path: &str) -> Value {
         let mut segments = vec![];
         if !text.is_empty() {
@@ -525,4 +556,326 @@ async fn interrupted_collection_can_be_retried_without_resetting_live_jobs() {
     assert_eq!(second.0["data"]["queued"], 0);
     f.drain().await;
     assert_eq!(f.items().await["total"], 1);
+}
+
+#[tokio::test]
+async fn private_collection_isolated_from_groups_and_available_through_existing_api() {
+    let f = Fixture::new().await;
+    f.enable_private(true).await;
+    let message = json!([{"type":"image","data":{"url":format!("{}/pic.png",f.base)}}]);
+    assert_eq!(
+        f.private_receive("same-event", "10001", "", message.clone())
+            .await,
+        1
+    );
+    assert_eq!(
+        f.private_receive("same-event", "10001", "", message).await,
+        1
+    );
+    assert_eq!(f.private_pending().await.len(), 1);
+    assert!(f.pending().await.is_empty());
+    let encrypted: String = sqlx::query_scalar("SELECT source FROM sticker_inbox LIMIT 1")
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    assert!(!encrypted.contains(&f.base));
+    assert!(f.process(&f.private_pending().await[0]).await.is_err()); // Old/group scope cannot consume private rows.
+    f.private_drain().await;
+    let data = f.items().await;
+    assert_eq!(data["items"][0]["scope"], "owner_private");
+    assert_eq!(data["items"][0]["group_id"], "");
+    assert_eq!(data["items"][0]["collected_by"], "model");
+    let private_id = data["items"][0]["id"].as_str().unwrap().to_owned();
+    assert!(private_id.starts_with("owner-"));
+    assert_eq!(
+        stickers::reply_candidates(&f.app, &f.user, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        stickers::reply_candidates(&f.app, &f.user, Some("30001"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        stickers::reply_image(&f.app, &f.user, Some("30001"), &private_id)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        stickers::reply_image(&f.app, &f.user, None, &private_id)
+            .await
+            .unwrap(),
+        f.mock.png
+    );
+    f.ingest(&f.event(50, "10002", "", "/pic.png")).await;
+    f.drain().await;
+    assert_eq!(f.items().await["total"], 2); // Same pixels remain independently owned by each store.
+    assert_eq!(f.mock.requests.lock().unwrap().len(), 2);
+    assert_eq!(
+        stickers::reply_candidates(&f.app, &f.user, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let group_candidates = stickers::reply_candidates(&f.app, &f.user, Some("30001"))
+        .await
+        .unwrap();
+    assert_eq!(group_candidates.len(), 1);
+    let group_id = group_candidates[0]["id"].as_str().unwrap();
+    assert!(
+        stickers::reply_image(&f.app, &f.user, None, group_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        stickers::reply_image(&f.app, &f.user, Some("30002"), group_id)
+            .await
+            .is_err()
+    );
+    let (_, body) = f
+        .request(
+            "GET",
+            "/api/v2/qq/stickers?scope=owner_private",
+            Some(&f.user),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["data"]["total"],
+        1
+    );
+    let path = format!("/api/v2/qq/stickers/{private_id}");
+    let other = auth::create_user(&f.app, "other", "other-sticker-password".into(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.request("GET", &format!("{path}/image"), Some(&other), Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.request(
+            "PATCH",
+            &path,
+            Some(&f.user),
+            json!({"title":"主人的私藏","favorite":true})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, image) = f
+        .request("GET", &format!("{path}/image"), Some(&f.user), Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(image, f.mock.png);
+    assert_eq!(
+        f.request("DELETE", &path, Some(&f.user), Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert!(
+        stickers::reply_image(&f.app, &f.user, None, &private_id)
+            .await
+            .is_err()
+    );
+    assert_eq!(f.items().await["total"], 1);
+}
+
+#[tokio::test]
+async fn private_collection_requires_owner_and_rechecks_config_before_processing() {
+    let f = Fixture::new().await;
+    f.enable_private(false).await;
+    f.configure(json!({"auto_review":false})).await;
+    settings::save_profiles(&f.app, &f.user, vec![])
+        .await
+        .unwrap();
+    let message = json!([{"type":"image","data":{"url":format!("{}/pic.gif",f.base)}}]);
+    assert_eq!(
+        f.private_receive("outsider", "10002", "收藏这张图", message.clone())
+            .await,
+        0
+    );
+    assert_eq!(
+        f.private_receive("no-command", "10001", "不要收藏这张图", message.clone())
+            .await,
+        0
+    );
+    assert_eq!(
+        f.private_receive("owner", "10001", "收藏这张图", message.clone())
+            .await,
+        1
+    );
+    f.private_drain().await;
+    assert_eq!(f.items().await["items"][0]["collected_by"], "owner");
+    assert!(f.mock.requests.lock().unwrap().is_empty());
+    assert!(f.pending().await.is_empty());
+    assert_eq!(
+        f.private_receive("revoked", "10001", "收藏这张图", message)
+            .await,
+        1
+    );
+    let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+    cfg["qq"]["private_enabled"] = json!(false);
+    integrations::save_config(&f.app, &f.user, cfg)
+        .await
+        .unwrap();
+    f.private_drain().await;
+    let statuses: Vec<String> = sqlx::query_scalar("SELECT status FROM sticker_inbox ORDER BY id")
+        .fetch_all(&f.app.pool)
+        .await
+        .unwrap();
+    assert!(statuses.contains(&"skipped".into()));
+    assert!(
+        stickers::reply_candidates(&f.app, &f.user, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn private_quote_rejects_groups_and_other_contacts_and_retry_keeps_scope() {
+    let f = Fixture::new().await;
+    f.enable_private(false).await;
+    f.configure(json!({"auto_review":false})).await;
+    let message = json!([{"type":"reply","data":{"id":"500"}}]);
+    *f.mock.quote.lock().unwrap() = json!({"message_type":"group","group_id":30001,"sender":{"user_id":10001},"message":[{"type":"image","data":{"url":format!("{}/pic.png",f.base)}}]});
+    f.private_receive("quote-group", "10001", "/收藏", message.clone())
+        .await;
+    assert!(
+        f.private_process(&f.private_pending().await[0])
+            .await
+            .is_err()
+    );
+    f.mock.quote.lock().unwrap()["message_type"] = json!("private");
+    f.mock.quote.lock().unwrap()["group_id"] = Value::Null;
+    f.mock.quote.lock().unwrap()["sender"]["user_id"] = json!(10002);
+    f.private_receive("quote-other", "10001", "/收藏", message.clone())
+        .await;
+    assert!(
+        f.private_process(&f.private_pending().await[0])
+            .await
+            .is_err()
+    );
+    f.mock.quote.lock().unwrap()["sender"]["user_id"] = json!(10001);
+    sqlx::query("UPDATE jobs SET status='failed' WHERE action='qq_sticker'")
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    let result = stickers::retry(State(f.app.clone()), f.user.clone())
+        .await
+        .unwrap();
+    assert_eq!(result.0["data"]["queued"], 2);
+    let scopes: Vec<String> = sqlx::query_scalar("SELECT json_extract(params,'$.scope') FROM jobs WHERE action='qq_sticker' AND status='queued'").fetch_all(&f.app.pool).await.unwrap();
+    assert!(scopes.iter().all(|s| s == "owner_private"));
+    f.private_drain().await; // Expand both quoted messages.
+    f.private_drain().await; // Save / deduplicate their picture.
+    assert_eq!(f.items().await["total"], 1);
+    assert!(f.pending().await.is_empty());
+    assert_eq!(f.items().await["items"][0]["scope"], "owner_private");
+}
+
+#[tokio::test]
+async fn legacy_group_job_payload_survives_duplicate_delivery_reconcile_and_retry() {
+    let f = Fixture::new().await;
+    let event = f.event(700, "10001", "收藏这张图", "/pic.png");
+    f.ingest(&event).await;
+    let row = f.pending().await[0].clone();
+    // Simulate a durable queue entry created by the previous release.
+    sqlx::query("UPDATE jobs SET params=? WHERE action='qq_sticker'")
+        .bind(json!({"id":row}).to_string())
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(f.ingest(&event).await["accepted"], true);
+    qq::worker::reconcile(&f.app).await.unwrap();
+    let jobs: Vec<String> = sqlx::query_scalar("SELECT params FROM jobs WHERE action='qq_sticker'")
+        .fetch_all(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&jobs[0]).unwrap(),
+        json!({"id":row})
+    );
+    sqlx::query("UPDATE jobs SET status='cancelled' WHERE action='qq_sticker'")
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    qq::worker::reconcile(&f.app).await.unwrap();
+    assert_eq!(
+        stickers::retry(State(f.app.clone()), f.user.clone())
+            .await
+            .unwrap()
+            .0["data"]["queued"],
+        1
+    );
+    let retry: String =
+        sqlx::query_scalar("SELECT params FROM jobs WHERE action='qq_sticker' AND status='queued'")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&retry).unwrap(),
+        json!({"id":row})
+    );
+    f.drain().await;
+    assert_eq!(f.items().await["total"], 1);
+}
+
+#[tokio::test]
+async fn scheduler_recovers_private_stickers_without_a_group_database() {
+    let f = Fixture::new().await;
+    f.enable_private(false).await;
+    f.configure(json!({"auto_review":false})).await;
+    f.private_receive(
+        "lost-private-job",
+        "10001",
+        "收藏这张图",
+        json!([{"type":"image","data":{"url":format!("{}/pic.png",f.base)}}]),
+    )
+    .await;
+    let row = f.private_pending().await[0].clone();
+    sqlx::query("DELETE FROM jobs WHERE action='qq_sticker'")
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    assert!(f.app.qq_pool.get().is_none());
+    assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
+    qq::worker::reconcile(&f.app).await.unwrap();
+    let job: String =
+        sqlx::query_scalar("SELECT params FROM jobs WHERE action='qq_sticker' AND status='queued'")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&job).unwrap(),
+        json!({"id":row,"scope":"owner_private"})
+    );
+    assert!(f.app.qq_pool.get().is_none());
+    assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
+    sqlx::query("UPDATE jobs SET status='cancelled' WHERE action='qq_sticker'")
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    qq::worker::reconcile(&f.app).await.unwrap();
+    assert_eq!(
+        stickers::retry(State(f.app.clone()), f.user.clone())
+            .await
+            .unwrap()
+            .0["data"]["queued"],
+        1
+    );
+    f.private_drain().await;
+    assert_eq!(f.items().await["total"], 1);
+    assert!(f.app.qq_pool.get().is_none());
+    assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
 }

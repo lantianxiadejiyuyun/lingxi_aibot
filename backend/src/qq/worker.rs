@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 /// Recover the hand-off between the separate member DB and the main job queue.
 /// Existing uncertain/failed deliveries retain their job status and are never resent here.
 pub async fn reconcile(app: &App) -> Result<()> {
+    super::stickers::reconcile(app).await?;
     if app.qq_pool.get().is_none() && !app.data_dir.join("qq/people.sqlite3").exists() {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM qq_owner_events WHERE delivery_status='pending'",
@@ -24,7 +25,6 @@ pub async fn reconcile(app: &App) -> Result<()> {
     }
     let pool = store::pool(app).await?;
     super::decision::prune(app).await?;
-    super::stickers::reconcile(app).await?;
     sqlx::query("UPDATE facts SET deleted_at=?,revision=revision+1 WHERE expires_at<=? AND deleted_at IS NULL").bind(now()).bind(now()).execute(pool).await?;
     let facts: Vec<store::Fact> = sqlx::query_as(
         "SELECT * FROM facts WHERE revision>indexed_revision ORDER BY updated_at LIMIT 1000",

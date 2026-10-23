@@ -115,6 +115,46 @@ pub async fn extract(
     let mut source = String::new();
     let mut provenance = Vec::new();
     for (id, summary) in conversations {
+        let qq_owner: Option<String> = sqlx::query_scalar(
+            "SELECT external_id FROM private_bindings WHERE user_id=? AND channel='onebot' AND conversation_id=?",
+        ).bind(&user.id).bind(&id).fetch_optional(&app.pool).await?;
+        if let Some(owner) = qq_owner {
+            // Read the owner's original words, never the derived image descriptions,
+            // model replies or a summary that could have absorbed either of them.
+            let originals: Vec<(String, String)> = sqlx::query_as(
+                "SELECT id,content FROM qq_private_events WHERE user_id=? AND owner_qq=? AND status='sent' AND LENGTH(TRIM(content))>0 ORDER BY created_at DESC,rowid DESC LIMIT 20",
+            ).bind(&user.id).bind(owner).fetch_all(&app.pool).await?;
+            if originals.is_empty() {
+                continue;
+            }
+            let text = format!(
+                "\n会话 {id}：主人的原始文字（不含图片说明）\n{}",
+                originals
+                    .iter()
+                    .rev()
+                    .map(|(_, text)| format!("user: {text}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let remaining = profile
+                .context_window
+                .saturating_sub(profile.max_output + 2000)
+                .min(16000)
+                * 2;
+            if source.len() + text.len() <= remaining {
+                source.push_str(&text);
+                provenance.push(json!({"conversation_id":id,"source":"qq_private_text","event_ids":originals.iter().map(|(id,_)|id).collect::<Vec<_>>()}));
+            }
+            continue;
+        }
+        let was_qq_private: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM turns WHERE user_id=? AND conversation_id=? AND request_id LIKE 'qq-private:%')",
+        ).bind(&user.id).bind(&id).fetch_one(&app.pool).await?;
+        if was_qq_private {
+            // A removed/replaced binding must not turn old visual observations
+            // into personal facts through the generic extraction path.
+            continue;
+        }
         let messages:Vec<(i64,String,String)>=sqlx::query_as("SELECT id,role,content FROM messages WHERE conversation_id=? AND role IN ('user','assistant') ORDER BY id DESC LIMIT 20")
             .bind(&id).fetch_all(&app.pool).await?;
         let through = messages.first().map(|v| v.0).unwrap_or(0);

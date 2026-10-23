@@ -58,10 +58,44 @@ impl Settings {
     }
 }
 #[derive(Default, Deserialize, Serialize, Clone)]
-struct Source {
-    url: String,
-    file: String,
-    reply_id: Option<String>,
+pub(crate) struct Source {
+    pub(crate) url: String,
+    pub(crate) file: String,
+    pub(crate) reply_id: Option<String>,
+}
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    #[default]
+    Group,
+    OwnerPrivate,
+}
+impl Scope {
+    fn exists(self, app: &App) -> bool {
+        self == Self::OwnerPrivate
+            || app.qq_pool.get().is_some()
+            || app.data_dir.join("qq/people.sqlite3").exists()
+    }
+    fn job_params(self, row_id: &str) -> Value {
+        match self {
+            // Preserve the payload attached to existing group idempotency keys.
+            Self::Group => json!({"id":row_id}),
+            Self::OwnerPrivate => json!({"id":row_id,"scope":"owner_private"}),
+        }
+    }
+    async fn pool(self, app: &App) -> Result<&sqlx::SqlitePool> {
+        match self {
+            Self::Group => store::pool(app).await,
+            Self::OwnerPrivate => Ok(&app.pool),
+        }
+    }
+    fn for_id(id: &str) -> Self {
+        if id.starts_with("owner-") {
+            Self::OwnerPrivate
+        } else {
+            Self::Group
+        }
+    }
 }
 #[derive(sqlx::FromRow)]
 struct Inbox {
@@ -74,6 +108,8 @@ struct Inbox {
 }
 #[derive(Serialize, sqlx::FromRow)]
 pub struct Sticker {
+    #[sqlx(skip)]
+    pub scope: Scope,
     pub id: String,
     pub title: String,
     pub tags: sqlx::types::Json<Vec<String>>,
@@ -125,7 +161,7 @@ fn unescape(s: &str) -> String {
         .replace("&#44;", ",")
         .replace("&amp;", "&")
 }
-fn segments(message: &Value) -> Vec<Value> {
+pub(crate) fn segments(message: &Value) -> Vec<Value> {
     if let Some(items) = message.as_array() {
         return items.clone();
     }
@@ -150,7 +186,7 @@ fn segments(message: &Value) -> Vec<Value> {
     }
     result
 }
-fn sources(message: &Value) -> Vec<Source> {
+pub(crate) fn sources(message: &Value) -> Vec<Source> {
     segments(message)
         .into_iter()
         .filter(|v| (v["type"] == "image" || v["type"] == "mface") && v["data"]["type"] != "flash")
@@ -172,13 +208,16 @@ fn sources(message: &Value) -> Vec<Source> {
         })
         .collect()
 }
-async fn queue(app: &App, user: &User, row_id: &str) -> Result<()> {
+pub fn has_images(message: &Value) -> bool {
+    !sources(message).is_empty()
+}
+async fn queue(app: &App, user: &User, row_id: &str, scope: Scope) -> Result<()> {
     crate::jobs::enqueue(
         app,
         user,
         crate::jobs::Input {
             action: "qq_sticker".into(),
-            params: json!({"id":row_id}),
+            params: scope.job_params(row_id),
             run_at: None,
             request_id: Some(format!("qq-sticker:{row_id}")),
         },
@@ -189,16 +228,23 @@ async fn queue(app: &App, user: &User, row_id: &str) -> Result<()> {
 async fn enqueue_sources(
     app: &App,
     user: &User,
+    scope: Scope,
     event: &str,
     group: &str,
     qq: &str,
     forced: bool,
     items: Vec<Source>,
 ) -> Result<usize> {
-    let pool = store::pool(app).await?;
+    let pool = scope.pool(app).await?;
     let mut queued = 0;
     for (index, source) in items.into_iter().enumerate() {
-        let key = digest(&format!("sticker:{}:{event}:{index}", user.id));
+        let key = match scope {
+            Scope::Group => digest(&format!("sticker:{}:{event}:{index}", user.id)),
+            Scope::OwnerPrivate => format!(
+                "owner-{}",
+                digest(&format!("sticker:{}:{event}:{index}", user.id))
+            ),
+        };
         // This INSERT and its pending-count condition run under one SQLite writer lock.
         sqlx::query("INSERT INTO sticker_inbox(id,user_id,group_id,qq_id,forced,source,created_at,updated_at) SELECT ?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM sticker_inbox WHERE user_id=? AND status='pending')<200 ON CONFLICT(id) DO NOTHING")
             .bind(&key).bind(&user.id).bind(group).bind(qq).bind(forced).bind(app.secrets.encrypt(&serde_json::to_string(&source).unwrap())?).bind(now()).bind(now()).bind(&user.id).execute(pool).await?;
@@ -210,7 +256,7 @@ async fn enqueue_sources(
         .fetch_one(pool)
         .await?;
         if exists {
-            queue(app, user, &key).await?;
+            queue(app, user, &key, scope).await?;
             queued += 1;
         }
     }
@@ -220,6 +266,58 @@ pub async fn receive(
     app: &App,
     user: &User,
     cfg: &Config,
+    event: &str,
+    group: &str,
+    qq: &str,
+    text: &str,
+    message: &Value,
+) -> Result<usize> {
+    if !cfg.enabled || !cfg.groups.iter().any(|g| g == group) {
+        return Ok(0);
+    }
+    receive_scoped(
+        app,
+        user,
+        cfg,
+        Scope::Group,
+        event,
+        group,
+        qq,
+        text,
+        message,
+    )
+    .await
+}
+pub async fn receive_private(
+    app: &App,
+    user: &User,
+    cfg: &Config,
+    event: &str,
+    qq: &str,
+    text: &str,
+    message: &Value,
+) -> Result<usize> {
+    if !cfg.private_enabled || cfg.owner_qq.is_empty() || qq != cfg.owner_qq {
+        return Ok(0);
+    }
+    receive_scoped(
+        app,
+        user,
+        cfg,
+        Scope::OwnerPrivate,
+        event,
+        "",
+        qq,
+        text,
+        message,
+    )
+    .await
+}
+async fn receive_scoped(
+    app: &App,
+    user: &User,
+    cfg: &Config,
+    scope: Scope,
     event: &str,
     group: &str,
     qq: &str,
@@ -252,10 +350,18 @@ pub async fn receive(
             });
         }
     }
-    enqueue_sources(app, user, event, group, qq, forced, images).await
+    enqueue_sources(app, user, scope, event, group, qq, forced, images).await
 }
 pub async fn reconcile(app: &App) -> Result<()> {
-    let pool = store::pool(app).await?;
+    reconcile_scope(app, Scope::OwnerPrivate).await?;
+    // A private-only installation must be recoverable without creating a group DB.
+    if Scope::Group.exists(app) {
+        reconcile_scope(app, Scope::Group).await?;
+    }
+    Ok(())
+}
+async fn reconcile_scope(app: &App, scope: Scope) -> Result<()> {
+    let pool = scope.pool(app).await?;
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT id,user_id FROM sticker_inbox WHERE status='pending' ORDER BY created_at LIMIT 500",
     )
@@ -271,7 +377,7 @@ pub async fn reconcile(app: &App) -> Result<()> {
                 sqlx::query("UPDATE sticker_inbox SET status='failed',reason='任务中断或已取消，可手动重试',updated_at=? WHERE id=? AND user_id=? AND status='pending'")
                     .bind(now()).bind(&id).bind(&uid).execute(pool).await?;
             } else {
-                queue(app, &user, &id).await?;
+                queue(app, &user, &id, scope).await?;
             }
         }
     }
@@ -282,9 +388,16 @@ pub async fn reconcile(app: &App) -> Result<()> {
         .await?;
     Ok(())
 }
-async fn status(app: &App, user: &User, row: &Inbox, state: &str, reason: &str) -> Result<()> {
+async fn status(
+    app: &App,
+    user: &User,
+    scope: Scope,
+    row: &Inbox,
+    state: &str,
+    reason: &str,
+) -> Result<()> {
     sqlx::query("UPDATE sticker_inbox SET status=?,reason=?,updated_at=?,source=CASE WHEN ? IN ('saved','skipped','rejected','expanded') THEN '' ELSE source END WHERE id=? AND user_id=? AND status NOT IN ('saved','skipped','rejected','expanded')")
-        .bind(state).bind(reason).bind(now()).bind(state).bind(&row.id).bind(&user.id).execute(store::pool(app).await?).await?;
+        .bind(state).bind(reason).bind(now()).bind(state).bind(&row.id).bind(&user.id).execute(scope.pool(app).await?).await?;
     Ok(())
 }
 async fn onebot(app: &App, cfg: &Config, action: &str, body: Value) -> Result<Value> {
@@ -307,7 +420,7 @@ async fn onebot(app: &App, cfg: &Config, action: &str, body: Value) -> Result<Va
     }
     Ok(data["data"].clone())
 }
-async fn download(app: &App, cfg: &Config, source: &Source) -> Result<Vec<u8>> {
+pub(crate) async fn download(app: &App, cfg: &Config, source: &Source) -> Result<Vec<u8>> {
     let mut url = source.url.clone();
     if url.is_empty() {
         if source.file.starts_with("https://") || source.file.starts_with("http://") {
@@ -439,20 +552,24 @@ pub async fn process(
     params: &Value,
     cancel: &CancellationToken,
 ) -> Result<Value> {
+    let scope: Scope =
+        serde_json::from_value(params.get("scope").cloned().unwrap_or(json!("group")))
+            .map_err(|_| invalid("图片收藏来源无效"))?;
     let row: Inbox = sqlx::query_as("SELECT * FROM sticker_inbox WHERE id=? AND user_id=?")
         .bind(params["id"].as_str().unwrap_or(""))
         .bind(&user.id)
-        .fetch_optional(store::pool(app).await?)
+        .fetch_optional(scope.pool(app).await?)
         .await?
         .ok_or(Error::NotFound)?;
     if !["pending", "failed"].contains(&row.status.as_str()) {
         return Ok(json!({"status":row.status}));
     }
-    let result = tokio::select! {_=cancel.cancelled()=>Err(Error::Cancelled),r=process_inner(app,user,&row,cancel)=>r};
+    let result = tokio::select! {_=cancel.cancelled()=>Err(Error::Cancelled),r=process_inner(app,user,scope,&row,cancel)=>r};
     if let Err(e) = &result {
         status(
             app,
             user,
+            scope,
             &row,
             "failed",
             &match e {
@@ -467,22 +584,42 @@ pub async fn process(
 async fn process_inner(
     app: &App,
     user: &User,
+    scope: Scope,
     row: &Inbox,
     cancel: &CancellationToken,
 ) -> Result<Value> {
     let cfg = config(app, user).await?;
-    let cfg = cfg.for_group(&row.group_id).unwrap_or_else(|| {
-        let mut c = cfg.clone();
-        c.enabled = false;
-        c
-    });
-    if !cfg.enabled
+    let cfg = match scope {
+        Scope::Group => cfg.for_group(&row.group_id).unwrap_or_else(|| {
+            let mut c = cfg.clone();
+            c.enabled = false;
+            c
+        }),
+        Scope::OwnerPrivate => cfg,
+    };
+    let authorized = match scope {
+        Scope::Group => cfg.enabled && cfg.groups.contains(&row.group_id),
+        Scope::OwnerPrivate => {
+            cfg.private_enabled
+                && !cfg.owner_qq.is_empty()
+                && row.qq_id == cfg.owner_qq
+                && row.group_id.is_empty()
+        }
+    };
+    if !authorized
         || !cfg.stickers.enabled
-        || !cfg.groups.contains(&row.group_id)
         || (row.forced && row.qq_id != cfg.owner_qq)
         || (!row.forced && !cfg.stickers.auto_review)
     {
-        status(app, user, row, "skipped", "收集已关闭或消息不在授权范围").await?;
+        status(
+            app,
+            user,
+            scope,
+            row,
+            "skipped",
+            "收集已关闭或消息不在授权范围",
+        )
+        .await?;
         return Ok(json!({"skipped":true}));
     }
     let source: Source = serde_json::from_str(&app.secrets.decrypt(&row.source)?)
@@ -492,8 +629,19 @@ async fn process_inner(
             return Err(Error::Forbidden);
         }
         let data = onebot(app, &cfg, "get_msg", json!({"message_id":reply})).await?;
-        if super::numeric_id(&data["group_id"]).as_deref() != Some(&row.group_id) {
-            return Err(invalid("只能收藏当前群内被回复的图片"));
+        let same_context = match scope {
+            Scope::Group => super::numeric_id(&data["group_id"]).as_deref() == Some(&row.group_id),
+            Scope::OwnerPrivate => {
+                data["message_type"] == "private"
+                    && super::numeric_id(&data["group_id"]).is_none()
+                    && super::numeric_id(&data["sender"]["user_id"])
+                        .or_else(|| super::numeric_id(&data["user_id"]))
+                        .as_deref()
+                        == Some(&row.qq_id)
+            }
+        };
+        if !same_context {
+            return Err(invalid("只能收藏当前会话内被回复的图片"));
         }
         let images = sources(&data["message"]);
         if images.is_empty() {
@@ -502,6 +650,7 @@ async fn process_inner(
         let count = enqueue_sources(
             app,
             user,
+            scope,
             &format!("reply:{}", row.id),
             &row.group_id,
             &row.qq_id,
@@ -509,14 +658,22 @@ async fn process_inner(
             images,
         )
         .await?;
-        status(app, user, row, "expanded", "已找到引用的图片，正在收藏").await?;
+        status(
+            app,
+            user,
+            scope,
+            row,
+            "expanded",
+            "已找到引用的图片，正在收藏",
+        )
+        .await?;
         return Ok(json!({"queued":count}));
     }
     let bytes = download(app, &cfg, &source).await?;
     let picture = tokio::task::spawn_blocking(move || prepare(bytes))
         .await
         .map_err(|e| Error::Internal(e.into()))??;
-    let pool = store::pool(app).await?;
+    let pool = scope.pool(app).await?;
     sqlx::query("UPDATE sticker_inbox SET content_hash=? WHERE id=? AND user_id=?")
         .bind(&picture.hash)
         .bind(&row.id)
@@ -548,7 +705,15 @@ async fn process_inner(
     } else {
         let rejected:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sticker_inbox WHERE user_id=? AND content_hash=? AND status='rejected' AND updated_at>?)").bind(&user.id).bind(&picture.hash).bind(now()-86400).fetch_one(pool).await?;
         if rejected {
-            status(app, user, row, "rejected", "相同图片在24小时内未被模型选中").await?;
+            status(
+                app,
+                user,
+                scope,
+                row,
+                "rejected",
+                "相同图片在24小时内未被模型选中",
+            )
+            .await?;
             return Ok(json!({"collected":false}));
         }
         let charged=sqlx::query("INSERT INTO sticker_review_limits(user_id,hour,count) VALUES(?,?,1) ON CONFLICT(user_id,hour) DO UPDATE SET count=count+1 WHERE count<?")
@@ -557,6 +722,7 @@ async fn process_inner(
             status(
                 app,
                 user,
+                scope,
                 row,
                 "skipped",
                 "本小时看图额度已用完；主人仍可命令收藏",
@@ -582,20 +748,21 @@ async fn process_inner(
         )?
     };
     if !judgment.collect || judgment.confidence < 0.75 {
-        status(app, user, row, "rejected", &judgment.reason).await?;
+        status(app, user, scope, row, "rejected", &judgment.reason).await?;
         return Ok(json!({"collected":false}));
     }
-    save_picture(app, user, row, &cfg.stickers, &picture, &judgment).await
+    save_picture(app, user, scope, row, &cfg.stickers, &picture, &judgment).await
 }
 async fn save_picture(
     app: &App,
     user: &User,
+    scope: Scope,
     row: &Inbox,
     settings: &Settings,
     p: &Picture,
     d: &Decision,
 ) -> Result<Value> {
-    let pool = store::pool(app).await?;
+    let pool = scope.pool(app).await?;
     let mut tx = pool.begin().await?;
     // Acquire the writer before dedupe and quota checks: multiple workers cannot oversubscribe.
     sqlx::query("UPDATE sticker_inbox SET updated_at=? WHERE id=? AND user_id=?")
@@ -631,7 +798,10 @@ async fn save_picture(
     let sid = existing
         .as_ref()
         .map(|(id, _)| id.clone())
-        .unwrap_or_else(id);
+        .unwrap_or_else(|| match scope {
+            Scope::Group => id(),
+            Scope::OwnerPrivate => format!("owner-{}", id()),
+        });
     if existing
         .as_ref()
         .is_some_and(|(_, deleted)| deleted.is_none())
@@ -660,11 +830,57 @@ async fn save_picture(
     Ok(json!({"collected":true,"id":sid}))
 }
 
+fn reply_scope(cfg: &Config, group: Option<&str>) -> Option<Scope> {
+    match group {
+        None if cfg.private_enabled && !cfg.owner_qq.is_empty() => Some(Scope::OwnerPrivate),
+        Some(group) if cfg.for_group(group).is_some_and(|c| c.enabled) => Some(Scope::Group),
+        _ => None,
+    }
+}
+/// Only metadata from this destination is offered to the model. Private pictures never
+/// become group candidates, and one group's pictures are not offered to another group.
+pub async fn reply_candidates(app: &App, user: &User, group: Option<&str>) -> Result<Vec<Value>> {
+    let cfg = config(app, user).await?;
+    let Some(scope) = reply_scope(&cfg, group) else {
+        return Ok(vec![]);
+    };
+    let rows: Vec<(String, String, sqlx::types::Json<Vec<String>>)> = sqlx::query_as(
+        "SELECT id,title,tags FROM stickers WHERE user_id=? AND group_id=? AND deleted_at IS NULL AND LENGTH(original)>0 AND LENGTH(original)<=? ORDER BY favorite DESC,updated_at DESC,id DESC LIMIT 40"
+    ).bind(&user.id).bind(group.unwrap_or("")).bind(MAX_IMAGE as i64).fetch_all(scope.pool(app).await?).await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, title, tags)| json!({"id":id,"title":title,"tags":tags}))
+        .collect())
+}
+/// Recheck authorization and deletion immediately before sending; model output is
+/// never accepted as an image URL or filesystem path.
+pub async fn reply_image(app: &App, user: &User, group: Option<&str>, id: &str) -> Result<Vec<u8>> {
+    let cfg = config(app, user).await?;
+    let scope = reply_scope(&cfg, group).ok_or(Error::NotFound)?;
+    if Scope::for_id(id) != scope {
+        return Err(Error::NotFound);
+    }
+    let bytes: Vec<u8> = sqlx::query_scalar(
+        "SELECT original FROM stickers WHERE id=? AND user_id=? AND group_id=? AND deleted_at IS NULL AND LENGTH(original)>0 AND LENGTH(original)<=?"
+    ).bind(id).bind(&user.id).bind(group.unwrap_or("")).bind(MAX_IMAGE as i64).fetch_optional(scope.pool(app).await?).await?.ok_or(Error::NotFound)?;
+    if !matches!(
+        ::image::guess_format(&bytes),
+        Ok(::image::ImageFormat::Png
+            | ::image::ImageFormat::Jpeg
+            | ::image::ImageFormat::Gif
+            | ::image::ImageFormat::WebP)
+    ) {
+        return Err(invalid("收藏图片格式无效"));
+    }
+    Ok(bytes)
+}
+
 #[derive(Default, Deserialize)]
 pub struct ListQuery {
     pub q: Option<String>,
     pub favorite: Option<bool>,
     pub page: Option<i64>,
+    pub scope: Option<Scope>,
 }
 pub async fn list(
     State(app): State<App>,
@@ -672,7 +888,6 @@ pub async fn list(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>> {
     let cfg = config(&app, &user).await?;
-    let pool = store::pool(&app).await?;
     let query =
         q.q.unwrap_or_default()
             .chars()
@@ -681,30 +896,73 @@ pub async fn list(
     let fav = q.favorite.unwrap_or(false);
     let page = q.page.unwrap_or(1).clamp(1, 10000);
     let filter = "user_id=? AND deleted_at IS NULL AND (?=0 OR favorite=1) AND (?='' OR INSTR(LOWER(title||' '||tags||' '||reason),LOWER(?))>0)";
-    let rows:Vec<Sticker>=sqlx::query_as(&format!("SELECT {FIELDS} FROM stickers WHERE {filter} ORDER BY created_at DESC,id DESC LIMIT 40 OFFSET ?")).bind(&user.id).bind(fav).bind(&query).bind(&query).bind((page-1)*40).fetch_all(pool).await?;
-    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM stickers WHERE {filter}"))
+    let mut rows = Vec::new();
+    let (mut total, mut count, mut size, mut favorites, mut pending, mut failed) =
+        (0i64, 0i64, 0i64, 0i64, 0i64, 0i64);
+    let mut recent = Vec::new();
+    for scope in [Scope::OwnerPrivate, Scope::Group] {
+        if !scope.exists(&app) {
+            continue;
+        }
+        if q.scope.is_some_and(|selected| selected != scope) {
+            continue;
+        }
+        let pool = scope.pool(&app).await?;
+        let mut items: Vec<Sticker> = sqlx::query_as(&format!(
+            "SELECT {FIELDS} FROM stickers WHERE {filter} ORDER BY created_at DESC,id DESC LIMIT ?"
+        ))
         .bind(&user.id)
         .bind(fav)
         .bind(&query)
         .bind(&query)
+        .bind(page * 40)
+        .fetch_all(pool)
+        .await?;
+        for item in &mut items {
+            item.scope = scope;
+        }
+        rows.extend(items);
+        total +=
+            sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM stickers WHERE {filter}"))
+                .bind(&user.id)
+                .bind(fav)
+                .bind(&query)
+                .bind(&query)
+                .fetch_one(pool)
+                .await?;
+        let (scope_count,scope_size,scope_favorites):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COALESCE(SUM(byte_size+LENGTH(thumbnail)),0),COALESCE(SUM(favorite),0) FROM stickers WHERE user_id=? AND deleted_at IS NULL").bind(&user.id).fetch_one(pool).await?;
+        count += scope_count;
+        size += scope_size;
+        favorites += scope_favorites;
+        pending += sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sticker_inbox WHERE user_id=? AND status='pending'",
+        )
+        .bind(&user.id)
         .fetch_one(pool)
         .await?;
-    let (count,size,favorites):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COALESCE(SUM(byte_size+LENGTH(thumbnail)),0),COALESCE(SUM(favorite),0) FROM stickers WHERE user_id=? AND deleted_at IS NULL").bind(&user.id).fetch_one(pool).await?;
-    let pending: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sticker_inbox WHERE user_id=? AND status='pending'",
-    )
-    .bind(&user.id)
-    .fetch_one(pool)
-    .await?;
-    let failed: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sticker_inbox WHERE user_id=? AND status='failed'",
-    )
-    .bind(&user.id)
-    .fetch_one(pool)
-    .await?;
-    let recent:Vec<(String,String,i64)>=sqlx::query_as("SELECT status,reason,updated_at FROM sticker_inbox WHERE user_id=? AND status<>'pending' ORDER BY updated_at DESC LIMIT 8").bind(&user.id).fetch_all(pool).await?;
+        failed += sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sticker_inbox WHERE user_id=? AND status='failed'",
+        )
+        .bind(&user.id)
+        .fetch_one(pool)
+        .await?;
+        let entries:Vec<(String,String,i64)>=sqlx::query_as("SELECT status,reason,updated_at FROM sticker_inbox WHERE user_id=? AND status<>'pending' ORDER BY updated_at DESC LIMIT 8").bind(&user.id).fetch_all(pool).await?;
+        recent.extend(entries.into_iter().map(|(status,reason,time)|json!({"status":status,"reason":reason,"time":time,"scope":scope})));
+    }
+    rows.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    let rows: Vec<_> = rows
+        .into_iter()
+        .skip(((page - 1) * 40) as usize)
+        .take(40)
+        .collect();
+    recent.sort_by_key(|entry| std::cmp::Reverse(entry["time"].as_i64().unwrap_or(0)));
+    recent.truncate(8);
     Ok(ok(
-        json!({"items":rows,"total":total,"page":page,"stats":{"count":count,"bytes":size,"favorites":favorites,"pending":pending,"failed":failed},"settings":cfg.stickers,"qq_enabled":cfg.enabled,"recent":recent.into_iter().map(|(status,reason,time)|json!({"status":status,"reason":reason,"time":time})).collect::<Vec<_>>()}),
+        json!({"items":rows,"total":total,"page":page,"stats":{"count":count,"bytes":size,"favorites":favorites,"pending":pending,"failed":failed},"settings":cfg.stickers,"qq_enabled":cfg.enabled,"private_enabled":cfg.private_enabled,"recent":recent}),
     ))
 }
 pub async fn save_settings(
@@ -734,6 +992,7 @@ pub async fn update(
     Path(id): Path<String>,
     Json(input): Json<Update>,
 ) -> Result<Json<Value>> {
+    let pool = Scope::for_id(&id).pool(&app).await?;
     if let Some(title) = &input.title {
         validate_labels(title, &[])?;
     }
@@ -741,7 +1000,7 @@ pub async fn update(
         validate_labels("标签", tags)?;
     }
     let changed=sqlx::query("UPDATE stickers SET title=COALESCE(?,title),tags=COALESCE(?,tags),favorite=COALESCE(?,favorite),updated_at=? WHERE id=? AND user_id=? AND deleted_at IS NULL")
-        .bind(input.title.map(|s|s.trim().to_owned())).bind(input.tags.map(|v|json!(v).to_string())).bind(input.favorite).bind(now()).bind(id).bind(&user.id).execute(store::pool(&app).await?).await?.rows_affected();
+        .bind(input.title.map(|s|s.trim().to_owned())).bind(input.tags.map(|v|json!(v).to_string())).bind(input.favorite).bind(now()).bind(id).bind(&user.id).execute(pool).await?.rows_affected();
     if changed == 0 {
         return Err(Error::NotFound);
     }
@@ -752,7 +1011,8 @@ pub async fn delete(
     user: User,
     Path(id): Path<String>,
 ) -> Result<Json<Value>> {
-    let changed=sqlx::query("UPDATE stickers SET deleted_at=?,original=NULL,thumbnail=NULL WHERE id=? AND user_id=? AND deleted_at IS NULL").bind(now()).bind(id).bind(&user.id).execute(store::pool(&app).await?).await?.rows_affected();
+    let pool = Scope::for_id(&id).pool(&app).await?;
+    let changed=sqlx::query("UPDATE stickers SET deleted_at=?,original=NULL,thumbnail=NULL WHERE id=? AND user_id=? AND deleted_at IS NULL").bind(now()).bind(id).bind(&user.id).execute(pool).await?.rows_affected();
     if changed == 0 {
         return Err(Error::NotFound);
     }
@@ -769,6 +1029,7 @@ pub async fn image(
     Path(id): Path<String>,
     Query(q): Query<ImageQuery>,
 ) -> Result<Response> {
+    let pool = Scope::for_id(&id).pool(&app).await?;
     let column = if q.thumbnail.unwrap_or(false) {
         "thumbnail"
     } else {
@@ -779,7 +1040,7 @@ pub async fn image(
     ))
     .bind(id)
     .bind(user.id)
-    .fetch_optional(store::pool(&app).await?)
+    .fetch_optional(pool)
     .await?
     .ok_or(Error::NotFound)?;
     let mime = if q.thumbnail.unwrap_or(false) {
@@ -813,30 +1074,35 @@ pub async fn image(
         .into_response())
 }
 pub async fn retry(State(app): State<App>, user: User) -> Result<Json<Value>> {
-    let pool = store::pool(&app).await?;
-    let rows:Vec<String>=sqlx::query_scalar("SELECT id FROM sticker_inbox WHERE user_id=? AND status='failed' ORDER BY created_at DESC LIMIT 100").bind(&user.id).fetch_all(pool).await?;
     let mut queued = 0;
-    for id in &rows {
-        let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND action='qq_sticker' AND json_extract(params,'$.id')=? AND status IN ('queued','running'))").bind(&user.id).bind(id).fetch_one(&app.pool).await?;
-        if active {
+    for scope in [Scope::OwnerPrivate, Scope::Group] {
+        if !scope.exists(&app) {
             continue;
         }
-        let changed=sqlx::query("UPDATE sticker_inbox SET status='pending',reason='',updated_at=? WHERE id=? AND user_id=? AND status='failed'").bind(now()).bind(id).bind(&user.id).execute(pool).await?.rows_affected();
-        if changed == 0 {
-            continue;
+        let pool = scope.pool(&app).await?;
+        let rows:Vec<String>=sqlx::query_scalar("SELECT id FROM sticker_inbox WHERE user_id=? AND status='failed' ORDER BY created_at DESC LIMIT 100").bind(&user.id).fetch_all(pool).await?;
+        for id in &rows {
+            let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE user_id=? AND action='qq_sticker' AND json_extract(params,'$.id')=? AND status IN ('queued','running'))").bind(&user.id).bind(id).fetch_one(&app.pool).await?;
+            if active {
+                continue;
+            }
+            let changed=sqlx::query("UPDATE sticker_inbox SET status='pending',reason='',updated_at=? WHERE id=? AND user_id=? AND status='failed'").bind(now()).bind(id).bind(&user.id).execute(pool).await?.rows_affected();
+            if changed == 0 {
+                continue;
+            }
+            crate::jobs::enqueue(
+                &app,
+                &user,
+                crate::jobs::Input {
+                    action: "qq_sticker".into(),
+                    params: scope.job_params(id),
+                    run_at: None,
+                    request_id: None,
+                },
+            )
+            .await?;
+            queued += 1;
         }
-        crate::jobs::enqueue(
-            &app,
-            &user,
-            crate::jobs::Input {
-                action: "qq_sticker".into(),
-                params: json!({"id":id}),
-                run_at: None,
-                request_id: None,
-            },
-        )
-        .await?;
-        queued += 1;
     }
     Ok(ok(json!({"queued":queued})))
 }

@@ -268,7 +268,8 @@ pub async fn receive_qq(
     }
     let (text, _) = crate::qq::api::text_message(&value["message"], &cfg.bot_qq);
     let text = text.trim();
-    if text.is_empty() {
+    let media = crate::qq::media::capture(app, &value["message"])?;
+    if text.is_empty() && media.is_empty() {
         return Ok(json!({"ignored":true}));
     }
     if text.chars().count() > 4000 {
@@ -285,7 +286,23 @@ pub async fn receive_qq(
         })
         .ok_or_else(|| invalid("message_id 必填"))?;
     let key = digest(&format!("private:{}:{}:{mid}", user.id, cfg.bot_qq));
-    sqlx::query("INSERT INTO qq_private_events(id,user_id,content,bot_qq,owner_qq,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING").bind(&key).bind(&user.id).bind(text).bind(&cfg.bot_qq).bind(&cfg.owner_qq).bind(now()).bind(now()).execute(&app.pool).await?;
+    let inserted = sqlx::query("INSERT INTO qq_private_events(id,user_id,content,media,bot_qq,owner_qq,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING").bind(&key).bind(&user.id).bind(text).bind(media).bind(&cfg.bot_qq).bind(&cfg.owner_qq).bind(now()).bind(now()).execute(&app.pool).await?.rows_affected();
+    // Collecting is independent from understanding. A collection failure must not
+    // discard the owner's chat, and private source data must stay in the main DB.
+    if inserted == 1
+        && let Err(error) = crate::qq::stickers::receive_private(
+            app,
+            user,
+            cfg,
+            &key,
+            &cfg.owner_qq,
+            text,
+            &value["message"],
+        )
+        .await
+    {
+        tracing::warn!(kind = ?std::mem::discriminant(&error), "QQ private image collection could not be queued");
+    }
     crate::jobs::enqueue(
         app,
         user,
@@ -307,30 +324,92 @@ pub async fn process_qq(
 ) -> Result<Value> {
     let key = params["id"].as_str().unwrap_or("");
     let q = crate::qq::config(app, user).await?;
-    let row:Option<(String,String,String)>=sqlx::query_as("UPDATE qq_private_events SET status='processing',updated_at=? WHERE id=? AND user_id=? AND status='pending' RETURNING content,bot_qq,owner_qq").bind(now()).bind(key).bind(&user.id).fetch_optional(&app.pool).await?;
-    let Some((text, bot, owner)) = row else {
+    let row:Option<(String,String,String,String)>=sqlx::query_as("UPDATE qq_private_events SET status='processing',updated_at=? WHERE id=? AND user_id=? AND status='pending' RETURNING content,bot_qq,owner_qq,media").bind(now()).bind(key).bind(&user.id).fetch_optional(&app.pool).await?;
+    let Some((text, bot, owner, media)) = row else {
         return Ok(json!({"duplicate":true}));
     };
-    let result=async {
-  if !q.private_enabled||q.owner_qq!=owner||q.bot_qq!=bot{return Err(Error::Forbidden);}
-  let cid=bind_conversation(app,user,"onebot",&owner).await?;
-  sqlx::query("UPDATE conversations SET profile_id=? WHERE id=? AND user_id=?").bind(&q.profile_id).bind(&cid).bind(&user.id).execute(&app.pool).await?;
-  let mut session=crate::chat::prepare(app,user,&cid,crate::chat::Send{message:text,request_id:format!("qq-private:{key}")}).await?;
-  session.profile.system_prompt.push_str(crate::qq::dialogue::prompt(&q.reply_style));
-  let reply_anchor=crate::qq::outreach::anchor(app,user,None).await?;
-  let reply=crate::chat::run(app.clone(),session,None,cancel.clone()).await?;
-  let current=crate::qq::config(app,user).await?;if !current.private_enabled||current.owner_qq!=owner||current.bot_qq!=bot{return Err(Error::Forbidden);}
-  sqlx::query("UPDATE qq_private_events SET status='sending',reply=?,updated_at=? WHERE id=? AND user_id=?").bind(&reply).bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;
-  crate::qq::dialogue::send(app,user,&q,None,None,key,&reply,true,cancel,None).await?;
-  sqlx::query("UPDATE qq_private_events SET status='sent',updated_at=? WHERE id=? AND user_id=?").bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;
-  let latest:Option<String>=sqlx::query_scalar("SELECT id FROM qq_private_events WHERE user_id=? ORDER BY rowid DESC LIMIT 1").bind(&user.id).fetch_optional(&app.pool).await?;
-  if latest.as_deref()==Some(key)&&crate::qq::outreach::anchor(app,user,None).await?==reply_anchor{crate::qq::outreach::schedule_followup(app,user,&q,None,key).await?;}
-  Ok(json!({"sent":true,"conversation_id":cid}))
- }.await;
+    let result = async {
+        if !q.private_enabled || q.owner_qq != owner || q.bot_qq != bot {
+            return Err(Error::Forbidden);
+        }
+        let cid = bind_conversation(app, user, "onebot", &owner).await?;
+        sqlx::query("UPDATE conversations SET profile_id=? WHERE id=? AND user_id=?")
+            .bind(&q.profile_id).bind(&cid).bind(&user.id).execute(&app.pool).await?;
+        let analysis = crate::qq::media::describe(app, user, &q, key, &text, &media, cancel).await?;
+        let (reply, reply_anchor) = if analysis.unreadable_only {
+            // Do not ask a text model to invent a reply to an image it never saw.
+            let reply = format!("收到图片了，但这次没能识别内容。{}", analysis.notice);
+            record_image_failure(app, user, &cid, &analysis.message, &reply).await?;
+            (reply, String::new())
+        } else {
+            let mut session = crate::chat::prepare(app, user, &cid, crate::chat::Send {
+                message: analysis.message,
+                request_id: format!("qq-private:{key}"),
+            }).await?;
+            session.profile.system_prompt.push_str(crate::qq::dialogue::prompt(&q.reply_style));
+            if crate::qq::stickers::owner_command(&text) {
+                session.profile.system_prompt.push_str("\n主人请求收藏图片。收藏由独立任务处理，聊天文本本身不会保存图片；没有得到已保存状态时，不得声称收藏已经完成，可告知在图片与表情页面查看处理结果。");
+            }
+            if !media.is_empty() {
+                if !analysis.notice.is_empty() {
+                    session.profile.system_prompt.push_str(&format!("\n本次图片处理状态需如实告知用户：{}", analysis.notice));
+                }
+            }
+            let reply_anchor = crate::qq::outreach::anchor(app, user, None).await?;
+            (crate::chat::run(app.clone(), session, None, cancel.clone()).await?, reply_anchor)
+        };
+        let current = crate::qq::config(app, user).await?;
+        if !current.private_enabled || current.owner_qq != owner || current.bot_qq != bot {
+            return Err(Error::Forbidden);
+        }
+        sqlx::query("UPDATE qq_private_events SET status='sending',reply=?,updated_at=? WHERE id=? AND user_id=?")
+            .bind(&reply).bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;
+        crate::qq::dialogue::send(app, user, &q, None, None, key, &reply, true, cancel, None).await?;
+        sqlx::query("UPDATE qq_private_events SET status='sent',updated_at=? WHERE id=? AND user_id=?")
+            .bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;
+        let latest: Option<String> = sqlx::query_scalar("SELECT id FROM qq_private_events WHERE user_id=? ORDER BY rowid DESC LIMIT 1")
+            .bind(&user.id).fetch_optional(&app.pool).await?;
+        if !analysis.unreadable_only && latest.as_deref() == Some(key)
+            && crate::qq::outreach::anchor(app, user, None).await? == reply_anchor {
+            crate::qq::outreach::schedule_followup(app, user, &q, None, key).await?;
+        }
+        Ok(json!({"sent":true,"conversation_id":cid}))
+    }.await;
     if result.is_err() {
         sqlx::query("UPDATE qq_private_events SET status=CASE WHEN status='sending' THEN 'unknown' ELSE 'failed' END,updated_at=? WHERE id=? AND user_id=? AND status<>'sent'").bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;
     }
     result
+}
+
+async fn record_image_failure(
+    app: &App,
+    user: &User,
+    cid: &str,
+    input: &str,
+    reply: &str,
+) -> Result<()> {
+    let lease = crate::chat::Lease::acquire(app, user, cid).await?;
+    lease.check().await?;
+    let mut tx = app.pool.begin().await?;
+    for (role, content) in [("user", input), ("assistant", reply)] {
+        sqlx::query(
+            "INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?,?,?,?)",
+        )
+        .bind(cid)
+        .bind(role)
+        .bind(content)
+        .bind(now())
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query("UPDATE conversations SET updated_at=? WHERE id=? AND user_id=?")
+        .bind(now())
+        .bind(cid)
+        .bind(&user.id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    lease.release().await
 }
 pub async fn reconcile(app: &App) -> Result<()> {
     let rows:Vec<(String,String)>=sqlx::query_as("SELECT id,user_id FROM qq_private_events WHERE status='pending' ORDER BY created_at LIMIT 100").fetch_all(&app.pool).await?;
