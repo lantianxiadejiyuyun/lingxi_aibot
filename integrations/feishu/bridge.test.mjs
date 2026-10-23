@@ -4,8 +4,27 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as Lark from '@larksuiteoapi/node-sdk'
-import { Spool, normalize, SDK_VERSION } from './bridge.mjs'
+import { PassThrough } from 'node:stream'
+import { Spool, normalize, observeParent, SDK_VERSION } from './bridge.mjs'
 const message = (text = '你好') => ({ sender: { sender_type: 'user', sender_id: { open_id: 'ou_owner' } }, message: { message_id: 'om_1', chat_id: 'oc_1', chat_type: 'p2p', message_type: 'text', content: JSON.stringify({ text }), create_time: String(Date.now()) } })
+
+test('embedded SDK shuts down when its Rust parent closes stdin', async () => {
+  const input = new PassThrough()
+  let stops = 0
+  const ended = new Promise(resolve => observeParent(input, () => { stops++; resolve() }))
+  input.end()
+  await ended
+  assert.equal(stops, 1)
+})
+
+test('embedded SDK shuts down if its parent pipe errors', async () => {
+  const input = new PassThrough()
+  let stops = 0
+  const failed = new Promise(resolve => observeParent(input, () => { stops++; resolve() }))
+  input.destroy(new Error('parent closed'))
+  await failed
+  assert.equal(stops, 1)
+})
 test('only private human messages are normalized; images are explicitly unsupported', () => {
   const d = message()
   assert.equal(normalize(d, 'key').text, '你好')

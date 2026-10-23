@@ -11,23 +11,24 @@ Rust 后端 + Vue 3 个人 AI 工作空间。整理对话、待办、日程、�
 - **图片与表情**：模型实际看图后挑选喜欢的图片，或由主人发图 / 回复图片命令收藏；支持去重、标签、搜索和原图下载。
 - **主动陪伴**：结合人设、主库记忆和近况，按个人时区与免打扰安排主动分享；支持站内、QQ 私聊、AstrBot、飞书和 Server酱。
 - **B 站书房**：按兴趣发现视频，读取原始字幕并形成心得；支持扫码登录、定时阅读、字幕定位、阅读小记和主动陪伴引用。详见 [B 站书房](docs/B站书房.md)。
-- **飞书私聊**：官方 Node SDK 长连接、一次性身份绑定、持久收件箱与消息去重；主人的文字对话和记忆归入主库。详见 [飞书私聊](docs/飞书私聊.md)。
-- **部署**：Vue 构建产物嵌入 Rust 可执行文件；核心服务不需要 Node 或 Python。可选飞书桥接使用独立 Node 容器。
+- **飞书私聊**：官方 Node SDK 已内置到应用镜像，随配置自动启动和停止；一次性身份绑定、持久收件箱与消息去重，主人的文字对话和记忆归入主库。详见 [飞书私聊](docs/飞书私聊.md)。
+- **部署**：一个入口管理 Rust/Vue、内置飞书接入、NapCat 和专用向量库。QQ 页面直接打开 NapCat 管理地址；已有外部 NapCat 也可继续使用。
 
 ## 开始使用
 
-按 [v2 部署与迁移](docs/Rust部署与迁移.md) 构建镜像、初始化管理员并启动应用。默认地址是 `http://127.0.0.1:8000`。
+Linux 上使用下面的部署入口，自动生成密钥和首次 NapCat 配置、初始化管理员。默认地址是 `http://127.0.0.1:8000`。Windows 可在 WSL 运行，或按 [v2 部署与迁移](docs/Rust部署与迁移.md) 使用 Docker Compose 命令。
 
 飞牛部署说明见 [fnOS 部署指南](docs/fnOS部署.md)。配置模板为 `.env.docker.example`，不再使用 MySQL 或 Flask 配置。
 
 ```sh
-docker compose -f docker-compose.yml build app
-# 设置 LINGXI_ADMIN_PASSWORD 后执行：
-docker compose -f docker-compose.yml run --rm -e LINGXI_ADMIN_PASSWORD app init --username admin
-docker compose -f docker-compose.yml up -d app
+bash scripts/deploy.sh init --username admin
+bash scripts/deploy.sh up
+bash scripts/deploy.sh status  # 显示服务状态、灵犀与 NapCat 地址
+# 升级前完整备份（短暂停机，完成后恢复原先运行的服务）：
+bash scripts/deploy.sh backup
 ```
 
-登录后先在「设置 → 对话模型」连接自己的模型。在「QQ 群与会话」中逐个添加群，每个群有固定的独立会话，可分别选择模型、人设、回复和人物记忆开关；接入设置管理共用的主人 QQ、机器人 QQ、NapCat / OneBot、嵌入模型及专用向量库。
+登录后先在「设置 → 对话模型」连接自己的模型。在 QQ 页打开 NapCat 管理界面并登录机器人 QQ，再填主人 QQ、机器人 QQ 和回调配置。在「QQ 群与会话」中逐个添加群，每个群有固定的独立会话，可分别选择模型、人设、回复和人物记忆开关；接入设置管理共用的主人 QQ、机器人 QQ、NapCat / OneBot、嵌入模型及专用向量库。统一部署的 OneBot 地址可以在页面直接采用，无需记忆容器 IP。
 
 界面采用粉色 `#EABCDD`、浅粉 `#F0DFEA`、暖白 `#F7F6F5`、淡紫 `#DDD1E9`、雾蓝 `#A4B5D5` 的统一主题。颜色集中在 `web/src/styles/tokens.css`，布局和组件样式分别维护。临时连接失败保留登录信息并提供重连入口；设置分页通过 URL 保留当前栏目。
 

@@ -33,6 +33,8 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/login",post(auth::login))
         .route("/api/v2/logout",post(auth::logout))
         .route("/api/v2/me",get(auth::me).patch(update_me))
+        .route("/api/v2/deployment",get(crate::deployment::view))
+        .route("/api/v2/deployment/napcat/configure",post(crate::deployment::configure_napcat))
         .route("/api/v2/users",get(users).post(create_user))
         .route("/api/v2/tokens",get(tokens).post(create_token))
         .route("/api/v2/tokens/{hash}",axum::routing::delete(revoke_token))

@@ -2,30 +2,42 @@
 
 ## 全新安装
 
+Linux / WSL 推荐使用统一入口，自动生成服务密钥和 NapCat 初始配置：
+
+```sh
+bash scripts/deploy.sh init --username admin
+bash scripts/deploy.sh up
+bash scripts/deploy.sh status
+```
+
+需要局域网访问时在首次 `init` 加 `--host 你的局域网IP`。已有 `.env` 时脚本不会覆盖；使用 `up` 启动已有部署。`backup` 会短暂停止写入，备份应用、QQ 登录及向量数据并恢复服务。飞牛预构建镜像流程见 [fnOS 部署](fnOS部署.md)。
+
+手动部署也可继续使用以下命令。先配置 `.env.docker.example` 中的地址和随机密钥；外部 NapCat 用户将 `COMPOSE_PROFILES` 留空、`LINGXI_NAPCAT_MANAGED=false`。
+
 ```sh
 docker compose -f docker-compose.yml build app
 # 在当前终端设置一个至少12字符的强密码，不写入镜像。
 export LINGXI_ADMIN_PASSWORD='替换为你的强密码'
 docker compose -f docker-compose.yml run --rm -e LINGXI_ADMIN_PASSWORD app init --username admin
 unset LINGXI_ADMIN_PASSWORD
-docker compose -f docker-compose.yml up -d app
+docker compose -f docker-compose.yml up -d --wait
 ```
 
 PowerShell 对应的环境变量命令是 `$env:LINGXI_ADMIN_PASSWORD='你的强密码'`，使用后 `Remove-Item Env:LINGXI_ADMIN_PASSWORD`。
 
 打开 `http://127.0.0.1:8000`，登录后在「设置 → 对话模型」配置服务地址、协议、模型 ID、密钥和真实上下文容量。API Base URL 包含 `/v1` 等服务前缀。
 
-默认仅绑定本机。需要局域网访问时设置 `LINGXI_BIND_HOST`；公网部署应通过 HTTPS 反向代理。运行数据保存在独立命名卷 `lingxi_rust_data`，不会复用 v1 MySQL 卷。首次切换可设置 `LINGXI_PORT=8001` 与旧版并行检查。
+默认仅绑定本机。需要局域网访问时同步设置 `LINGXI_BIND_HOST`、`LINGXI_PUBLIC_URL`、`NAPCAT_BIND_IP` 与 `LINGXI_NAPCAT_WEBUI_URL`；公网部署应通过 HTTPS 反向代理，并为管理入口设置访问限制。运行数据保存在独立命名卷 `lingxi_rust_data`，不会复用 v1 MySQL 卷。首次切换可设置 `LINGXI_PORT=8001` 与旧版并行检查。
 
 Compose 从根目录 `.env` 读取端口等变量，可复制 `.env.docker.example` 后修改。原生 Rust 进程不自动加载 `.env`，需通过终端或进程管理器传入 `.env.example` 中的环境变量。模型、通知和 QQ 的密钥在登录后的设置页保存。旧版的 `MYSQL_*`、`SECRET_KEY`、`FLASK_*` 配置不适用于 v2。
 
-默认服务内置 Worker。可用 `serve --no-worker` 和单独的 `worker` 命令拆分；Compose 提供 `worker` profile，多个 Worker 使用同一本地 SQLite 的租约领取任务。
+默认服务内置 Worker 和飞书官方 SDK 管理器。开启飞书私聊后自动建立长连接，不需要另外创建桥接 Token 或容器。可用 `serve --no-worker` 和单独的 `worker` 命令拆分任务执行；Compose 提供 `worker` profile，多个 Worker 使用同一本地 SQLite 的租约领取任务，独立 Worker 不启动飞书 SDK。
 
 ## QQ 群与主人记忆
 
-1. 准备 NapCat 或其他 OneBot v11 实现，登录机器人 QQ，启用正向 HTTP API 和 HTTP 客户端事件上报。
-2. 启动专用向量库：`docker compose -f docker-compose.yml --profile qq up -d qdrant`。默认不向宿主机发布端口，容器内地址为 `http://qdrant:6333`。可通过 `LINGXI_QDRANT_API_KEY` 配置访问密钥。
-3. 私有 NapCat、Qdrant 或嵌入服务需要将 `LINGXI_ALLOW_PRIVATE_NETWORK=true` 写入部署环境，再重建应用容器。此选项允许已认证用户配置内网服务地址，仅在可信用户环境开启。
+1. 在 QQ 页直接打开部署提供的 NapCat 地址，登录机器人 QQ；也可使用已有 NapCat 或其他 OneBot v11 实现。启用正向 HTTP API 和 HTTP 客户端事件上报。新部署脚本会创建 HTTP API 初始配置，回调仍按下面步骤配置。
+2. 专用向量库随默认 Compose 启动，不向宿主机发布端口，容器内地址为 `http://qdrant:6333`。`LINGXI_QDRANT_API_KEY` 使用部署生成的随机密钥。
+3. 统一 Compose 默认开启 `LINGXI_ALLOW_PRIVATE_NETWORK=true`，使应用可访问容器内的 NapCat、Qdrant 和嵌入服务。此选项允许已认证用户配置内网服务地址，仅用于可信用户环境；原生 Rust 默认仍关闭。
 4. 进入「QQ 群与会话」，逐个添加群号。每个群对应一个固定会话，可设置群名称、模型、群人设和独立开关；再到「接入设置」填写共用的主人 QQ、机器人 QQ、默认模型、OneBot HTTP 地址、专用 Qdrant 地址及嵌入模型接口。
 
 旧群白名单会自动获得独立会话。移除群停止接收和回复，不删除历史；重新添加同一群会沿用会话 ID。群会话页显示最近 100 条群消息，主人发言从主库读取、成员发言从独立群库读取。同群消息串行处理，已发送的机器人回复进入后续上下文，各群不混用历史或私人记忆。
@@ -131,7 +143,7 @@ python scripts/export_legacy.py --output legacy-export.json
 | QQ 图片与表情收藏 | 看图模型挑选或主人命令收藏，独立收藏表和 Vue 收藏页 |
 | 主动陪伴 | Rust 调度、时区与免打扰、日程避让、限额与互动退避、B 站搜索分享、活动记录 |
 | QQ / AstrBot 私聊 | 主人 QQ 文字对话；AstrBot 插件兼容 v2 绑定、对话及主动投递 |
-| 飞书 / Server酱 | 主动消息支持 Webhook、飞书应用、SendKey；飞书入站原生事件协议仍需适配 |
+| 飞书 / Server酱 | 内置飞书官方 SDK 长连接双向文字私聊；主动消息支持 Webhook、飞书应用和 SendKey |
 | 原生 Python 技能 | 改为审核后启用的声明式内置工具步骤，不执行任意 Python |
 | 原生多 Agent 研究编排、复杂媒体工作流 | 尚未迁移到 v2 |
 | 重复日程实例展开、周月报和自动写回日历 | 尚未达到 v1 功能覆盖 |

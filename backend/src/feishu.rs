@@ -60,11 +60,16 @@ impl FromRequestParts<App> for Bridge {
             .and_then(|s| s.strip_prefix("Bearer "))
             .filter(|s| s.len() == 64)
             .ok_or(Error::Unauthorized)?;
-        let uid: Option<String> =
-            sqlx::query_scalar("SELECT user_id FROM feishu_state WHERE token_hash=?")
-                .bind(digest(token))
-                .fetch_optional(&app.pool)
-                .await?;
+        // Managed credentials never replace the explicitly issued external token.
+        // They are valid only while embedded mode and this account are enabled.
+        let uid: Option<String> = sqlx::query_scalar(
+            "SELECT user_id FROM feishu_state WHERE token_hash=? OR (? AND enabled=1 AND managed_token_hash=?)",
+        )
+        .bind(digest(token))
+        .bind(app.feishu_embedded)
+        .bind(digest(token))
+        .fetch_optional(&app.pool)
+        .await?;
         Ok(Self(
             auth::user(app, &uid.ok_or(Error::Unauthorized)?).await?,
         ))
@@ -75,9 +80,18 @@ pub async fn view(State(app): State<App>, user: User) -> Result<Json<Value>> {
     let (enabled,owner,chat,binding,heartbeat,state,version,spool,profile,cid):(bool,String,String,String,Option<i64>,String,String,i64,Option<String>,Option<String>)=sqlx::query_as("SELECT enabled,owner_id,chat_id,binding_key,heartbeat_at,connection_state,sdk_version,spool_count,profile_id,conversation_id FROM feishu_state WHERE user_id=?").bind(&user.id).fetch_one(&app.pool).await?;
     let c = credentials(&app, &user).await.ok();
     let bound = !owner.is_empty() && c.as_ref().is_some_and(|c| app_key(c) == binding);
+    let visible_state = if !enabled {
+        "disabled"
+    } else if heartbeat.is_some_and(|t| now() - t < 50)
+        || (app.feishu_embedded && state == "failed")
+    {
+        state.as_str()
+    } else {
+        "offline"
+    };
     let recent:Vec<(i64,String,String,i64)>=sqlx::query_as("SELECT id,status,error,created_at FROM feishu_events WHERE user_id=? ORDER BY id DESC LIMIT 10").bind(&user.id).fetch_all(&app.pool).await?;
     Ok(ok(
-        json!({"enabled":enabled,"configured":c.is_some(),"bound":bound,"owner_id":if bound {&owner}else{""},"chat_id":if bound {&chat}else{""},"conversation_id":cid,"profile_id":profile,"state":if heartbeat.is_some_and(|t|now()-t<50) {state.as_str()}else{"offline"},"heartbeat_at":heartbeat,"sdk_version":version,"spool_count":spool,"events":recent.into_iter().map(|(id,status,error,created_at)|json!({"id":id,"status":status,"error":error,"created_at":created_at})).collect::<Vec<_>>()}),
+        json!({"enabled":enabled,"managed":app.feishu_embedded,"configured":c.is_some(),"bound":bound,"owner_id":if bound {&owner}else{""},"chat_id":if bound {&chat}else{""},"conversation_id":cid,"profile_id":profile,"state":visible_state,"heartbeat_at":heartbeat,"sdk_version":version,"spool_count":spool,"events":recent.into_iter().map(|(id,status,error,created_at)|json!({"id":id,"status":status,"error":error,"created_at":created_at})).collect::<Vec<_>>()}),
     ))
 }
 #[derive(Deserialize)]
@@ -730,6 +744,101 @@ mod tests {
         assert_eq!(
             f.request("/api/v2/feishu/bridge/config", &token).await.0,
             StatusCode::UNAUTHORIZED
+        );
+    }
+    #[tokio::test]
+    async fn managed_tokens_are_separate_scoped_and_follow_enabled_state() {
+        let mut f = Fixture::new().await;
+        let external = issue_bridge(State(f.app.clone()), f.user.clone())
+            .await
+            .unwrap()
+            .0["data"]["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let managed = "c".repeat(64);
+        sqlx::query("UPDATE feishu_state SET managed_token_hash=? WHERE user_id=?")
+            .bind(digest(&managed))
+            .bind(&f.user.id)
+            .execute(&f.app.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            f.request("/api/v2/feishu/bridge/config", &managed).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        f.app.feishu_embedded = true;
+        assert_eq!(
+            f.request("/api/v2/feishu/bridge/config", &managed).await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            f.request("/api/v2/memories", &managed).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            f.request("/api/v2/feishu/bridge/config", &external).await.0,
+            StatusCode::OK
+        );
+        let _ = issue_bridge(State(f.app.clone()), f.user.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            f.request("/api/v2/feishu/bridge/config", &managed).await.0,
+            StatusCode::OK
+        );
+
+        let other = auth::create_user(
+            &f.app,
+            "another-owner",
+            "feishu-other-password".into(),
+            false,
+        )
+        .await
+        .unwrap();
+        ensure(&f.app, &other).await.unwrap();
+        let other_token = issue_bridge(State(f.app.clone()), other.clone())
+            .await
+            .unwrap()
+            .0["data"]["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (_, other_config) = f
+            .request("/api/v2/feishu/bridge/config", &other_token)
+            .await;
+        assert_eq!(other_config["data"]["enabled"], false);
+        let (_, own_config) = f.request("/api/v2/feishu/bridge/config", &managed).await;
+        assert_eq!(own_config["data"]["app_id"], "cli_test");
+        let normal = auth::issue_token(&f.app, &f.user, "test", 3600)
+            .await
+            .unwrap();
+        let (_, status) = f.request("/api/v2/feishu", &normal).await;
+        assert_eq!(status["data"]["managed"], true);
+        assert!(!status.to_string().contains(&managed));
+
+        sqlx::query("UPDATE feishu_state SET enabled=0 WHERE user_id=?")
+            .bind(&f.user.id)
+            .execute(&f.app.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            f.request("/api/v2/feishu/bridge/config", &managed).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        sqlx::query("UPDATE feishu_state SET enabled=1 WHERE user_id=?")
+            .bind(&f.user.id)
+            .execute(&f.app.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE users SET disabled=1 WHERE id=?")
+            .bind(&f.user.id)
+            .execute(&f.app.pool)
+            .await
+            .unwrap();
+        assert_ne!(
+            f.request("/api/v2/feishu/bridge/config", &managed).await.0,
+            StatusCode::OK
         );
     }
     #[tokio::test]

@@ -32,7 +32,7 @@ flowchart LR
 | 陪伴 | `companion.rs`、`companion/` | 时段与频率判断、模型决策、投递状态、通知渠道、QQ / AstrBot 私聊 |
 | 数据迁移 | `migration.rs`、`migrations/` | 版本化 SQL 和 v1 导入 |
 
-Vue 在构建时编译为静态资源，再嵌入 Rust 可执行文件。生产运行不需要 Node、Python、模板服务器或额外的前端进程。开发时 Vite 代理 Rust API。
+Vue 在构建时编译为静态资源，再嵌入 Rust 可执行文件，不需要额外的前端服务器。统一 Docker 镜像包含 Node 24 与飞书官方 SDK，由 Rust 管理账号对应的 SDK 子进程；未开启飞书时不启动这些子进程。Python 不参与应用运行。开发时 Vite 代理 Rust API。
 
 ## 主库记忆
 

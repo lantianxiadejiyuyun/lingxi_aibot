@@ -27,3 +27,13 @@ it('refreshes connection state without discarding unsaved settings',async()=>{
  expect(put).toHaveBeenCalledWith('/feishu',{enabled:false,profile_id:null})
  w.unmount();vi.useRealTimers()
 })
+it('shows automatic setup for the bundled SDK and hides manual bridge credentials',async()=>{
+ vi.mocked(api).mockImplementation(async p=>p==='/profiles'?[]:{...initial,managed:true,state:'offline'})
+ const w=mount(FeishuConnect,{global:{stubs:{RouterLink:true}}});await flushPromises()
+ expect(w.text()).toContain('已内置飞书 SDK')
+ expect(w.text()).toContain('内置飞书服务等待连接')
+ expect(w.text()).toContain('无需另行部署或复制桥接密钥')
+ expect(w.text()).not.toContain('部署项目的飞书桥接 Docker 服务')
+ expect(w.findAll('button').some(b=>b.text()==='生成或轮换桥接密钥')).toBe(false)
+ w.unmount()
+})

@@ -4,6 +4,8 @@
 !.env.example
 !.env.docker.example
 data/
+napcat/
+backups/
 venv/
 .venv/
 __pycache__/

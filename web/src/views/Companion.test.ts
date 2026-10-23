@@ -4,12 +4,12 @@ import Companion from './Companion.vue'
 import { api, put } from '../lib/api'
 
 vi.mock('../lib/api', () => ({ api: vi.fn(), put: vi.fn(), requestId: () => 'qa-request', session: { user: {id:'owner'} } }))
-vi.mock('../lib/ui', () => ({ choice: vi.fn(), confirmAction: vi.fn(), date: () => '', field: vi.fn(), notify: vi.fn(), openForm: vi.fn(), run: vi.fn() }))
+vi.mock('../lib/ui', () => ({ choice: vi.fn(), confirmAction: vi.fn(), date: () => '', field: vi.fn(), notify: vi.fn(), openForm: vi.fn(), run: vi.fn(action => action()) }))
 afterEach(() => vi.clearAllMocks())
 function setup() {
  const config={enabled:false,active_start:'09:00',active_end:'22:00',quiet_start:'23:00',quiet_end:'08:00',min_interval_minutes:180,daily_limit:3,chat_cooldown_minutes:45,channels:['inapp'],interests:[],share_bilibili:false,profile_id:null}
  vi.mocked(api).mockImplementation(async path => path === '/profiles' ? [] : path === '/integrations' ? {} : {config,activities:[],timezone:'Asia/Shanghai',state:{next_check_at:100},channels:{inapp:true},astrbot:{bound:false,session:''}})
- return mount(Companion, {global:{stubs:{FeishuConnect:true,RouterLink:{template:'<a><slot /></a>'}}}})
+ return mount(Companion, {global:{stubs:{FeishuConnect:true,NapCatConnect:true,RouterLink:{template:'<a><slot /></a>'}}}})
 }
 it('retains edited settings and displays an error when saving fails', async () => {
  const wrapper=setup();await flushPromises()
@@ -29,5 +29,16 @@ it('does not save or start a check merely by opening the page or changing a swit
  expect(put).not.toHaveBeenCalled()
  expect(vi.mocked(api).mock.calls.map(args=>args[0]).sort()).toEqual(['/companion','/integrations','/profiles'])
  expect(wrapper.text()).toContain('保存后按计划运行，不会立即发消息。')
+ wrapper.unmount()
+})
+it('refreshes NapCat configuration without losing an unsaved companionship draft', async () => {
+ const wrapper=setup();await flushPromises()
+ await wrapper.find('textarea').setValue('摄影，猫咪')
+ await wrapper.find('input[type="time"]').setValue('10:30')
+ wrapper.findComponent({name:'NapCatConnect'}).vm.$emit('configured');await flushPromises()
+ expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('摄影，猫咪')
+ expect((wrapper.find('input[type="time"]').element as HTMLInputElement).value).toBe('10:30')
+ expect(vi.mocked(api).mock.calls.filter(args=>args[0]==='/integrations')).toHaveLength(2)
+ expect(put).not.toHaveBeenCalled()
  wrapper.unmount()
 })

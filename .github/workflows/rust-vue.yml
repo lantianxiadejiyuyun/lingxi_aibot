@@ -37,6 +37,13 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r integrations/astrbot/requirements.txt
       - run: python -m unittest scripts.tests.test_astrbot_plugin scripts.tests.test_astrbot_v2
+      - run: bash -n scripts/deploy.sh
+      - run: bash scripts/tests/test_deploy.sh
+      - run: docker compose -f docker-compose.yml --profile napcat config --quiet
+      - run: docker compose -f docker-compose.fnos.yml --profile napcat config --quiet
+        env:
+          LINGXI_NAS_IP: 192.0.2.10
+          LINGXI_QDRANT_API_KEY: test-only-compose-validation
       - run: docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile astrbot config --quiet
       - run: docker compose -f docker-compose.yml -f docker-compose.ollama.yml config --quiet
       - run: docker compose -f docker-compose.yml -f docker-compose.feishu.yml config --quiet

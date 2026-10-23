@@ -28,6 +28,8 @@ htmlcov/
 
 # ===== 运行数据（备份、生成图、上传、SQLite）=====
 data/
+/napcat/
+/backups/
 instance/
 migrations/
 *.db

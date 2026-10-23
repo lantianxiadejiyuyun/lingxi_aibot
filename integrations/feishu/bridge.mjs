@@ -48,6 +48,13 @@ export class Spool {
     }
   }
 }
+// The Rust parent owns stdin in embedded mode. Losing the parent closes the pipe,
+// so an orphan cannot keep a second WebSocket consumer alive after a restart.
+export function observeParent(input, stop) {
+  input.once('end', stop)
+  input.once('error', stop)
+  input.resume()
+}
 export async function run() {
   const base = (process.env.LINGXI_URL || 'http://app:8000').replace(/\/$/, '')
   const token = process.env.LINGXI_FEISHU_BRIDGE_TOKEN
@@ -69,6 +76,7 @@ export async function run() {
   const stopClient = () => { ws?.close({ force: true }); ws = undefined; currentKey = '' }
   const stop = () => { stopped = true; stopClient() }
   process.once('SIGTERM', stop); process.once('SIGINT', stop)
+  if (process.env.LINGXI_FEISHU_MANAGED === 'true') observeParent(process.stdin, stop)
   let nextConfig = 0, nextFlush = 0, backoff = 1000
   while (!stopped) {
     if (Date.now() >= nextConfig) {
@@ -94,7 +102,7 @@ export async function run() {
         }
         state = ws?.getConnectionStatus().state || state
         await api('heartbeat', { state, sdk_version: SDK_VERSION, spool_count: (await spool.files()).length })
-        const health = await open('/tmp/lingxi-feishu-health', 'w', 0o600)
+        const health = await open(process.env.LINGXI_FEISHU_HEALTH || '/tmp/lingxi-feishu-health', 'w', 0o600)
         try { await health.writeFile(String(Date.now())) } finally { await health.close() }
       } catch {
         state = 'backend_unavailable'

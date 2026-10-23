@@ -1,52 +1,61 @@
 # 飞牛 NAS 部署
 
-Rust 服务内嵌 Vue 前端，生产环境仅需 Docker。此指南使用独立目录 `/vol1/docker/lingxi-v2` 和端口 `18081`；请按实际存储卷及局域网 IP 调整，不要覆盖旧版的数据目录。
+一个 Compose 项目管理灵犀、NapCat、Qdrant 与可选 Ollama；飞书官方 SDK 已合并到灵犀镜像，由 Rust 随账号设置自动管理。生产环境仅需 Docker 和 Bash。此指南使用 `/vol1/docker/lingxi-v2` 与端口 `18081`；按实际存储卷及局域网 IP 调整。
 
 ## 构建镜像
 
 在源码根目录构建 NAS 对应架构的镜像。例如 x86-64 飞牛：
 
 ```sh
-docker build --platform linux/amd64 -t lingxi:2.0.0-fnos-20261022-bili .
+docker build --platform linux/amd64 -t lingxi:2.0.0 .
 docker pull --platform linux/amd64 qdrant/qdrant:v1.19.0
-docker save -o lingxi-fnos-images.tar lingxi:2.0.0-fnos-20261022-bili qdrant/qdrant:v1.19.0
+docker save -o lingxi-fnos-images.tar lingxi:2.0.0 qdrant/qdrant:v1.19.0
 ```
 
-将镜像包和 `docker-compose.fnos.yml` 传到 NAS 部署目录，把后者保存为 `compose.yml`。已有其他构建标签时，在 `.env` 设置 `LINGXI_IMAGE`，与实际导入的镜像一致。
+将镜像包、`docker-compose.fnos.yml`、`scripts/deploy.sh` 传到 NAS 部署目录，保持 `scripts/` 子目录，将 Compose 文件保存为 `compose.yml`。已有其他构建标签时可另行设置 `.env` 中的 `LINGXI_IMAGE`。
+
+NapCat 固定为 `v4.18.37` 及镜像 digest，首次启动会拉取该镜像。离线 NAS 可在有网络的机器拉取并导出，再导入本地固定标签，并在 `.env` 的 `NAPCAT_IMAGE` 指定这个已验证的标签。
 
 ## 首次安装
 
-在 NAS 部署目录新建 `.env`，设置以下字段；Qdrant 密钥用随机字符串替换，文件权限设为 `600`。
-
-```dotenv
-LINGXI_NAS_IP=192.168.1.10
-LINGXI_PORT=18081
-LINGXI_IMAGE=lingxi:2.0.0-fnos-20261022-bili
-LINGXI_QDRANT_API_KEY=替换为随机长密钥
-```
-
-服务以 UID/GID `1000:1000` 运行。创建专用空目录后设置权限：
+在新建的空部署目录中执行：
 
 ```sh
 cd /vol1/docker/lingxi-v2
-mkdir -p data backups
-chmod 700 backups
-chmod 600 .env
-sudo chown 1000:1000 data
 sudo docker load -i lingxi-fnos-images.tar
+sudo bash scripts/deploy.sh init --fnos --host 192.168.1.10 --username admin
+sudo bash scripts/deploy.sh up
+sudo bash scripts/deploy.sh status
 ```
 
-全新安装需初始化管理员；已有迁移数据时跳过此步骤。密码至少 12 个字符，临时从终端传入，不写入 Compose 或镜像：
+`init` 先提示输入至少 12 字符的管理员密码，再创建权限为 `600` 的 `.env`，生成 Qdrant 和 OneBot 独立随机密钥、数据目录与 NapCat HTTP 初始配置。密码不会写入部署文件。已有 `.env` 时拒绝覆盖；已有账号或迁移数据不要运行首次初始化。
 
-```sh
-read -r -s -p '管理员密码：' LINGXI_ADMIN_PASSWORD
-export LINGXI_ADMIN_PASSWORD
-sudo --preserve-env=LINGXI_ADMIN_PASSWORD docker compose run --rm -e LINGXI_ADMIN_PASSWORD app init --username admin
-unset LINGXI_ADMIN_PASSWORD
-sudo docker compose up -d --wait
+若首次初始化在配置生成后因构建或数据库初始化失败中断，修复原因后用 `sudo bash scripts/deploy.sh init-account --username admin` 继续创建首个账号。已有账号时后端会拒绝此命令，不会重置密码或数据。
+
+`status` / `urls` 会直接显示灵犀和 NapCat 地址。默认分别为 `http://你的NAS局域网IP:18081/`、`http://你的NAS局域网IP:6099/webui/`；QQ 页也可直接打开 NapCat。应用仅发布到指定 LAN IP 和回环地址，NapCat 只发布管理端口，OneBot 3000 和 Qdrant 6333 留在 Compose 内网。
+
+打开 NapCat 后仍需登录机器人 QQ。在灵犀 QQ 接入中采用部署提供的 OneBot 连接，填写主人和机器人 QQ，并按页面复制的回调地址/密钥设置 NapCat HTTP 客户端。初始化不会自动发送 QQ 消息或开启群回复。向量地址为 `http://qdrant:6333`，密钥与 `.env` 的 `LINGXI_QDRANT_API_KEY` 一致。该编排允许访问内网服务，适用于可信账号环境。
+
+飞书只需在「设置 → 通知渠道」配置 App ID / Secret，再开启飞书私聊；无须额外桥接容器或手动复制桥接 Token。绑定流程见 [飞书私聊](飞书私聊.md)。
+
+## 合并已有 NapCat / 飞书部署
+
+先执行备份，保留原容器、配置和数据卷。在 `.env` 设置以下值，NapCat 数据路径指向原来的 `config`、`plugins`、`qq` 三个目录的共同父目录：
+
+```dotenv
+COMPOSE_PROFILES=napcat
+LINGXI_FEISHU_EMBEDDED=true
+LINGXI_PUBLIC_URL=http://192.168.1.10:18081
+LINGXI_NAPCAT_MANAGED=true
+LINGXI_NAPCAT_DATA_DIR=/vol1/docker/lingxi_napcat/data
+LINGXI_NAPCAT_WEBUI_URL=http://192.168.1.10:6099/webui/
+LINGXI_NAPCAT_HTTP_URL=http://napcat:3000
+NAPCAT_BIND_IP=192.168.1.10
 ```
 
-打开 `http://你的NAS局域网IP:18081/`。应用发布到指定的 LAN IP 和本机回环；Qdrant 不发布宿主机端口。QQ 接入设置中的向量地址为 `http://qdrant:6333`，密钥与 `.env` 一致。该编排允许访问 NAS 内的 NapCat、模型和向量服务，仅用于可信用户环境。
+将原 OneBot HTTP 服务的 Token 安全填入 `LINGXI_NAPCAT_HTTP_TOKEN`，不要改动已有配置文件或 QQ 登录目录。先停止旧 NapCat，再由当前项目启动，避免端口和登录文件冲突；确认其它机器人客户端已切换到新服务地址，再移除旧网络连接。需要保留外部 NapCat 时，将 `COMPOSE_PROFILES` 留空、`LINGXI_NAPCAT_MANAGED=false`，按实际地址设置 WebUI 与 HTTP URL。
+
+飞书应先确认独立桥接收件箱已排空，停止旧桥接容器，再从运行命令中移除 `docker-compose.feishu.yml` 并重建 app。这个旧覆盖文件会显式关闭内置 SDK，供需要独立部署的人继续使用。已有身份绑定和会话保留；不要清理原数据或旧收件箱卷。
 
 ## 从旧版迁移
 
@@ -58,22 +67,27 @@ sudo docker compose up -d --wait
 
 ```sh
 cd /vol1/docker/lingxi-v2
-sudo docker compose ps
-sudo docker compose logs --tail=100 app
+sudo bash scripts/deploy.sh status
+sudo bash scripts/deploy.sh backup
 ```
 
-升级前停止应用写入，备份 `data/`、`.env`、`compose.yml`，并另行备份 Qdrant 的 `lingxi-v2_qq_vectors` 卷或集合快照。数据库与 `master.key` 必须成套恢复。
+`backup` 短暂停止当前运行的服务，复制 app 完整 `/data`（含主库、`master.key`、QQ 库、资源、内置飞书收件箱）、Qdrant 存储和 NapCat 配置/登录目录，保存 `.env` 与 Compose 文件，随后恢复原先运行的容器。备份目录权限为 `700`；若中途失败，会留下 `INCOMPLETE` 标记。备份不会删除数据卷。可选 Ollama 模型可重新下载，不包含在此备份中。
 
 ```sh
-sudo docker compose stop app
-sudo tar -czf backups/v2-before-upgrade.tgz data .env compose.yml
-sudo chmod 600 backups/v2-before-upgrade.tgz
 sudo docker load -i new-image.tar
 # 修改 .env 中的 LINGXI_IMAGE 为已导入的新标签后启动。
-sudo docker compose up -d --wait app
+sudo bash scripts/deploy.sh up
 ```
 
-每次升级使用不同的备份文件名并保留上一镜像。回退时恢复对应的 Compose、镜像和数据快照，先另存升级后产生的数据。不要运行 `docker compose down -v` 作为升级步骤。
+脚本每次创建独立备份目录，升级时保留上一镜像。回退时停止服务，先另存升级后数据，再将 `app-data` 恢复到 `data/`，NapCat 三个目录恢复到原位置，Qdrant 存储恢复到原 `lingxi-v2_qq_vectors` 卷，并恢复对应配置和镜像。数据库与 `master.key` 必须成套恢复。不要运行 `docker compose down -v` 作为升级步骤。
+
+已有 Ollama 等覆盖文件时，对 `up/status/backup` 使用一致的文件参数：
+
+```sh
+sudo bash scripts/deploy.sh status --file compose.yml --file docker-compose.ollama.yml
+sudo bash scripts/deploy.sh backup --file compose.yml --file docker-compose.ollama.yml
+sudo bash scripts/deploy.sh up --file compose.yml --file docker-compose.ollama.yml
+```
 
 源码中已移除旧 Python 后端。已有旧 NAS 部署与其数据库需在确认迁移完成后单独处理，Git 更新不会自动停用或删除它们。
 

@@ -11,7 +11,7 @@ VERSION = "2.0.0"
 SKIP = {"node_modules", "dist", "target", "__pycache__", ".git", ".venv"}
 FILES = ["Cargo.toml", "Cargo.lock", "Dockerfile", "docker-compose.yml",
          "docker-compose.quickstart.yml", ".dockerignore", "README.md", "LICENSE", "NOTICE",
-         "scripts/export_legacy.py", "scripts/requirements-migration.txt", "scripts/pack_release.py",
+         "scripts/export_legacy.py", "scripts/requirements-migration.txt", "scripts/pack_release.py", "scripts/deploy.sh",
          "docs/Rust部署与迁移.md", "docs/Rust-Vue架构.md", "docs/legacy/README.md",
          ".env.example", ".env.docker.example", "docker-compose.astrbot.yml",
          "docker-compose.fnos.yml", "docker-compose.ollama.yml", "docker-compose.feishu.yml", "docs/飞书私聊.md", "docs/fnOS部署.md", "docs/B站书房.md"]

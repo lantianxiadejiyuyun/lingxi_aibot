@@ -15,6 +15,8 @@ pub struct App {
     pub secrets: Secrets,
     pub data_dir: PathBuf,
     pub allow_private_network: bool,
+    pub feishu_embedded: bool,
+    pub deployment: crate::deployment::Config,
     pub shutdown: CancellationToken,
     pub chats: Arc<Semaphore>,
     pub password_workers: Arc<Semaphore>,
@@ -33,6 +35,8 @@ impl App {
             secrets,
             data_dir,
             allow_private_network,
+            feishu_embedded: false,
+            deployment: Default::default(),
             http: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(180))

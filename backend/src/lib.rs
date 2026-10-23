@@ -5,6 +5,7 @@ pub mod chat;
 pub mod companion;
 pub mod config;
 pub mod db;
+pub mod deployment;
 pub mod error;
 pub mod integrations;
 pub mod jobs;
@@ -23,6 +24,7 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 pub mod feishu;
+pub mod feishu_runtime;
 pub mod frontend;
 pub mod growth;
 pub mod qq;

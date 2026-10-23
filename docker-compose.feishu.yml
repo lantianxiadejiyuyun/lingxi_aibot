@@ -1,4 +1,9 @@
 services:
+  # Compatibility mode: one external bridge for one account. Do not run both
+  # the embedded SDK and this bridge against the same Feishu application.
+  app:
+    environment:
+      LINGXI_FEISHU_EMBEDDED: "false"
   feishu-bridge:
     image: ${LINGXI_FEISHU_IMAGE:-lingxi-feishu:2.0.0}
     build: ./integrations/feishu

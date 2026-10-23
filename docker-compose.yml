@@ -1,13 +1,19 @@
-# Rust v2: one binary, embedded frontend, local SQLite WAL database.
-# Use an explicit file: docker compose -f docker-compose.yml ...
+# Unified stack: Rust/Vue + embedded official Feishu SDK, Qdrant, optional NapCat.
+# bash scripts/deploy.sh init && bash scripts/deploy.sh up
 services:
   app:
     build: .
-    image: lingxi:2.0.0
+    image: ${LINGXI_IMAGE:-lingxi:2.0.0}
     environment:
       LINGXI_DATA_DIR: /data
       LINGXI_BIND: 0.0.0.0:8000
-      LINGXI_ALLOW_PRIVATE_NETWORK: ${LINGXI_ALLOW_PRIVATE_NETWORK:-false}
+      LINGXI_ALLOW_PRIVATE_NETWORK: ${LINGXI_ALLOW_PRIVATE_NETWORK:-true}
+      LINGXI_FEISHU_EMBEDDED: ${LINGXI_FEISHU_EMBEDDED:-true}
+      LINGXI_PUBLIC_URL: ${LINGXI_PUBLIC_URL:-http://localhost:8000}
+      LINGXI_NAPCAT_MANAGED: ${LINGXI_NAPCAT_MANAGED:-false}
+      LINGXI_NAPCAT_WEBUI_URL: ${LINGXI_NAPCAT_WEBUI_URL:-}
+      LINGXI_NAPCAT_HTTP_URL: ${LINGXI_NAPCAT_HTTP_URL:-http://napcat:3000}
+      LINGXI_NAPCAT_HTTP_TOKEN: ${LINGXI_NAPCAT_HTTP_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-lingxi=info,tower_http=info}
     ports:
       - "${LINGXI_BIND_HOST:-127.0.0.1}:${LINGXI_PORT:-8000}:8000"
@@ -24,12 +30,13 @@ services:
     cap_drop: [ALL]
 
   worker:
-    image: lingxi:2.0.0
+    image: ${LINGXI_IMAGE:-lingxi:2.0.0}
     profiles: [worker]
     command: [worker]
     environment:
       LINGXI_DATA_DIR: /data
-      LINGXI_ALLOW_PRIVATE_NETWORK: ${LINGXI_ALLOW_PRIVATE_NETWORK:-false}
+      LINGXI_ALLOW_PRIVATE_NETWORK: ${LINGXI_ALLOW_PRIVATE_NETWORK:-true}
+      LINGXI_FEISHU_EMBEDDED: "false"
     volumes:
       - lingxi_rust_data:/data
     restart: unless-stopped
@@ -42,14 +49,45 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.19.0
-    profiles: [qq]
     volumes:
       - lingxi_qq_vectors:/qdrant/storage
     environment:
       QDRANT__SERVICE__API_KEY: ${LINGXI_QDRANT_API_KEY:-}
     restart: unless-stopped
     # The dedicated vector service is reachable only on this Compose network.
-    # In QQ settings use http://qdrant:6333 and enable private service access.
+    # In QQ settings use http://qdrant:6333.
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  napcat:
+    image: ${NAPCAT_IMAGE:-mlikiowa/napcat-docker:v4.18.37@sha256:f611790ecffa23c3c182017d5cf68179dc24612403608cd835ad13d79642f1bd}
+    profiles: [napcat]
+    hostname: lingxi-qq
+    init: true
+    environment:
+      TZ: Asia/Shanghai
+      NAPCAT_UID: "1000"
+      NAPCAT_GID: "1000"
+    ports:
+      - "${NAPCAT_BIND_IP:-127.0.0.1}:${NAPCAT_WEBUI_PORT:-6099}:6099"
+    volumes:
+      - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/qq:/app/.config/QQ
+      - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/config:/app/napcat/config
+      - ${LINGXI_NAPCAT_DATA_DIR:-./napcat}/plugins:/app/napcat/plugins
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "5", --output, /dev/null, "http://127.0.0.1:6099/webui/"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+    ulimits: {core: 0}
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
 volumes:
   lingxi_rust_data:

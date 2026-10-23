@@ -25,6 +25,47 @@ pub struct Cli {
         global = true
     )]
     pub allow_private_network: bool,
+    #[arg(
+        long,
+        env = "LINGXI_FEISHU_EMBEDDED",
+        default_value = "false",
+        global = true
+    )]
+    pub feishu_embedded: bool,
+    #[arg(
+        long,
+        env = "LINGXI_FEISHU_NODE",
+        default_value = "/usr/local/bin/node",
+        global = true
+    )]
+    pub feishu_node: PathBuf,
+    #[arg(
+        long,
+        env = "LINGXI_FEISHU_SCRIPT",
+        default_value = "/opt/lingxi/feishu/bridge.mjs",
+        global = true
+    )]
+    pub feishu_script: PathBuf,
+    #[arg(long, env = "LINGXI_PUBLIC_URL", global = true)]
+    pub public_url: Option<String>,
+    #[arg(long, env = "LINGXI_NAPCAT_WEBUI_URL", global = true)]
+    pub napcat_webui_url: Option<String>,
+    #[arg(long, env = "LINGXI_NAPCAT_HTTP_URL", global = true)]
+    pub napcat_http_url: Option<String>,
+    #[arg(
+        long,
+        env = "LINGXI_NAPCAT_MANAGED",
+        default_value = "false",
+        global = true
+    )]
+    pub napcat_managed: bool,
+    #[arg(
+        long,
+        env = "LINGXI_NAPCAT_HTTP_TOKEN",
+        hide_env_values = true,
+        global = true
+    )]
+    pub napcat_http_token: Option<String>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }

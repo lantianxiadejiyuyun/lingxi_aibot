@@ -17,7 +17,10 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let pool = db::connect(&cli.data_dir.join("lingxi.sqlite3")).await?;
     let secrets = db::Secrets::load(&cli.data_dir.join("master.key"))?;
-    let app = App::new(pool, secrets, cli.data_dir, cli.allow_private_network)?;
+    let deployment = lingxi::deployment::Config::from_cli(&cli)?;
+    let mut app = App::new(pool, secrets, cli.data_dir, cli.allow_private_network)?;
+    app.feishu_embedded = cli.feishu_embedded;
+    app.deployment = deployment;
     match cli.command.unwrap_or(Command::Serve { no_worker: false }) {
         Command::Init { username, password } => {
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
@@ -117,6 +120,30 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Serve { no_worker } => {
             let listener = tokio::net::TcpListener::bind(cli.bind).await?;
+            let feishu = if app.feishu_embedded {
+                let bound = listener.local_addr()?;
+                let host = if bound.ip().is_unspecified() {
+                    if bound.is_ipv4() {
+                        "127.0.0.1".into()
+                    } else {
+                        "[::1]".into()
+                    }
+                } else if bound.is_ipv4() {
+                    bound.ip().to_string()
+                } else {
+                    format!("[{}]", bound.ip())
+                };
+                Some(tokio::spawn(lingxi::feishu_runtime::run(
+                    app.clone(),
+                    lingxi::feishu_runtime::RuntimeConfig {
+                        base_url: format!("http://{host}:{}", bound.port()),
+                        node: cli.feishu_node,
+                        script: cli.feishu_script,
+                    },
+                )))
+            } else {
+                None
+            };
             let worker = if no_worker {
                 None
             } else {
@@ -124,15 +151,20 @@ async fn main() -> anyhow::Result<()> {
             };
             let shutdown = app.shutdown.clone();
             tracing::info!(address=%cli.bind,"Lingxi Rust server ready");
-            axum::serve(listener, lingxi::api::router(app.clone()))
+            let server = axum::serve(listener, lingxi::api::router(app.clone()))
                 .with_graceful_shutdown(async move {
                     shutdown_signal().await;
                     shutdown.cancel();
                 })
-                .await?;
+                .await;
+            app.shutdown.cancel();
+            if let Some(feishu) = feishu {
+                feishu.await?;
+            }
             if let Some(worker) = worker {
                 worker.await?;
             }
+            server?;
         }
     }
     app.pool.close().await;
