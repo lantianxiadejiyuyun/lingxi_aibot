@@ -5,6 +5,7 @@ pub mod dialogue;
 pub(crate) mod media;
 pub mod outreach;
 pub mod sessions;
+pub(crate) mod sticker_cadence;
 pub mod stickers;
 pub mod store;
 pub mod vector;

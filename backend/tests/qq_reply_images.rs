@@ -164,7 +164,8 @@ impl Fixture {
         .await
     }
     fn decide(&self, id: Option<&str>) {
-        *self.mock.decision.lock().unwrap() = json!({"sticker_id":id}).to_string();
+        *self.mock.decision.lock().unwrap() =
+            json!({"sticker_id":id,"willingness":if id.is_some(){0.9}else{0.0}}).to_string();
     }
     fn sends(&self) -> Vec<Value> {
         self.mock.sends.lock().unwrap().clone()
@@ -292,10 +293,10 @@ async fn empty_catalogue_disabled_collection_and_invalid_choices_fall_back_to_te
     assert!(f.requests().is_empty());
     f.insert(None, "owner-cute", "小鱼", None).await;
     for (i, result) in [
-        r#"{"sticker_id":"https://evil.invalid/pic.png"}"#,
-        r#"{"sticker_id":"owner-cute","user_id":"99999"}"#,
+        r#"{"sticker_id":"https://evil.invalid/pic.png","willingness":0.99}"#,
+        r#"{"sticker_id":"owner-cute","willingness":0.99,"user_id":"99999"}"#,
         "[CQ:image,file=file:///etc/passwd]",
-        r#"{"sticker_id":null}"#,
+        r#"{"sticker_id":null,"willingness":0.1}"#,
     ]
     .into_iter()
     .enumerate()
@@ -337,6 +338,234 @@ async fn uncertain_image_delivery_is_not_reselected_or_replayed() {
     assert!(f.send(None, "uncertain", "给你一只小鱼").await.is_err());
     assert_eq!(f.sends().len(), 2);
     assert_eq!(f.requests().len(), 1);
+    // A new message must not repeat an image whose acknowledgement was uncertain.
+    assert_eq!(f.send(None, "after-uncertain", "收到啦").await.unwrap(), 1);
+    assert_eq!(f.requests().len(), 1);
+    assert_eq!(f.sends().len(), 3);
+}
+
+#[tokio::test]
+async fn repeated_replies_are_text_only_and_pacing_survives_app_recreation() {
+    let f = Fixture::new().await;
+    f.insert(None, "owner-cute", "小鱼", None).await;
+    f.decide(Some("owner-cute"));
+    assert_eq!(f.send(None, "first", "给你一只小鱼").await.unwrap(), 2);
+    for n in 0..5 {
+        assert_eq!(
+            f.send(None, &format!("next-{n}"), "嗯，继续聊")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+    assert_eq!(
+        f.requests().len(),
+        1,
+        "cooldown must also skip model selection"
+    );
+    let app = App::new(
+        f.app.pool.clone(),
+        db::Secrets::from_key(&[7; 32]),
+        f.app.data_dir.clone(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        dialogue::send(
+            &app,
+            &f.user,
+            &f.config(None).await,
+            None,
+            None,
+            "after-restart",
+            "还有一句",
+            true,
+            &CancellationToken::new(),
+            None
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(f.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn image_requires_explicit_valid_willingness_of_at_least_seventy_five_percent() {
+    let f = Fixture::new().await;
+    f.insert(None, "owner-cute", "小鱼", None).await;
+    for (n, decision) in [
+        json!({"sticker_id":"owner-cute","willingness":0.749999}),
+        json!({"sticker_id":"owner-cute"}),
+        json!({"sticker_id":"owner-cute","willingness":75}),
+        json!({"sticker_id":"owner-cute","willingness":"0.99"}),
+        json!({"sticker_id":"owner-cute","willingness":-0.1}),
+        json!({"sticker_id":null,"willingness":0.99}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        *f.mock.decision.lock().unwrap() = decision.to_string();
+        assert_eq!(
+            f.send(None, &format!("below-{n}"), "好呀").await.unwrap(),
+            1
+        );
+    }
+    *f.mock.decision.lock().unwrap() =
+        json!({"sticker_id":"owner-cute","willingness":0.75}).to_string();
+    assert_eq!(f.send(None, "threshold", "给你一只小鱼").await.unwrap(), 2);
+    assert_eq!(
+        f.sends()
+            .iter()
+            .filter(|v| v["message"][0]["type"] == "image")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn elapsed_time_alone_cannot_bypass_text_turns_or_same_image_deduplication() {
+    let f = Fixture::new().await;
+    f.insert(None, "owner-first", "小鱼", None).await;
+    f.decide(Some("owner-first"));
+    assert_eq!(f.send(None, "first", "嘿嘿").await.unwrap(), 2);
+    sqlx::query("UPDATE sticker_reply_turns SET image_at=image_at-301 WHERE image_at IS NOT NULL")
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(f.send(None, "text-1", "嗯嗯").await.unwrap(), 1);
+    assert_eq!(f.send(None, "text-2", "好呀").await.unwrap(), 1);
+    // All candidates are recently used. Do not even ask the model to send them again.
+    assert_eq!(f.send(None, "same-image", "再聊几句").await.unwrap(), 1);
+    assert_eq!(f.requests().len(), 1);
+    f.insert(None, "owner-other", "另一种表情", None).await;
+    f.decide(Some("owner-other"));
+    assert_eq!(f.send(None, "new-image", "这下开心了").await.unwrap(), 2);
+    let requests = f.requests();
+    assert!(!requests.last().unwrap().to_string().contains("owner-first"));
+}
+
+#[tokio::test]
+async fn group_cadence_is_shared_across_owner_member_and_followup_but_not_other_destinations() {
+    let f = Fixture::new().await;
+    f.insert(Some("30001"), "group-first", "本群小鱼", None)
+        .await;
+    f.insert(Some("30002"), "group-second", "另一群的小鱼", None)
+        .await;
+    f.insert(None, "owner-private", "私人小鱼", None).await;
+    f.decide(Some("group-first"));
+    let cfg = f.config(Some("30001")).await;
+    assert_eq!(
+        dialogue::send(
+            &f.app,
+            &f.user,
+            &cfg,
+            Some("30001"),
+            Some("10001"),
+            "owner-group",
+            "第一句\n\n第二句",
+            true,
+            &CancellationToken::new(),
+            None
+        )
+        .await
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        f.send(Some("30001"), "member-group", "接着说")
+            .await
+            .unwrap(),
+        1
+    );
+    let anchor = qq::outreach::anchor(&f.app, &f.user, Some("30001"))
+        .await
+        .unwrap();
+    assert_eq!(
+        dialogue::send(
+            &f.app,
+            &f.user,
+            &cfg,
+            Some("30001"),
+            None,
+            "outreach:test",
+            "补充一句",
+            false,
+            &CancellationToken::new(),
+            Some(&anchor)
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(f.requests().len(), 1);
+    let turns: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sticker_reply_turns WHERE scope='30001'")
+            .fetch_one(store::pool(&f.app).await.unwrap())
+            .await
+            .unwrap();
+    assert_eq!(turns, 3, "two text parts count as one turn");
+    f.decide(Some("group-second"));
+    assert_eq!(
+        f.send(Some("30002"), "other-group", "另一群你好")
+            .await
+            .unwrap(),
+        2
+    );
+    f.decide(Some("owner-private"));
+    assert_eq!(f.send(None, "private", "私聊你好").await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn concurrent_image_decisions_only_allow_one_actual_image() {
+    let f = Fixture::new().await;
+    f.insert(None, "owner-cute", "小鱼", None).await;
+    f.decide(Some("owner-cute"));
+    f.mock.hold_model.store(true, Ordering::SeqCst);
+    let (app, user, cfg) = (f.app.clone(), f.user.clone(), f.config(None).await);
+    let one = tokio::spawn(async move {
+        dialogue::send(
+            &app,
+            &user,
+            &cfg,
+            None,
+            None,
+            "concurrent-one",
+            "第一句",
+            true,
+            &CancellationToken::new(),
+            None,
+        )
+        .await
+    });
+    f.mock.model_entered.notified().await;
+    let (app, user, cfg) = (f.app.clone(), f.user.clone(), f.config(None).await);
+    let two = tokio::spawn(async move {
+        dialogue::send(
+            &app,
+            &user,
+            &cfg,
+            None,
+            None,
+            "concurrent-two",
+            "第二句",
+            true,
+            &CancellationToken::new(),
+            None,
+        )
+        .await
+    });
+    f.mock.model_entered.notified().await;
+    f.mock.model_release.notify_waiters();
+    let results = [one.await.unwrap().unwrap(), two.await.unwrap().unwrap()];
+    assert_eq!(results.iter().sum::<usize>(), 3);
+    assert_eq!(
+        f.sends()
+            .iter()
+            .filter(|v| v["message"][0]["type"] == "image")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
