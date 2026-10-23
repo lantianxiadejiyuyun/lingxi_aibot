@@ -190,7 +190,10 @@ pub async fn claim(app: &App, token: &str) -> Result<Option<Job>> {
     // Side-effectful jobs with exhausted attempts are not blindly repeated after a crash.
     sqlx::query("UPDATE jobs SET status='needs_review',error='进程中断，外部操作结果待核实',lease_token=NULL,lease_until=NULL,updated_at=? WHERE status='running' AND lease_until<? AND attempts>=max_attempts")
         .bind(now()).bind(now()).execute(&app.pool).await?;
-    Ok(sqlx::query_as("UPDATE jobs SET status='running',attempts=attempts+1,lease_token=?,lease_until=?,updated_at=? WHERE id=(SELECT id FROM jobs WHERE cancel_requested=0 AND attempts<max_attempts AND ((status='queued' AND run_at<=?) OR (status='running' AND lease_until<?)) ORDER BY run_at,created_at LIMIT 1) RETURNING *")
+    // A private image turn includes download, vision, chat and delivery. Keep the
+    // entire turn serial per owner, without occupying workers waiting on a chat lease.
+    // Other owners and job types can still run concurrently. Claiming is one atomic write.
+    Ok(sqlx::query_as("UPDATE jobs SET status='running',attempts=attempts+1,lease_token=?,lease_until=?,updated_at=? WHERE id=(SELECT candidate.id FROM jobs candidate WHERE cancel_requested=0 AND attempts<max_attempts AND ((status='queued' AND run_at<=?) OR (status='running' AND lease_until<?)) AND (action<>'qq_private' OR NOT EXISTS(SELECT 1 FROM jobs active WHERE active.user_id=candidate.user_id AND active.action='qq_private' AND active.status='running' AND active.id<>candidate.id)) ORDER BY run_at,created_at,rowid LIMIT 1) RETURNING *")
         .bind(token).bind(now()+90).bind(now()).bind(now()).bind(now()).fetch_optional(&app.pool).await?)
 }
 pub async fn worker(app: App) {

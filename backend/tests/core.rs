@@ -371,6 +371,60 @@ async fn side_effectful_jobs_are_not_blindly_repeated() {
         "needs_review"
     );
 }
+
+#[tokio::test]
+async fn private_turns_queue_per_owner_without_blocking_other_owners_or_jobs() {
+    let f = Fixture::new().await;
+    let alice = f.user("alice").await;
+    let bob = f.user("bob").await;
+    let mut queued = Vec::new();
+    for (user, action) in [
+        (&alice, "qq_private"),
+        (&alice, "qq_private"),
+        (&bob, "qq_private"),
+        (&alice, "notify"),
+    ] {
+        queued.push(
+            jobs::enqueue(
+                &f.app,
+                user,
+                jobs::Input {
+                    action: action.into(),
+                    params: json!({}),
+                    run_at: None,
+                    request_id: None,
+                },
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let (a, b) = tokio::join!(jobs::claim(&f.app, "a"), jobs::claim(&f.app, "b"));
+    let ids = [a.unwrap().unwrap().id, b.unwrap().unwrap().id];
+    assert!(ids.contains(&queued[0].id));
+    assert!(ids.contains(&queued[2].id));
+    assert_eq!(
+        jobs::claim(&f.app, "c").await.unwrap().unwrap().id,
+        queued[3].id
+    );
+    assert!(jobs::claim(&f.app, "d").await.unwrap().is_none());
+    assert_eq!(
+        jobs::get(&f.app, &alice, &queued[1].id)
+            .await
+            .unwrap()
+            .attempts,
+        0
+    );
+    sqlx::query("UPDATE jobs SET status='completed',lease_token=NULL,lease_until=NULL WHERE id=?")
+        .bind(&queued[0].id)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        jobs::claim(&f.app, "e").await.unwrap().unwrap().id,
+        queued[1].id
+    );
+}
 #[tokio::test]
 async fn schedule_dispatch_is_deduplicated() {
     let f = Fixture::new().await;

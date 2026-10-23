@@ -9,6 +9,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use lingxi::{auth, companion::private, db, integrations, qq, settings, state::App};
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     io::Cursor,
     sync::{
         Arc, Mutex,
@@ -23,6 +24,7 @@ struct Mock {
     pushes: Arc<Mutex<Vec<Value>>>,
     image_requests: Arc<Mutex<Vec<String>>>,
     vision_failure: Arc<AtomicBool>,
+    vision_responses: Arc<Mutex<VecDeque<(StatusCode, String)>>>,
 }
 
 async fn model(State(mock): State<Mock>, Json(body): Json<Value>) -> impl IntoResponse {
@@ -32,6 +34,10 @@ async fn model(State(mock): State<Mock>, Json(body): Json<Value>) -> impl IntoRe
         .iter()
         .any(|m| m["content"].as_array().is_some());
     mock.models.lock().unwrap().push(body);
+    if is_image && let Some((status, response)) = mock.vision_responses.lock().unwrap().pop_front()
+    {
+        return (status, [("content-type", "text/event-stream")], response);
+    }
     if is_image && mock.vision_failure.load(Ordering::Relaxed) {
         return (
             StatusCode::BAD_REQUEST,
@@ -658,4 +664,236 @@ async fn disabled_vision_does_not_download_or_send_images_to_model() {
         .unwrap(),
         0
     );
+}
+
+fn vision_stream(text: &str, finish: Option<&str>, done: bool) -> String {
+    format!(
+        "data: {}\n\n{}",
+        json!({"choices":[{"delta":{"content":text},"finish_reason":finish}]}),
+        if done { "data: [DONE]\n\n" } else { "" }
+    )
+}
+
+#[tokio::test]
+async fn transient_vision_failures_retry_once_without_duplicate_chat_or_send() {
+    for response in [
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sensitive upstream failure".into(),
+        ),
+        (
+            StatusCode::OK,
+            vision_stream("{\"description\":", None, true),
+        ),
+        (
+            StatusCode::OK,
+            vision_stream("{\"description\":", None, false),
+        ),
+        (
+            StatusCode::OK,
+            vision_stream("{\"description\":", Some("length"), true),
+        ),
+    ] {
+        let f = Fixture::new().await;
+        f.mock.vision_responses.lock().unwrap().push_back(response);
+        qq::api::ingest(
+            &f.app,
+            &f.user,
+            &f.event(81, json!([f.image("/image", "image")])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.process(81).await["sent"], true);
+        assert_eq!(f.mock.models.lock().unwrap().len(), 3); // two observations, one chat
+        assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+        assert_eq!(f.mock.image_requests.lock().unwrap().len(), 1);
+        assert_eq!(f.count("messages").await, 2);
+        assert!(f.history().await.contains("一条蓝色圆滚滚的小鱼"));
+        assert!(!f.history().await.contains("sensitive upstream"));
+        let media: String = sqlx::query_scalar("SELECT media FROM qq_private_events")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+        let media: Value = serde_json::from_str(&f.app.secrets.decrypt(&media).unwrap()).unwrap();
+        assert_eq!(media["images"][0]["vision_attempts"], 2);
+        assert_eq!(media["images"][0]["failure_code"], "");
+    }
+}
+
+#[tokio::test]
+async fn wrapped_observation_and_extra_fields_do_not_discard_a_readable_picture() {
+    let f = Fixture::new().await;
+    let raw = "观察结果：\n```JSON\n{\"description\":\"一条蓝色的小鱼\",\"confidence\":0.9}\n```";
+    f.mock
+        .vision_responses
+        .lock()
+        .unwrap()
+        .push_back((StatusCode::OK, vision_stream(raw, None, true)));
+    qq::api::ingest(
+        &f.app,
+        &f.user,
+        &f.event(82, json!([f.image("/image", "image")])),
+    )
+    .await
+    .unwrap();
+    f.process(82).await;
+    assert_eq!(f.mock.models.lock().unwrap().len(), 2);
+    assert!(f.history().await.contains("一条蓝色的小鱼"));
+    assert!(!f.history().await.contains("没能识别"));
+}
+
+#[tokio::test]
+async fn gif_retry_preserves_all_ten_frames_and_uses_configured_output_budget() {
+    let f = Fixture::new().await;
+    let mut profiles = settings::profiles(&f.app, &f.user, false).await.unwrap();
+    profiles[0].context_window = 64000;
+    profiles[0].max_output = 8192;
+    settings::save_profiles(&f.app, &f.user, profiles)
+        .await
+        .unwrap();
+    f.mock
+        .vision_responses
+        .lock()
+        .unwrap()
+        .push_back((StatusCode::BAD_GATEWAY, String::new()));
+    qq::api::ingest(
+        &f.app,
+        &f.user,
+        &f.event(86, json!([f.image("/animated-gif", "image")])),
+    )
+    .await
+    .unwrap();
+    f.process(86).await;
+    let requests = f.mock.models.lock().unwrap().clone();
+    assert_eq!(requests.len(), 3);
+    for request in &requests[..2] {
+        assert_eq!(request["max_tokens"], 4096);
+        assert_eq!(
+            request["messages"][1]["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| v["type"] == "image_url")
+                .count(),
+            10
+        );
+    }
+    assert_eq!(
+        requests[0]["messages"][1]["content"],
+        requests[1]["messages"][1]["content"]
+    );
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+    assert!(f.history().await.contains("抽样识别 10 帧"));
+}
+
+#[tokio::test]
+async fn permanent_and_exhausted_failures_have_honest_distinct_reasons() {
+    for (status, calls, code, message) in [
+        (StatusCode::UNAUTHORIZED, 1, "authentication", "认证失败"),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            2,
+            "upstream",
+            "重试后仍未成功",
+        ),
+    ] {
+        let f = Fixture::new().await;
+        f.mock
+            .vision_responses
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| (status, "private error body".into())));
+        qq::api::ingest(
+            &f.app,
+            &f.user,
+            &f.event(83, json!([f.image("/image", "image")])),
+        )
+        .await
+        .unwrap();
+        f.process(83).await;
+        assert_eq!(f.mock.models.lock().unwrap().len(), calls);
+        assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+        assert!(f.history().await.contains(message));
+        assert!(!f.history().await.contains("private error body"));
+        let raw: String = sqlx::query_scalar("SELECT media FROM qq_private_events")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+        let media: Value = serde_json::from_str(&f.app.secrets.decrypt(&raw).unwrap()).unwrap();
+        assert_eq!(media["images"][0]["failure_code"], code);
+        assert_eq!(media["images"][0]["vision_attempts"], calls);
+    }
+}
+
+#[tokio::test]
+async fn revoking_vision_during_retry_delay_stops_the_second_request() {
+    use lingxi::permissions::{Config, Feature};
+    let f = Fixture::new().await;
+    f.mock
+        .vision_responses
+        .lock()
+        .unwrap()
+        .push_back((StatusCode::SERVICE_UNAVAILABLE, String::new()));
+    qq::api::ingest(
+        &f.app,
+        &f.user,
+        &f.event(84, json!([f.image("/image", "image")])),
+    )
+    .await
+    .unwrap();
+    let change = async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while f.mock.models.lock().unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.features.get_mut(&Feature::Vision).unwrap().private = false;
+        settings::put(&f.app, &f.user, "feature_permissions", &json!(cfg))
+            .await
+            .unwrap();
+    };
+    let (result, ()) = tokio::join!(f.process(84), change);
+    assert_eq!(result["sent"], true);
+    assert_eq!(f.mock.models.lock().unwrap().len(), 1);
+    assert!(f.history().await.contains("图片识别权限已关闭"));
+}
+
+#[tokio::test]
+async fn cancelling_vision_retry_never_sends_or_generates_a_chat() {
+    let f = Fixture::new().await;
+    f.mock
+        .vision_responses
+        .lock()
+        .unwrap()
+        .push_back((StatusCode::SERVICE_UNAVAILABLE, String::new()));
+    qq::api::ingest(
+        &f.app,
+        &f.user,
+        &f.event(85, json!([f.image("/image", "image")])),
+    )
+    .await
+    .unwrap();
+    let cancel = CancellationToken::new();
+    let change = async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while f.mock.models.lock().unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.cancel();
+    };
+    let params = json!({"id":db::digest(&format!("private:{}:20001:85", f.user.id))});
+    let (result, ()) = tokio::join!(
+        private::process_qq(&f.app, &f.user, &params, &cancel),
+        change
+    );
+    assert!(matches!(result, Err(lingxi::error::Error::Cancelled)));
+    assert_eq!(f.mock.models.lock().unwrap().len(), 1);
+    assert!(f.mock.pushes.lock().unwrap().is_empty());
+    assert_eq!(f.count("messages").await, 0);
 }

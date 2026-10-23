@@ -691,8 +691,8 @@ pub struct Decision {
     pub tags: Vec<String>,
 }
 pub fn decision(raw: &str) -> Result<Decision> {
-    let d: Decision = serde_json::from_str(crate::memory::strip_json(raw))
-        .map_err(|_| invalid("看图模型未返回有效的收藏判断"))?;
+    let d: Decision =
+        super::vision::parse_json(raw).map_err(|_| invalid("看图模型未返回有效的收藏判断"))?;
     validate_labels(&d.title, &d.tags)?;
     if !d.confidence.is_finite()
         || !(0.0..=1.0).contains(&d.confidence)
@@ -952,7 +952,20 @@ async fn process_inner(
         );
         let content = picture
             .vision_content("判断这张图片是否值得收藏。GIF 的多帧属于同一张动图，请综合判断一次。");
-        decision(&crate::provider::view_images(app, &profile, &prompt, &content, cancel).await?)?
+        super::vision::query(
+            app,
+            user,
+            scope.permission_scope(),
+            true,
+            &profile,
+            &prompt,
+            &content,
+            cancel,
+            decision,
+        )
+        .await
+        .map_err(|failure| failure.error)?
+        .0
     };
     if !judgment.collect || judgment.confidence < 0.75 {
         status(app, user, scope, row, "rejected", &judgment.reason).await?;

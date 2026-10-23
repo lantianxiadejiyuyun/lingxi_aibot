@@ -16,6 +16,7 @@ use lingxi::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     io::Cursor,
     sync::{Arc, Mutex},
 };
@@ -53,6 +54,7 @@ fn animated_picture() -> Vec<u8> {
 struct Mock {
     requests: Arc<Mutex<Vec<Value>>>,
     decision: Arc<Mutex<String>>,
+    responses: Arc<Mutex<VecDeque<String>>>,
     quote: Arc<Mutex<Value>>,
     png: Vec<u8>,
     second: Vec<u8>,
@@ -72,7 +74,12 @@ async fn fake() -> impl IntoResponse {
 }
 async fn model(State(m): State<Mock>, Json(v): Json<Value>) -> impl IntoResponse {
     m.requests.lock().unwrap().push(v);
-    let result = m.decision.lock().unwrap().clone();
+    let result = m
+        .responses
+        .lock()
+        .unwrap()
+        .pop_front()
+        .unwrap_or_else(|| m.decision.lock().unwrap().clone());
     (
         [("content-type", "text/event-stream")],
         format!(
@@ -125,7 +132,7 @@ impl Fixture {
         let user = auth::create_user(&app, "collector", "sticker-test-password".into(), false)
             .await
             .unwrap();
-        let mock=Mock {requests:Default::default(),decision:Arc::new(Mutex::new(json!({"collect":true,"confidence":0.91,"title":"清新的绿色画面","reason":"绿色画面简洁明快，看着很舒服","tags":["清新","绿色"]}).to_string())),quote:Default::default(),png:picture(image::ImageFormat::Png,90),second:picture(image::ImageFormat::Png,20),gif:animated_picture()};
+        let mock=Mock {requests:Default::default(),responses:Default::default(),decision:Arc::new(Mutex::new(json!({"collect":true,"confidence":0.91,"title":"清新的绿色画面","reason":"绿色画面简洁明快，看着很舒服","tags":["清新","绿色"]}).to_string())),quote:Default::default(),png:picture(image::ImageFormat::Png,90),second:picture(image::ImageFormat::Png,20),gif:animated_picture()};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = Router::new()
@@ -445,6 +452,39 @@ async fn only_bound_owner_can_command_collection_even_without_a_model() {
         )
         .await;
     assert!(preview.starts_with(b"\x89PNG"));
+}
+
+#[tokio::test]
+async fn group_gif_review_recovers_malformed_output_without_double_collection() {
+    let f = Fixture::new().await;
+    f.mock
+        .responses
+        .lock()
+        .unwrap()
+        .push_back("{\"collect\":".into());
+    f.ingest(&f.event(91, "10002", "", "/pic.gif")).await;
+    f.drain().await;
+    assert_eq!(f.items().await["total"], 1);
+    let requests = f.mock.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert_eq!(
+            request["messages"][1]["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| v["type"] == "image_url")
+                .count(),
+            10
+        );
+    }
+    let reviews: i64 =
+        sqlx::query_scalar("SELECT SUM(count) FROM sticker_review_limits WHERE user_id=?")
+            .bind(&f.user.id)
+            .fetch_one(store::pool(&f.app).await.unwrap())
+            .await
+            .unwrap();
+    assert_eq!(reviews, 1);
 }
 
 #[tokio::test]

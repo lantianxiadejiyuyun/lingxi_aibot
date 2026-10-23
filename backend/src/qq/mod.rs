@@ -11,6 +11,7 @@ pub(crate) mod sticker_cadence;
 pub mod stickers;
 pub mod store;
 pub mod vector;
+pub(crate) mod vision;
 pub mod worker;
 
 use crate::{
