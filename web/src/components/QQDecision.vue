@@ -5,14 +5,14 @@ import { api, post, put } from '../lib/api'
 import { field, openForm, notify, run } from '../lib/ui'
 const emit=defineEmits<{changed:[]}>()
 const props=defineProps<{settings?:{url?:string;model?:string;aliases?:string[];timeout_secs?:number;max_checks_per_hour?:number}}>()
-const testing=ref(false), sample=ref('大肥鱼，你喜欢什么颜色呀？'), result=ref<{action:string;elapsed_ms:number;model:string}|null>(null), error=ref('')
+const testing=ref(false), sample=ref('灵犀，你好'), result=ref<{action:string;elapsed_ms:number;model:string}|null>(null), error=ref('')
 const labels:Record<string,string>={reply:'适合接话',wait:'等下一条',ignore:'安静旁听'}
 async function configure() {
   const current=await api<Record<string,any>>('/integrations'), c=current.qq?.decision||{}
   openForm({title:'本地接话判断',description:'使用独立的 Ollama 小模型，只读取当前群最近的公开消息。保存后，仍需在各群设置中选择观察或自动接话。',fields:[
     {...field('url','Ollama 地址',c.url||'http://ollama:11434','url',true),hint:'填写后端可以访问的局域网地址。Docker 内的 localhost 指向灵犀自身。'},
     field('model','本地模型',c.model||'qwen3:0.6b','text',true),
-    {...field('aliases','机器人称呼',(c.aliases||['灵犀','大肥鱼','鱼鱼']).join('，'),'text',true),hint:'用逗号分隔，最多8个。'},
+    {...field('aliases','机器人称呼',(c.aliases||['灵犀']).join('，'),'text',true),hint:'用逗号分隔，最多8个。'},
     {...field('timeout_secs','最长等待（秒）',c.timeout_secs??30,'number',true),min:3,max:60},
     {...field('max_checks_per_hour','每群每小时最多判断',c.max_checks_per_hour??60,'number',true),min:1,max:120,hint:'达到上限或服务繁忙时保持安静，被 @ 的回复仍正常处理。'},
   ],save:async v=>{
@@ -30,7 +30,7 @@ async function probe() {
 </script>
 <template>
   <section class="decision-panel panel">
-    <div class="section-heading"><div><span class="decision-eyebrow"><Sparkles :size="15" />先听一听，再开口</span><h2>让鱼鱼懂得什么时候接话</h2><p>明确叫名字时先按规则判断，其余语境交给本地小模型。每个群可以有自己的节奏。</p></div><button class="button secondary" @click="run(configure)"><Settings2 :size="15" />判断设置</button></div>
+    <div class="section-heading"><div><span class="decision-eyebrow"><Sparkles :size="15" />先听一听，再开口</span><h2>决定什么时候接话</h2><p>明确叫名字时先按规则判断，其余语境交给本地小模型。每个群可以有自己的节奏。</p></div><button class="button secondary" @click="run(configure)"><Settings2 :size="15" />判断设置</button></div>
     <div class="decision-steps"><span><b>01</b> 听当前群的对话</span><span><b>02</b> 判断是否适合接话</span><span><b>03</b> 交给聊天模型回复</span></div>
     <details v-if="props.settings?.url" class="decision-test"><summary><FlaskConical :size="15" />测试一句话 · 不发送 QQ 消息 <small>{{props.settings.model}}</small></summary><form @submit.prevent="probe"><label for="decision-sample">测试消息</label><div class="decision-test-row"><input id="decision-sample" v-model="sample" maxlength="500" required /><button class="button" :disabled="testing">{{testing?'判断中…':'测试判断'}}</button></div></form><p v-if="error" role="alert">{{error}}</p><p v-if="result" role="status"><strong>{{labels[result.action]||result.action}}</strong> · {{(result.elapsed_ms/1000).toFixed(2)}} 秒 · {{result.model}}<br /><small>这里只测试单句。真实群聊还会参考上下文、冷却时间和频率限制。</small></p></details>
     <p v-else class="muted small">尚未连接本地模型。各群默认关闭自动接话，现有回复方式不变。</p>

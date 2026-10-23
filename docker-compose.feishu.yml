@@ -1,0 +1,21 @@
+services:
+  feishu-bridge:
+    image: ${LINGXI_FEISHU_IMAGE:-lingxi-feishu:2.0.0}
+    build: ./integrations/feishu
+    environment:
+      LINGXI_URL: http://app:8000
+      LINGXI_FEISHU_BRIDGE_TOKEN: ${LINGXI_FEISHU_BRIDGE_TOKEN:?Create a dedicated token from the Feishu settings first}
+    volumes:
+      - lingxi_feishu_inbox:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    read_only: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  lingxi_feishu_inbox:

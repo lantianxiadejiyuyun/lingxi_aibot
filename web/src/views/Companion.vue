@@ -8,6 +8,7 @@ import type { Profile } from '../types'
 import PageHeading from '../components/PageHeading.vue'
 import ResourceState from '../components/ResourceState.vue'
 import EmptyState from '../components/EmptyState.vue'
+import FeishuConnect from '../components/FeishuConnect.vue'
 import QQPrivateRhythm from '../components/QQPrivateRhythm.vue'
 import QQOutreachLog, {type Outreach} from '../components/QQOutreachLog.vue'
 import '../styles/companion.css'
@@ -48,6 +49,6 @@ const origin=window.location.origin
    <section class="panel companion-connect"><div class="section-heading"><h3>连接 AstrBot</h3><Link2 :size="18" /></div><span :class="['tag',data.view.astrbot.bound?'green':'neutral']">{{ data.view.astrbot.bound?'已绑定':'未连接' }}</span><p>AstrBot 接收平台消息，灵犀负责对话、记忆和任务。主动消息送回绑定的私聊。</p><ol><li>部署 AstrBot，安装项目中的灵犀插件。</li><li>私聊发送 <code>/lingxi 身份</code>，将身份、API 地址和账号 Token 填入插件后台。</li><li>在对应私聊发送 <code>/lingxi 绑定</code>，然后选择 AstrBot 推送渠道。</li></ol><code>{{ origin }}/api/v2</code><p>Token 在 <RouterLink to="/settings?tab=account">账户与访问</RouterLink> 生成，仅填入插件后台。</p><div v-if="data.view.astrbot.bound"><code>{{ data.view.astrbot.session }}</code><button class="text-link danger" @click="unbind">解除绑定</button></div></section>
   </aside></div>
   <section class="panel companion-log"><div class="section-heading"><div><h2>最近的小记</h2><p>分享过什么，或为什么保持安静，都能在这里看到。</p></div><button class="icon-button" aria-label="刷新陪伴活动" @click="load"><RefreshCw :size="17" /></button></div><EmptyState v-if="!data.view.activities.length" title="还没有小记" description="开启后，灵犀会在合适的时候来找你。" /><article v-for="a in data.view.activities" :key="a.id"><div class="section-heading"><span :class="['tag',['sent','partial'].includes(a.status)?'green':'neutral']">{{ statuses[a.status]||a.status }}</span><time>{{ date(a.created_at) }}</time></div><p v-if="a.body" class="companion-message">{{ a.body }}</p><p class="companion-reason">{{ reasons[a.reason]||a.reason }}</p><a v-for="s in a.sources" :key="s.id" :href="s.url" target="_blank" rel="noopener noreferrer" class="text-link">{{ s.title }}<ArrowUpRight :size="14" /></a><div class="companion-deliveries"><span v-for="d in a.deliveries" :key="d.channel" :title="d.error">{{ names[d.channel] }} · {{ statuses[d.status]||d.status }}<small v-if="d.error">{{ d.error }}</small></span></div></article></section>
- <QQPrivateRhythm :settings="data.integrations.qq" @changed="load" /><QQOutreachLog :items="data.view.followups||[]" />
+ <FeishuConnect /><QQPrivateRhythm :settings="data.integrations.qq" @changed="load" /><QQOutreachLog :items="data.view.followups||[]" />
  </ResourceState>
 </template>

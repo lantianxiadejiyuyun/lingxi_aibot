@@ -209,6 +209,7 @@ pub async fn worker(app: App) {
             },
             Some(result)=running.join_next(),if !running.is_empty()=>{if let Err(error)=result{tracing::error!(%error,"job task panicked");}},
             _=interval.tick()=>{
+                if let Err(error)=crate::feishu::reconcile(&app).await{tracing::error!(%error,"Feishu inbox recovery failed");}
                 if let Err(error)=tick_schedules(&app).await{tracing::error!(%error,"schedule dispatch failed");}
                 while running.len()<4{
                     let token=id();match claim(&app,&token).await {
@@ -274,6 +275,7 @@ async fn execute(app: &App, job: &Job, cancel: &CancellationToken) -> Result<Val
     let user = auth::user(app, &job.user_id).await?;
     let params = &job.params.0;
     match job.action.as_str() {
+        "feishu_message" => crate::feishu::process(app, &user, params, cancel).await,
         "persona_reflect" => crate::growth::reflect(app, &user, params, cancel).await,
         "bili_read" => crate::bilibili::process(app, &user, params, cancel).await,
         "companion_tick" => crate::companion::tick(app, &user, cancel, None).await,

@@ -60,7 +60,7 @@ impl Default for Settings {
         Self {
             url: String::new(),
             model: "qwen3:0.6b".into(),
-            aliases: vec!["灵犀".into(), "大肥鱼".into(), "鱼鱼".into()],
+            aliases: vec!["灵犀".into()],
             timeout_secs: 30,
             max_checks_per_hour: 60,
         }
@@ -416,7 +416,10 @@ mod tests {
     use super::*;
     #[test]
     fn only_direct_addresses_use_rules_and_silence_takes_precedence() {
-        let s = Settings::default();
+        let s = Settings {
+            aliases: vec!["灵犀".into(), "大肥鱼".into(), "鱼鱼".into()],
+            ..Default::default()
+        };
         assert_eq!(
             addressed_action(&s, "大肥鱼，你喜欢蓝色吗？"),
             Some(Action::Reply)

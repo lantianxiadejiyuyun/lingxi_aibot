@@ -26,4 +26,5 @@ deploy/
 docs/legacy/
 release/
 web/node_modules/
+integrations/feishu/node_modules/
 web/dist/

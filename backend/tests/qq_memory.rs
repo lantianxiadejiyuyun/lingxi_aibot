@@ -192,7 +192,7 @@ impl Fixture {
         )
         .await
         .unwrap();
-        integrations::save_config(&app,&user,json!({"qq":{"enabled":true,"owner_qq":"10001","bot_qq":"20001","groups":["30001","30002"],"inbound":{"secret":"test-qq-inbound-secret-at-least-32-chars"},"onebot":{"url":base,"token":"test"},"vector":{"url":base},"embedding":{"url":format!("{base}/v1"),"model":"mock-embed","api_key":"test"},"collect_memory":false}})).await.unwrap();
+        integrations::save_config(&app,&user,json!({"qq":{"enabled":true,"owner_qq":"10001","bot_qq":"20001","groups":["30001","30002"],"inbound":{"secret":"test-qq-inbound-secret-at-least-32-chars"},"onebot":{"url":base,"token":"test"},"vector":{"url":base},"embedding":{"url":format!("{base}/v1"),"model":"mock-embed","api_key":"test"},"decision":{"aliases":["灵犀","大肥鱼","鱼鱼"]},"collect_memory":false}})).await.unwrap();
         Self {
             app,
             user,
@@ -237,7 +237,7 @@ impl Fixture {
     }
     async fn decision_mode(&self, mode: &str) {
         let mut cfg = integrations::config(&self.app, &self.user).await.unwrap();
-        cfg["qq"]["decision"] = json!({"url":cfg["qq"]["onebot"]["url"],"timeout_secs":3});
+        cfg["qq"]["decision"] = json!({"url":cfg["qq"]["onebot"]["url"],"timeout_secs":3,"aliases":["灵犀","大肥鱼","鱼鱼"]});
         cfg["qq"]["group_settings"] =
             json!({"30001":{"decision":{"mode":mode,"max_replies_per_hour":1}}});
         integrations::save_config(&self.app, &self.user, cfg)

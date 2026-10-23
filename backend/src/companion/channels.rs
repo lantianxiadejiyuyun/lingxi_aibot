@@ -241,26 +241,23 @@ async fn send(
             post_json(app, c["url"].as_str().unwrap_or(""), &payload, None).await?
         }
         "feishu_app" => {
-            let token = post_json(
-                app,
-                "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-                &json!({"app_id":c["app_id"],"app_secret":c["secret"]}),
-                None,
-            )
-            .await?;
-            if token["code"] != 0 {
-                return Err(invalid("飞书应用认证失败"));
-            }
-            let token = token["tenant_access_token"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| invalid("飞书应用未返回凭证"))?;
+            let origin = "https://open.feishu.cn/open-apis";
+            let token = crate::feishu::tenant_token(app, c, origin).await?;
             let kind = c["recipient_type"].as_str().unwrap_or("open_id");
             // Authentication can take time; respect changes made while it was in flight.
             if !ready_to_send(app, user, ch, expected, revision, fixed).await? {
                 return Ok(false);
             }
-            post_json(app,&format!("https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={kind}"),&json!({"receive_id":c["recipient"],"msg_type":"text","content":json!({"text":body}).to_string()}),Some(token)).await?
+            crate::feishu::send_text(
+                app,
+                &token,
+                origin,
+                kind,
+                c["recipient"].as_str().unwrap_or(""),
+                body,
+            )
+            .await?;
+            return Ok(true);
         }
         "serverchan" => {
             let url = serverchan_url(c["secret"].as_str().unwrap_or(""))?;

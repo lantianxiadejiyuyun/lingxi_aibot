@@ -24,6 +24,8 @@ jobs:
       - run: npm ci --prefix web
       - run: npm run build --prefix web
       - run: npm test --prefix web
+      - run: npm ci --prefix integrations/feishu --ignore-scripts
+      - run: npm test --prefix integrations/feishu
       - run: cargo fmt --all --check
       - run: cargo test --workspace --locked
       - run: cargo test --locked --test qq_memory real_qdrant -- --ignored
@@ -36,4 +38,7 @@ jobs:
       - run: python -m unittest scripts.tests.test_astrbot_plugin scripts.tests.test_astrbot_v2
       - run: docker compose -f docker-compose.yml -f docker-compose.astrbot.yml --profile astrbot config --quiet
       - run: docker compose -f docker-compose.yml -f docker-compose.ollama.yml config --quiet
+      - run: docker compose -f docker-compose.yml -f docker-compose.feishu.yml config --quiet
+        env:
+          LINGXI_FEISHU_BRIDGE_TOKEN: test-only-compose-validation
       - run: python scripts/pack_release.py --no-zip

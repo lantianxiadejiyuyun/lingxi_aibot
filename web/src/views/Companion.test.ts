@@ -9,7 +9,7 @@ afterEach(() => vi.clearAllMocks())
 function setup() {
  const config={enabled:false,active_start:'09:00',active_end:'22:00',quiet_start:'23:00',quiet_end:'08:00',min_interval_minutes:180,daily_limit:3,chat_cooldown_minutes:45,channels:['inapp'],interests:[],share_bilibili:false,profile_id:null}
  vi.mocked(api).mockImplementation(async path => path === '/profiles' ? [] : path === '/integrations' ? {} : {config,activities:[],timezone:'Asia/Shanghai',state:{next_check_at:100},channels:{inapp:true},astrbot:{bound:false,session:''}})
- return mount(Companion, {global:{stubs:{RouterLink:{template:'<a><slot /></a>'}}}})
+ return mount(Companion, {global:{stubs:{FeishuConnect:true,RouterLink:{template:'<a><slot /></a>'}}}})
 }
 it('retains edited settings and displays an error when saving fails', async () => {
  const wrapper=setup();await flushPromises()

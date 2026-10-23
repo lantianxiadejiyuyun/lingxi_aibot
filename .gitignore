@@ -57,4 +57,5 @@ release/lingxi-v2*/
 !/backend/migrations/
 !/backend/migrations/*.sql
 /web/node_modules/
+/integrations/feishu/node_modules/
 /web/dist/
