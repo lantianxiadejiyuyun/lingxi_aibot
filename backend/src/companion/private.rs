@@ -315,12 +315,17 @@ pub async fn process_qq(
   if !q.private_enabled||q.owner_qq!=owner||q.bot_qq!=bot{return Err(Error::Forbidden);}
   let cid=bind_conversation(app,user,"onebot",&owner).await?;
   sqlx::query("UPDATE conversations SET profile_id=? WHERE id=? AND user_id=?").bind(&q.profile_id).bind(&cid).bind(&user.id).execute(&app.pool).await?;
-  let session=crate::chat::prepare(app,user,&cid,crate::chat::Send{message:text,request_id:format!("qq-private:{key}")}).await?;
+  let mut session=crate::chat::prepare(app,user,&cid,crate::chat::Send{message:text,request_id:format!("qq-private:{key}")}).await?;
+  session.profile.system_prompt.push_str(crate::qq::dialogue::prompt(&q.reply_style));
+  let reply_anchor=crate::qq::outreach::anchor(app,user,None).await?;
   let reply=crate::chat::run(app.clone(),session,None,cancel.clone()).await?;
   let current=crate::qq::config(app,user).await?;if !current.private_enabled||current.owner_qq!=owner||current.bot_qq!=bot{return Err(Error::Forbidden);}
   sqlx::query("UPDATE qq_private_events SET status='sending',reply=?,updated_at=? WHERE id=? AND user_id=?").bind(&reply).bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;
-  channels::send_onebot(app,user,&reply).await?;
-  sqlx::query("UPDATE qq_private_events SET status='sent',updated_at=? WHERE id=? AND user_id=?").bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;Ok(json!({"sent":true,"conversation_id":cid}))
+  crate::qq::dialogue::send(app,user,&q,None,None,key,&reply,true,cancel,None).await?;
+  sqlx::query("UPDATE qq_private_events SET status='sent',updated_at=? WHERE id=? AND user_id=?").bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;
+  let latest:Option<String>=sqlx::query_scalar("SELECT id FROM qq_private_events WHERE user_id=? ORDER BY rowid DESC LIMIT 1").bind(&user.id).fetch_optional(&app.pool).await?;
+  if latest.as_deref()==Some(key)&&crate::qq::outreach::anchor(app,user,None).await?==reply_anchor{crate::qq::outreach::schedule_followup(app,user,&q,None,key).await?;}
+  Ok(json!({"sent":true,"conversation_id":cid}))
  }.await;
     if result.is_err() {
         sqlx::query("UPDATE qq_private_events SET status=CASE WHEN status='sending' THEN 'unknown' ELSE 'failed' END,updated_at=? WHERE id=? AND user_id=? AND status<>'sent'").bind(now()).bind(key).bind(&user.id).execute(&app.pool).await?;

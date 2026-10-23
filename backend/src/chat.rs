@@ -265,6 +265,10 @@ pub async fn build_context(
     ];
     let memories =
         memory::context(app, user, query, (profile.context_window / 20).min(2000)).await?;
+    let growth = crate::growth::context(app, user, &profile.id).await?;
+    if !growth.is_empty() {
+        messages.push(json!({"role":"system","content":growth}));
+    }
     if !memories.is_empty() {
         messages.push(json!({"role":"system","content":memories}));
     }
@@ -405,6 +409,11 @@ pub async fn run(
         .bind(&session.conversation_id).bind(&result).bind(now()).execute(&mut *dbtx).await?;
     }
     dbtx.commit().await?;
+    if outcome.is_ok() && !result.is_empty() {
+        if let Err(error) = crate::growth::observe(&app, &session).await {
+            tracing::warn!(%error, "persona observation failed");
+        }
+    }
     session.lease.release().await?;
     if outcome.is_err() {
         let _ = emit(&tx, "error", json!(error)).await;

@@ -30,3 +30,10 @@ it('adds a group through its own endpoint and retains failures in the form',asyn
  expect(post).toHaveBeenCalledWith('/qq/groups',{group_id:'30003',settings:expect.objectContaining({name:'新群',profile_id:null,collect_memory:false})})
  expect(w.emitted('changed')).toBeUndefined();w.unmount()
 })
+it('saves dialogue switches for one group while retaining its persona and reply policy',async()=>{
+ const w=setup();await flushPromises();await w.find('[aria-label="聊天节奏 30001"]').trigger('click')
+ const form=vi.mocked(openForm).mock.calls[0]![0]
+ await form.save({split:'true',max_messages:'4',interval_secs:'2',followup:'true',delay_minutes:'3',max_followups:'5',followup_daily:'8',proactive:'false',topics:'摄影\n电影'})
+ expect(put).toHaveBeenCalledWith('/qq/groups/30001',expect.objectContaining({system_prompt:'聊摄影',reply_mentioned:null,reply_style:{enabled:true,max_messages:4,interval_secs:2},followup:{enabled:true,delay_minutes:3,max_followups:5,daily_limit:8},proactive:expect.objectContaining({enabled:false,topics:['摄影','电影']})}))
+ expect(put).toHaveBeenCalledTimes(1);w.unmount()
+})

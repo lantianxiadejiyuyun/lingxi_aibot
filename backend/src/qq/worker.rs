@@ -1,4 +1,4 @@
-use super::{config, sessions, store, vector};
+use super::{config, dialogue, sessions, store, vector};
 use crate::{
     auth::User,
     db::now,
@@ -125,6 +125,8 @@ async fn process_locked(
                 tokio::select! { _=cancel.cancelled()=>return Err(Error::Cancelled), _=tokio::time::sleep(std::time::Duration::from_millis(200))=>() }
             }
             {
+                let reply_anchor =
+                    super::outreach::anchor(app, user, Some(&event.group_id)).await?;
                 let profile =
                     crate::settings::active_profile(app, user, cfg.profile_id.as_deref()).await?;
                 let context =
@@ -182,7 +184,7 @@ async fn process_locked(
                     .map(|s| s.system_prompt.as_str())
                     .unwrap_or("");
                 let messages = vec![
-                    json!({"role":"system","content":format!("你正在负责一个独立的QQ群会话，只可使用当前群的公开内容。不能访问或声称访问私人记忆及工具。当前群的人设与交流风格：{persona}")}),
+                    json!({"role":"system","content":format!("你正在负责一个独立的QQ群会话，只可使用当前群的公开内容。不能访问或声称访问私人记忆及工具。当前群的人设与交流风格：{persona}\n{}",dialogue::prompt(&dialogue::style(&cfg,Some(&event.group_id))))}),
                     json!({"role":"user","content":prompt}),
                 ];
                 let generated = tokio::time::timeout(
@@ -217,22 +219,19 @@ async fn process_locked(
                 if claimed == 0 {
                     return Err(invalid("消息已被处理"));
                 }
-                let url = format!("{}/send_group_msg", cfg.onebot.url.trim_end_matches('/'));
-                let mut request = crate::network::client(app,&url).await?.post(&url).json(&json!({"group_id":event.group_id,"message":[{"type":"at","data":{"qq":event.qq_id}},{"type":"text","data":{"text":format!(" {reply}")}}]}));
-                if !cfg.onebot.token.is_empty() {
-                    request = request.bearer_auth(&cfg.onebot.token);
-                }
-                let response = request
-                    .timeout(std::time::Duration::from_secs(20))
-                    .send()
-                    .await
-                    .map_err(|_| Error::Provider("OneBot 发送结果不确定，请核实后处理".into()))?;
-                let result = crate::integrations::json_response(response).await?;
-                if result["status"] != "ok" || result["retcode"].as_i64() != Some(0) {
-                    return Err(Error::Provider(
-                        "OneBot 未确认发送成功，请检查群权限和连接".into(),
-                    ));
-                }
+                dialogue::send(
+                    app,
+                    user,
+                    &cfg,
+                    Some(&event.group_id),
+                    Some(&event.qq_id),
+                    &event.id,
+                    &reply,
+                    owner,
+                    cancel,
+                    None,
+                )
+                .await?;
                 sqlx::query(&format!(
                     "UPDATE {table} SET delivery_status='sent' WHERE id=? AND user_id=?"
                 ))
@@ -253,6 +252,17 @@ async fn process_locked(
                     }
                 }
                 delivered = true;
+                if super::outreach::anchor(app, user, Some(&event.group_id)).await? == reply_anchor
+                {
+                    super::outreach::schedule_followup(
+                        app,
+                        user,
+                        &cfg,
+                        Some(&event.group_id),
+                        &event.id,
+                    )
+                    .await?;
+                }
             }
         } else {
             set_no_reply(pool, table, &event.id).await?;

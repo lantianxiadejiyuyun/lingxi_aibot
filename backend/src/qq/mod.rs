@@ -1,6 +1,8 @@
 //! QQ group observations are isolated from the owner's personal assistant data.
 pub mod api;
 pub mod decision;
+pub mod dialogue;
+pub mod outreach;
 pub mod sessions;
 pub mod stickers;
 pub mod store;
@@ -47,6 +49,8 @@ pub struct Config {
     pub retention_days: i64,
     pub stickers: stickers::Settings,
     pub decision: decision::Settings,
+    pub reply_style: dialogue::Style,
+    pub followup: dialogue::Followup,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -67,6 +71,8 @@ impl Default for Config {
             retention_days: 30,
             stickers: stickers::Settings::default(),
             decision: decision::Settings::default(),
+            reply_style: dialogue::Style::default(),
+            followup: dialogue::Followup::default(),
         }
     }
 }
@@ -116,6 +122,8 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
         serde_json::from_value(value.clone()).map_err(|_| invalid("QQ 配置字段无效"))?;
     cfg.stickers.validate()?;
     cfg.decision.validate()?;
+    cfg.reply_style.validate()?;
+    cfg.followup.validate()?;
     let unique: std::collections::HashSet<_> = cfg.groups.iter().collect();
     if unique.len() != cfg.groups.len() || cfg.groups.iter().any(|g| !valid_id(g)) {
         return Err(invalid("群号须为有效数字，不能重复添加同一个群"));
@@ -203,9 +211,23 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
         return Err(invalid("人物记忆需要独立 Qdrant 地址及嵌入模型配置"));
     }
     for group in &active {
-        if group.collect_memory || group.reply_mentioned {
+        if group.collect_memory
+            || group.reply_mentioned
+            || group
+                .group_settings
+                .values()
+                .any(|s| s.proactive.enabled || s.followup.enabled)
+        {
             crate::settings::active_profile(app, user, group.profile_id.as_deref()).await?;
         }
+    }
+    if active.iter().any(|g| {
+        g.group_settings
+            .values()
+            .any(|s| s.proactive.enabled || s.followup.enabled)
+    }) && cfg.onebot.url.is_empty()
+    {
+        return Err(invalid("主动会话需要 OneBot HTTP 地址"));
     }
     if cfg.enabled && cfg.stickers.enabled && cfg.stickers.auto_review {
         crate::settings::active_profile(

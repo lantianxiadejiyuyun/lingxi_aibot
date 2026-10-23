@@ -63,3 +63,21 @@ CREATE TABLE IF NOT EXISTS decision_inference_lock (
   token TEXT NOT NULL,
   until_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reply_parts (
+ user_id TEXT NOT NULL, delivery_key TEXT NOT NULL, position INTEGER NOT NULL,
+ body TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,delivery_key,position)
+);
+CREATE TABLE IF NOT EXISTS outreach (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL, group_id TEXT NOT NULL,
+ kind TEXT NOT NULL, origin TEXT NOT NULL, anchor TEXT NOT NULL, config_key TEXT NOT NULL,
+ root TEXT NOT NULL DEFAULT '', step INTEGER NOT NULL DEFAULT 1,
+ due_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', body TEXT NOT NULL DEFAULT '',
+ reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+ UNIQUE(user_id,group_id,kind,origin)
+);
+CREATE INDEX IF NOT EXISTS outreach_due ON outreach(status,due_at);
+CREATE TABLE IF NOT EXISTS outreach_state (
+ user_id TEXT NOT NULL, group_id TEXT NOT NULL, next_check_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,group_id)
+);

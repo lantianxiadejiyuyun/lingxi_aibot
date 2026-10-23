@@ -26,6 +26,9 @@ pub struct GroupSettings {
     pub reply_mentioned: Option<bool>,
     pub collect_memory: Option<bool>,
     pub decision: super::decision::Policy,
+    pub reply_style: super::dialogue::Style,
+    pub followup: super::dialogue::Followup,
+    pub proactive: super::outreach::Policy,
 }
 impl Default for GroupSettings {
     fn default() -> Self {
@@ -37,12 +40,18 @@ impl Default for GroupSettings {
             reply_mentioned: None,
             collect_memory: None,
             decision: super::decision::Policy::default(),
+            reply_style: Default::default(),
+            followup: Default::default(),
+            proactive: Default::default(),
         }
     }
 }
 impl GroupSettings {
     pub fn validate(&self) -> Result<()> {
         self.decision.validate()?;
+        self.reply_style.validate()?;
+        self.followup.validate()?;
+        self.proactive.validate()?;
         if self.name.chars().count() > 80 || self.system_prompt.chars().count() > 2000 {
             return Err(invalid("群名称最多80字，群人设最多2000字"));
         }
@@ -87,6 +96,21 @@ pub async fn history(
 ) -> Result<Vec<store::Event>> {
     let mut history = store::history(app, user, group, None, false, before, limit as i64).await?;
     history.extend(store::history(app, user, group, None, true, before, limit as i64).await?);
+    let proactive:Vec<(String,String,i64)>=sqlx::query_as("SELECT id,body,created_at FROM outreach WHERE user_id=? AND group_id=? AND status='sent' AND created_at<=? ORDER BY created_at DESC LIMIT ?").bind(&user.id).bind(group).bind(before).bind(limit as i64).fetch_all(store::pool(app).await?).await?;
+    let cfg = super::config(app, user).await?;
+    history.extend(proactive.into_iter().map(|(id, body, at)| store::Event {
+        id: format!("outreach:{id}"),
+        user_id: user.id.clone(),
+        group_id: group.into(),
+        qq_id: cfg.bot_qq.clone(),
+        name: "灵犀".into(),
+        content: body,
+        triggered: false,
+        occurred_at: at,
+        created_at: at,
+        reply: String::new(),
+        delivery_status: "sent".into(),
+    }));
     history.sort_by(|a, b| {
         (b.occurred_at, b.created_at, &b.id).cmp(&(a.occurred_at, a.created_at, &a.id))
     });
@@ -134,8 +158,16 @@ pub async fn conversation(
     if !cfg.groups.contains(&group) {
         return Err(Error::NotFound);
     }
+    let history = history(&app, &user, &group, now() + 300, 100).await?;
+    let mut parts = serde_json::Map::new();
+    for e in &history {
+        parts.insert(
+            e.id.clone(),
+            json!(super::dialogue::parts(&app, &user, &e.id, e.qq_id == cfg.owner_qq).await?),
+        );
+    }
     Ok(ok(
-        json!({"conversation":ensure(&app,&user,&group).await?,"history":history(&app,&user,&group,now()+300,100).await?,"decisions":super::decision::logs(&app,&user,&group).await?}),
+        json!({"conversation":ensure(&app,&user,&group).await?,"history":history,"reply_parts":parts,"outreach":super::outreach::logs(&app,&user,Some(&group)).await?,"decisions":super::decision::logs(&app,&user,&group).await?}),
     ))
 }
 // Compare the encrypted settings snapshot to avoid losing another simultaneous group edit.

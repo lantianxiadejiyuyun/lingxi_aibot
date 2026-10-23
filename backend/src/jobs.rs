@@ -10,9 +10,11 @@ use std::{str::FromStr, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 pub const ACTIONS: &[&str] = &[
+    "persona_reflect",
     "bili_read",
     "companion_tick",
     "qq_private",
+    "qq_outreach",
     "qq_sticker",
     "qq_event",
     "qq_extract",
@@ -200,6 +202,8 @@ pub async fn worker(app: App) {
             _=app.shutdown.cancelled()=>break,
             _=qq_interval.tick()=>{
                 if let Err(error)=crate::qq::worker::reconcile(&app).await{tracing::error!(%error,"QQ outbox recovery failed");}
+                if let Err(error)=crate::qq::outreach::reconcile(&app).await{tracing::error!(%error,"QQ outreach recovery failed");}
+                if let Err(error)=crate::growth::reconcile(&app).await{tracing::error!(%error,"persona growth dispatch failed");}
                 if let Err(error)=crate::companion::reconcile(&app).await{tracing::error!(%error,"companion recovery failed");}
                 if let Err(error)=crate::bilibili::reconcile(&app).await{tracing::error!(%error,"Bilibili recovery failed");}
             },
@@ -270,9 +274,11 @@ async fn execute(app: &App, job: &Job, cancel: &CancellationToken) -> Result<Val
     let user = auth::user(app, &job.user_id).await?;
     let params = &job.params.0;
     match job.action.as_str() {
+        "persona_reflect" => crate::growth::reflect(app, &user, params, cancel).await,
         "bili_read" => crate::bilibili::process(app, &user, params, cancel).await,
         "companion_tick" => crate::companion::tick(app, &user, cancel, None).await,
         "qq_private" => crate::companion::private::process_qq(app, &user, params, cancel).await,
+        "qq_outreach" => crate::qq::outreach::process(app, &user, params, cancel).await,
         "qq_sticker" => crate::qq::stickers::process(app, &user, params, cancel).await,
         "qq_event" => crate::qq::worker::process(app, &user, params, cancel).await,
         "qq_extract" => crate::qq::worker::extract(app, &user, params, cancel).await,

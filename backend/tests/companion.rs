@@ -610,3 +610,53 @@ async fn qq_private_only_accepts_bound_owner_and_stores_conversation_in_main() {
     assert_eq!(f.count("messages").await, 2);
     assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
 }
+
+#[tokio::test]
+async fn qq_private_model_directed_followup_stays_in_main_database() {
+    let f = Fixture::new().await;
+    *f.m.reply.lock().unwrap() = "先聊第一点。\n\n再聊第二点。".into();
+    integrations::save_config(&f.app,&f.user,json!({"qq":{"private_enabled":true,"owner_qq":"10001","bot_qq":"20001","onebot":{"url":f.base,"token":"test"},"inbound":{"secret":"private-test-secret-more-than-32-characters"},"reply_style":{"enabled":true,"max_messages":3,"interval_secs":1},"followup":{"enabled":true,"delay_minutes":1,"max_followups":3}}})).await.unwrap();
+    let mut clock = f.config();
+    clock.enabled = false;
+    companion::save(&f.app, &f.user, clock).await.unwrap();
+    let e = json!({"post_type":"message","message_type":"private","self_id":20001,"user_id":10001,"message_id":2,"message":[{"type":"text","data":{"text":"私人的摄影计划"}}]});
+    lingxi::qq::api::ingest(&f.app, &f.user, &e).await.unwrap();
+    let key: String = sqlx::query_scalar("SELECT id FROM qq_private_events")
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    private::process_qq(
+        &f.app,
+        &f.user,
+        &json!({"id":key}),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(f.m.pushes.lock().unwrap().len(), 2);
+    let followup: String = sqlx::query_scalar("SELECT id FROM qq_outreach")
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE qq_outreach SET due_at=?")
+        .bind(db::now() - 1)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    *f.m.reply.lock().unwrap()=json!({"decision":"send","message":"想到一个新的取景角度。","source_ids":[],"continue":false}).to_string();
+    let v = lingxi::qq::outreach::process(
+        &f.app,
+        &f.user,
+        &json!({"id":followup,"private":true}),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(v["status"], "sent");
+    assert_eq!(f.count("messages").await, 3);
+    assert_eq!(f.count("qq_outreach").await, 1);
+    assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
+    let req = f.m.models.lock().unwrap().last().unwrap().to_string();
+    assert!(req.contains("PERSONA:"));
+    assert!(req.contains("私人的摄影计划"));
+}

@@ -15,6 +15,7 @@ import GroupConversation from './views/GroupConversation.vue'
 import Stickers from './views/Stickers.vue'
 import Companion from './views/Companion.vue'
 import Bilibili from './views/Bilibili.vue'
+import Persona from './views/Persona.vue'
 import './style.css'
 import './styles/refinements.css'
 import './styles/theme.css'
@@ -31,6 +32,7 @@ const router = createRouter({
     { path: '/qq/groups/:group', component: GroupConversation },
     { path: '/stickers', component: Stickers },
     { path: '/companion', component: Companion },
+    { path: '/persona', component: Persona },
     { path: '/bilibili', component: Bilibili },
     { path: '/:kind(tasks|events|notes|expenses|fitness|trips|pages|images|skills|bookmarks)', component: Records, props: true },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

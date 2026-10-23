@@ -1,5 +1,5 @@
 import { LayoutDashboard, Sparkles, CheckCheck, CalendarDays, NotebookPen, Wallet, Activity, Plane,
-  PanelsTopLeft, Image, Brain, Shapes, Clock3, Bell, FolderOpen, Settings2, Bookmark, UsersRound, Sticker, Heart, TvMinimalPlay } from '@lucide/vue'
+  PanelsTopLeft, Image, Brain, Shapes, Clock3, Bell, FolderOpen, Settings2, Bookmark, UsersRound, Sticker, Heart, TvMinimalPlay, Sprout } from '@lucide/vue'
 
 export const groups = [
   { title: '工作空间', items: [
@@ -7,6 +7,7 @@ export const groups = [
   ] },
   { title: '陪伴与社交', items: [
     { id: 'companion', name: '主动陪伴', icon: Heart },
+    { id: 'persona', name: '人设养成', icon: Sprout },
     { id: 'bilibili', name: 'B 站书房', icon: TvMinimalPlay },
     { id: 'qq', name: 'QQ 群与会话', icon: UsersRound },
     { id: 'stickers', name: '图片与表情', icon: Sticker },

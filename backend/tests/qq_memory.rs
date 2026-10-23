@@ -28,6 +28,7 @@ struct Mock {
     decision_response: Arc<Mutex<Option<String>>>,
     decision_delay: Arc<std::sync::atomic::AtomicU64>,
     fail_send: Arc<Mutex<bool>>,
+    fail_after: Arc<std::sync::atomic::AtomicUsize>,
     model_response: Arc<Mutex<Option<String>>>,
     hold: Arc<std::sync::atomic::AtomicBool>,
     entered: Arc<tokio::sync::Notify>,
@@ -94,11 +95,16 @@ async fn model(State(s): State<Mock>, Json(v): Json<Value>) -> impl IntoResponse
 }
 async fn send(State(s): State<Mock>, Json(v): Json<Value>) -> Json<Value> {
     s.sends.lock().unwrap().push(v);
-    Json(if *s.fail_send.lock().unwrap() {
-        json!({"status":"failed","retcode":100})
-    } else {
-        json!({"status":"ok","retcode":0,"data":{"message_id":987}})
-    })
+    let threshold = s.fail_after.load(std::sync::atomic::Ordering::Relaxed);
+    Json(
+        if *s.fail_send.lock().unwrap()
+            || (threshold > 0 && s.sends.lock().unwrap().len() > threshold)
+        {
+            json!({"status":"failed","retcode":100})
+        } else {
+            json!({"status":"ok","retcode":0,"data":{"message_id":987}})
+        },
+    )
 }
 struct Fixture {
     app: App,
@@ -437,6 +443,232 @@ async fn explicit_address_rules_work_without_inference_and_obey_the_reply_budget
         .await;
     assert_eq!(f.process(&again).await["delivered"], false);
     assert!(f.mock.decision_requests.lock().unwrap().is_empty());
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 1);
+}
+
+async fn rhythm_config(f: &Fixture, style: bool, followup: bool, proactive: bool) {
+    let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+    cfg["qq"]["group_settings"] = json!({"30001":{"system_prompt":"PUBLIC_GROUP_PERSONA","reply_style":{"enabled":style,"max_messages":3,"interval_secs":1},"followup":{"enabled":followup,"delay_minutes":1,"max_followups":2,"daily_limit":4},"proactive":{"enabled":proactive,"active_start":"00:00","active_end":"00:00","quiet_start":"00:00","quiet_end":"00:00","idle_minutes":5}}});
+    integrations::save_config(&f.app, &f.user, cfg)
+        .await
+        .unwrap();
+}
+async fn due_outreach(f: &Fixture) -> String {
+    let pool = store::pool(&f.app).await.unwrap();
+    let key: String =
+        sqlx::query_scalar("SELECT id FROM outreach WHERE status='pending' ORDER BY rowid LIMIT 1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE outreach SET due_at=? WHERE id=?")
+        .bind(db::now() - 1)
+        .bind(&key)
+        .execute(pool)
+        .await
+        .unwrap();
+    key
+}
+async fn run_outreach(f: &Fixture, key: &str) -> Value {
+    qq::outreach::process(
+        &f.app,
+        &f.user,
+        &json!({"id":key,"private":false}),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap()
+}
+#[tokio::test]
+async fn multipart_tracks_each_send_and_never_replays_uncertain_parts() {
+    let f = Fixture::new().await;
+    rhythm_config(&f, true, false, false).await;
+    *f.mock.model_response.lock().unwrap() = Some("第一条\n\n第二条\n\n第三条".into());
+    f.mock
+        .fail_after
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    let event = f.ingest(700, "10002", "30001", "鱼来聊聊", true).await;
+    let params = json!({"id":event["event_id"],"owner":false});
+    assert!(
+        worker::process(&f.app, &f.user, &params, &CancellationToken::new())
+            .await
+            .is_err()
+    );
+    let parts = qq::dialogue::parts(&f.app, &f.user, event["event_id"].as_str().unwrap(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        parts
+            .iter()
+            .map(|p| p["status"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["sent", "unknown", "cancelled"]
+    );
+    let sends = f.mock.sends.lock().unwrap().clone();
+    assert_eq!(sends.len(), 2);
+    assert_eq!(sends[0]["message"][0]["type"], "at");
+    assert_eq!(sends[1]["message"][0]["type"], "text");
+    assert!(
+        worker::process(&f.app, &f.user, &params, &CancellationToken::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 2);
+}
+#[tokio::test]
+async fn model_chooses_followup_count_and_skip_ends_round() {
+    let f = Fixture::new().await;
+    rhythm_config(&f, false, true, false).await;
+    let event = f.ingest(701, "10002", "30001", "摄影话题", true).await;
+    worker::process(
+        &f.app,
+        &f.user,
+        &json!({"id":event["event_id"],"owner":false}),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    *f.mock.model_response.lock().unwrap()=Some(json!({"decision":"send","message":"还想到一个构图的小办法。","source_ids":[],"continue":true}).to_string());
+    let first = due_outreach(&f).await;
+    assert_eq!(run_outreach(&f, &first).await["status"], "sent");
+    let second = due_outreach(&f).await;
+    *f.mock.model_response.lock().unwrap() =
+        Some(json!({"decision":"skip","message":"","source_ids":[],"continue":true}).to_string());
+    assert_eq!(run_outreach(&f, &second).await["status"], "skip");
+    let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outreach WHERE status='pending'")
+        .fetch_one(store::pool(&f.app).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(pending, 0);
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 2);
+    let all = f
+        .mock
+        .model_requests
+        .lock()
+        .unwrap()
+        .last()
+        .unwrap()
+        .to_string();
+    assert!(all.contains("PUBLIC_GROUP_PERSONA"));
+    assert!(!all.contains("PRIVATE SYSTEM PROMPT"));
+    assert!(all.contains("构图"));
+}
+#[tokio::test]
+async fn followup_round_cap_and_incoming_messages_stop_continuation() {
+    let f = Fixture::new().await;
+    rhythm_config(&f, false, true, false).await;
+    f.ingest(702, "10002", "30001", "聊摄影", false).await;
+    let cfg = qq::config(&f.app, &f.user)
+        .await
+        .unwrap()
+        .for_group("30001")
+        .unwrap();
+    qq::outreach::schedule_followup(&f.app, &f.user, &cfg, Some("30001"), "round")
+        .await
+        .unwrap();
+    for n in 1..=2 {
+        *f.mock.model_response.lock().unwrap()=Some(json!({"decision":"send","message":format!("第{n}个不一样的新想法"),"source_ids":[],"continue":true}).to_string());
+        let key = due_outreach(&f).await;
+        assert_eq!(run_outreach(&f, &key).await["status"], "sent");
+        run_outreach(&f, &key).await;
+    }
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 2);
+    let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outreach WHERE status='pending'")
+        .fetch_one(store::pool(&f.app).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(pending, 0);
+    qq::outreach::schedule_followup(&f.app, &f.user, &cfg, Some("30001"), "next-round")
+        .await
+        .unwrap();
+    f.ingest(703, "10001", "30001", "我来接着聊", false).await;
+    let key = due_outreach(&f).await;
+    assert_eq!(run_outreach(&f, &key).await["reason"], "new_message");
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 2);
+}
+#[tokio::test]
+async fn incoming_during_followup_model_generation_cancels_send() {
+    let f = Fixture::new().await;
+    rhythm_config(&f, false, true, false).await;
+    f.ingest(704, "10002", "30001", "摄影", false).await;
+    let cfg = qq::config(&f.app, &f.user)
+        .await
+        .unwrap()
+        .for_group("30001")
+        .unwrap();
+    qq::outreach::schedule_followup(&f.app, &f.user, &cfg, Some("30001"), "race")
+        .await
+        .unwrap();
+    let key = due_outreach(&f).await;
+    *f.mock.model_response.lock().unwrap() = Some(
+        json!({"decision":"send","message":"补充一个构图方法","source_ids":[],"continue":true})
+            .to_string(),
+    );
+    f.mock
+        .hold
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let app = f.app.clone();
+    let user = f.user.clone();
+    let task = tokio::spawn(async move {
+        qq::outreach::process(
+            &app,
+            &user,
+            &json!({"id":key,"private":false}),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+    });
+    f.mock.entered.notified().await;
+    f.ingest(705, "10002", "30001", "我已经想到办法啦", false)
+        .await;
+    f.mock.release.notify_one();
+    assert_eq!(task.await.unwrap()["reason"], "new_message");
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn proactive_schedule_waits_then_uses_only_group_context_and_awaits_response() {
+    let f = Fixture::new().await;
+    rhythm_config(&f, false, false, true).await;
+    f.ingest(706, "10002", "30001", "本群摄影计划", false).await;
+    f.ingest(707, "10003", "30002", "OTHER_GROUP_SECRET", false)
+        .await;
+    sqlx::query("UPDATE events SET created_at=?,occurred_at=? WHERE group_id='30001'")
+        .bind(db::now() - 600)
+        .bind(db::now() - 600)
+        .execute(store::pool(&f.app).await.unwrap())
+        .await
+        .unwrap();
+    qq::outreach::reconcile(&f.app).await.unwrap();
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+    let pool = store::pool(&f.app).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outreach")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    sqlx::query("UPDATE outreach_state SET next_check_at=0")
+        .execute(pool)
+        .await
+        .unwrap();
+    qq::outreach::reconcile(&f.app).await.unwrap();
+    *f.mock.model_response.lock().unwrap()=Some(json!({"decision":"send","message":"大家想试试哪种构图？","source_ids":[],"continue":false}).to_string());
+    let key = due_outreach(&f).await;
+    assert_eq!(run_outreach(&f, &key).await["status"], "sent");
+    let req = f
+        .mock
+        .model_requests
+        .lock()
+        .unwrap()
+        .last()
+        .unwrap()
+        .to_string();
+    assert!(req.contains("本群摄影计划"));
+    assert!(!req.contains("OTHER_GROUP_SECRET"));
+    assert!(!req.contains("PRIVATE SYSTEM PROMPT"));
+    let first = f.mock.sends.lock().unwrap()[0].clone();
+    assert_eq!(first["message"][0]["type"], "text");
+    sqlx::query("INSERT INTO outreach(id,user_id,group_id,kind,origin,anchor,config_key,due_at,created_at,updated_at) SELECT 'again',user_id,group_id,kind,'again',anchor,config_key,?,created_at,updated_at FROM outreach WHERE id=?").bind(db::now()-1).bind(&key).execute(pool).await.unwrap();
+    assert_eq!(run_outreach(&f, "again").await["reason"], "awaiting_reply");
     assert_eq!(f.mock.sends.lock().unwrap().len(), 1);
 }
 
