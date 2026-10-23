@@ -1274,6 +1274,7 @@ dependencies = [
  "clap",
  "cron",
  "futures-util",
+ "gif",
  "hmac",
  "http-body-util",
  "image",

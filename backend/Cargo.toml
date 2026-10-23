@@ -17,6 +17,7 @@ chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 cron = "0.15"
 futures-util = "0.3"
+gif = "0.14"
 hmac = "0.12"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 md5 = "0.7"

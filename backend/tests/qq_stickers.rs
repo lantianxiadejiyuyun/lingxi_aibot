@@ -32,6 +32,23 @@ fn picture(format: image::ImageFormat, color: u8) -> Vec<u8> {
     img.write_to(&mut bytes, format).unwrap();
     bytes.into_inner()
 }
+fn animated_picture() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+        for index in 0..12 {
+            encoder
+                .encode_frame(image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(16, 16, image::Rgba([index * 20, 0, 0, 255])),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(100, 1),
+                ))
+                .unwrap();
+        }
+    }
+    bytes
+}
 #[derive(Clone)]
 struct Mock {
     requests: Arc<Mutex<Vec<Value>>>,
@@ -108,7 +125,7 @@ impl Fixture {
         let user = auth::create_user(&app, "collector", "sticker-test-password".into(), false)
             .await
             .unwrap();
-        let mock=Mock {requests:Default::default(),decision:Arc::new(Mutex::new(json!({"collect":true,"confidence":0.91,"title":"清新的绿色画面","reason":"绿色画面简洁明快，看着很舒服","tags":["清新","绿色"]}).to_string())),quote:Default::default(),png:picture(image::ImageFormat::Png,90),second:picture(image::ImageFormat::Png,20),gif:picture(image::ImageFormat::Gif,100)};
+        let mock=Mock {requests:Default::default(),decision:Arc::new(Mutex::new(json!({"collect":true,"confidence":0.91,"title":"清新的绿色画面","reason":"绿色画面简洁明快，看着很舒服","tags":["清新","绿色"]}).to_string())),quote:Default::default(),png:picture(image::ImageFormat::Png,90),second:picture(image::ImageFormat::Png,20),gif:animated_picture()};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = Router::new()
@@ -131,7 +148,7 @@ impl Fixture {
                 base_url: format!("{base}/v1"),
                 api_key: "test".into(),
                 model: "test".into(),
-                context_window: 16000,
+                context_window: 64000,
                 max_output: 1024,
                 system_prompt: "PRIVATE_OWNER_PROFILE_DO_NOT_SEND".into(),
             }],
@@ -318,6 +335,44 @@ async fn model_sees_real_pixels_and_collects_only_once_per_delivery() {
         .await
         .unwrap();
     assert!(!jobs.join("").contains("http"));
+}
+
+#[tokio::test]
+async fn collection_reviews_ten_ordered_gif_frames_in_one_request() {
+    let f = Fixture::new().await;
+    f.ingest(&f.event(1, "10002", "", "/pic.gif")).await;
+    f.drain().await;
+    assert_eq!(f.items().await["total"], 1);
+    let requests = f.mock.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    let content = requests[0]["messages"][1]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 21);
+    assert!(
+        content[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("原图共 12 帧")
+    );
+    let colors: Vec<_> = content
+        .iter()
+        .filter_map(|block| block["image_url"]["url"].as_str())
+        .map(|url| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(url.strip_prefix("data:image/png;base64,").unwrap())
+                .unwrap();
+            image::load_from_memory(&bytes)
+                .unwrap()
+                .into_rgba8()
+                .get_pixel(0, 0)
+                .0[0]
+        })
+        .collect();
+    assert_eq!(colors.len(), 10);
+    assert_eq!(colors.first(), Some(&0));
+    assert_eq!(colors.last(), Some(&220));
+    assert!(colors.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(requests[0].get("tools").is_none());
+    assert!(!requests[0].to_string().contains("PRIVATE_OWNER_PROFILE"));
 }
 
 #[tokio::test]

@@ -32,7 +32,7 @@ async function configure() {
   openForm({ title: '让灵犀挑选喜欢的图片', description: '支持主人私聊和已接入的群。模型看过喜欢才收藏，也可以由主人明确要求；聊天时会按需要从当前会话的收藏中挑一张回复。', fields: [
     choice('enabled', '图片收藏', [['true','开启'], ['false','关闭']], c.enabled),
     choice('auto_review', '收藏方式', [['true','模型挑选 + 主人命令'], ['false','仅主人命令']], c.auto_review),
-    {...choice('profile_id', '看图模型', [['','沿用 QQ 对话模型'], ...profiles.map(p => [p.id, p.name] as [string,string])], c.profile_id || ''), wide: true, hint: '用于私聊识图和收藏判断，需支持图片输入。关闭收藏后，私聊仍可看图；动图只识别首帧。'},
+    {...choice('profile_id', '看图模型', [['','沿用 QQ 对话模型'], ...profiles.map(p => [p.id, p.name] as [string,string])], c.profile_id || ''), wide: true, hint: '用于私聊识图和收藏判断，需支持图片输入。关闭收藏后，私聊仍可看图；GIF 最多识别 10 帧，不足 10 帧读取全部帧。'},
     {...field('taste', '灵犀的选图偏好', c.taste, 'textarea'), hint: '例如：喜欢可爱的小动物、简洁的画面和有趣的聊天表情。'},
     {...field('hourly_limit', '每小时最多判断收藏', c.hourly_limit, 'number', true), min: 1, max: 200, hint: '仅限制自动收藏判断；主人明确命令不占此额度。'},
     {...field('max_items', '每个图库最多收藏张数', c.max_items, 'number', true), min: 1, max: 2000},

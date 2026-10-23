@@ -82,6 +82,36 @@ async fn gif() -> impl IntoResponse {
     )
 }
 
+fn animated_gif_bytes(frame_count: u32) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+        encoder
+            .encode_frames((0..frame_count).map(|index| {
+                image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(
+                        8,
+                        8,
+                        image::Rgba([(index * 19) as u8, 80, 200, 255]),
+                    ),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(100, 1),
+                )
+            }))
+            .unwrap();
+    }
+    bytes
+}
+
+async fn animated_gif() -> impl IntoResponse {
+    ([("content-type", "image/gif")], animated_gif_bytes(12))
+}
+
+async fn short_gif() -> impl IntoResponse {
+    ([("content-type", "image/gif")], animated_gif_bytes(3))
+}
+
 async fn oversized() -> impl IntoResponse {
     (
         [("content-type", "image/png")],
@@ -123,6 +153,8 @@ impl Fixture {
             .route("/send_private_msg", post(push))
             .route("/image", get(picture))
             .route("/gif", get(gif))
+            .route("/animated-gif", get(animated_gif))
+            .route("/short-gif", get(short_gif))
             .route("/broken", get(|| async { "not an image" }))
             .route("/oversized", get(oversized))
             .with_state(mock.clone());
@@ -297,10 +329,99 @@ async fn text_mface_gif_and_image_limit_preserve_visible_scope() {
     f.process(2).await;
     let history = f.history().await;
     assert!(history.contains("看看这些表情"));
-    assert!(history.contains("GIF 仅识别首帧"));
+    assert!(history.contains("GIF 共 1 帧，本次按时间顺序识别全部 1 帧"));
     assert!(history.contains("另有 1 张图片超过单条4张上限"));
     assert_eq!(f.mock.image_requests.lock().unwrap().len(), 3);
     assert_eq!(f.mock.models.lock().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn private_gifs_send_ten_chronological_frames_and_archive_the_actual_sampling_scope() {
+    for (path, total_frames, sampled_frames) in [("/animated-gif", 12, 10), ("/short-gif", 3, 3)] {
+        let f = Fixture::new().await;
+        let mut profiles = settings::profiles(&f.app, &f.user, false).await.unwrap();
+        profiles[0].context_window = 64000;
+        settings::save_profiles(&f.app, &f.user, profiles)
+            .await
+            .unwrap();
+        qq::api::ingest(
+            &f.app,
+            &f.user,
+            &f.event(1, json!([f.image(path, "image")])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.process(1).await["sent"], true);
+        let requests = f.mock.models.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        let content = requests[0]["messages"][1]["content"].as_array().unwrap();
+        let images: Vec<_> = content
+            .iter()
+            .filter(|item| item["type"] == "image_url")
+            .collect();
+        assert_eq!(images.len(), sampled_frames);
+        let mut decoded_frame_colors = Vec::new();
+        for image in images {
+            let encoded = image["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("data:image/png;base64,")
+                .unwrap();
+            let decoded = image::load_from_memory(&STANDARD.decode(encoded).unwrap())
+                .unwrap()
+                .to_rgba8();
+            decoded_frame_colors.push(decoded.get_pixel(0, 0)[0]);
+        }
+        assert!(
+            decoded_frame_colors
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        assert_eq!(decoded_frame_colors.first(), Some(&0));
+        assert_eq!(
+            decoded_frame_colors.last(),
+            Some(&(((total_frames - 1) * 19) as u8))
+        );
+        assert_eq!(content.len(), 1 + sampled_frames * 2);
+        for (index, pair) in content[1..].chunks_exact(2).enumerate() {
+            assert_eq!(pair[0]["type"], "text");
+            let original_index = usize::from(decoded_frame_colors[index]) / 19;
+            assert_eq!(
+                pair[0]["text"],
+                format!(
+                    "GIF 原第 {} 帧 / 共 {total_frames} 帧，时间 {} 毫秒：",
+                    original_index + 1,
+                    original_index * 100
+                )
+            );
+            assert_eq!(pair[1]["type"], "image_url");
+        }
+        assert!(!requests[0].to_string().contains("private-source-token"));
+        let encrypted: String = sqlx::query_scalar("SELECT media FROM qq_private_events")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+        let saved: Value =
+            serde_json::from_str(&f.app.secrets.decrypt(&encrypted).unwrap()).unwrap();
+        assert_eq!(saved["images"][0]["sampled_frames"], sampled_frames);
+        assert_eq!(saved["images"][0]["total_frames"], total_frames);
+        assert_eq!(
+            STANDARD
+                .decode(saved["images"][0]["original"].as_str().unwrap())
+                .unwrap(),
+            animated_gif_bytes(total_frames as u32)
+        );
+        let history = f.history().await;
+        assert!(history.contains(&format!("GIF 共 {total_frames} 帧")));
+        let expected_scope = if total_frames == sampled_frames {
+            format!("按时间顺序识别全部 {sampled_frames} 帧")
+        } else {
+            format!("按时间顺序抽样识别 {sampled_frames} 帧")
+        };
+        assert!(history.contains(&expected_scope));
+        assert!(requests[1].to_string().contains("不是主人的自述"));
+        assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
+    }
 }
 
 #[tokio::test]
