@@ -473,7 +473,14 @@ pub async fn extract(
         return Ok(json!({"ignored":true}));
     };
     let owner = qq == cfg.owner_qq;
-    let profile = crate::settings::active_profile(app, user, cfg.profile_id.as_deref()).await?;
+    let profile = crate::settings::active_profile(
+        app,
+        user,
+        cfg.memory_profile_id
+            .as_deref()
+            .or(cfg.profile_id.as_deref()),
+    )
+    .await?;
     let candidates = store::history(app, user, group, Some(qq), owner, now() + 300, 24).await?;
     let mut sources = Vec::new();
     let mut budget = profile

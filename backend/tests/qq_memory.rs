@@ -1653,6 +1653,179 @@ async fn extracted_traits_follow_speaker_ownership_with_validated_evidence() {
 }
 
 #[tokio::test]
+async fn personality_model_presets_follow_group_global_and_chat_fallbacks() {
+    let f = Fixture::new().await;
+    let mut profiles = settings::profiles(&f.app, &f.user, true).await.unwrap();
+    for (name, output) in [
+        ("memory-global", 4096),
+        ("memory-group", 6144),
+        ("group-chat", 2048),
+    ] {
+        let mut profile = profiles[0].clone();
+        profile.id = name.into();
+        profile.name = name.into();
+        profile.model = name.into();
+        profile.max_output = output;
+        profile.system_prompt = "PRIVATE PRESET PERSONA MUST NOT ENTER GROUP OBSERVATIONS".into();
+        profiles.push(profile);
+    }
+    settings::save_profiles(&f.app, &f.user, profiles)
+        .await
+        .unwrap();
+    f.ingest(15001, "10002", "30001", "我习惯先听结论再讨论", false)
+        .await;
+    f.ingest(15002, "10002", "30002", "我习惯先听结论再讨论", false)
+        .await;
+    *f.mock.model_response.lock().unwrap() = Some("[]".into());
+    for (global, group, chat, expected, output) in [
+        (
+            Some("memory-global"),
+            Some("memory-group"),
+            Some("group-chat"),
+            "memory-group",
+            6144,
+        ),
+        (
+            Some("memory-global"),
+            None,
+            Some("group-chat"),
+            "memory-global",
+            4096,
+        ),
+        (None, None, Some("group-chat"), "group-chat", 2048),
+        (None, None, Some("mock"), "mock", 2048),
+        (None, None, None, "mock", 2048),
+    ] {
+        let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+        cfg["qq"]["collect_memory"] = json!(true);
+        cfg["qq"]["memory_profile_id"] = json!(global);
+        cfg["qq"]["group_settings"] = json!({"30001":{"profile_id":chat,"memory_profile_id":group},"30002":{"memory_profile_id":"memory-global"}});
+        integrations::save_config(&f.app, &f.user, cfg)
+            .await
+            .unwrap();
+        let result = worker::extract(
+            &f.app,
+            &f.user,
+            &json!({"group_id":"30001","qq_id":"10002"}),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["saved"], 0);
+        let requests = f.mock.model_requests.lock().unwrap().clone();
+        let request = requests.last().unwrap();
+        assert_eq!(request["model"], expected);
+        assert_eq!(request["max_tokens"], output);
+        assert!(!request["messages"].to_string().contains("PRIVATE"));
+        let effective = qq::config(&f.app, &f.user)
+            .await
+            .unwrap()
+            .for_group("30001")
+            .unwrap();
+        assert_eq!(effective.profile_id.as_deref(), chat);
+        let (status, view) = f.api(&f.user, "GET", "/api/v2/qq/groups", json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        let group_view = view["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["group_id"] == "30001")
+            .unwrap();
+        assert_eq!(
+            group_view["memory_profile_id"],
+            json!(group.or(global).or(chat))
+        );
+        worker::extract(
+            &f.app,
+            &f.user,
+            &json!({"group_id":"30002","qq_id":"10002"}),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            f.mock.model_requests.lock().unwrap().last().unwrap()["model"],
+            "memory-global"
+        );
+    }
+    assert!(memory::list(&f.app, &f.user).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn personality_model_selection_rejects_unknown_and_other_account_presets() {
+    let f = Fixture::new().await;
+    let other = auth::create_user(&f.app, "other", "other-persona-password".into(), false)
+        .await
+        .unwrap();
+    let mut foreign = settings::profiles(&f.app, &f.user, true)
+        .await
+        .unwrap()
+        .remove(0);
+    foreign.id = "foreign-only".into();
+    settings::save_profiles(&f.app, &other, vec![foreign])
+        .await
+        .unwrap();
+    for id in ["missing", "foreign-only"] {
+        for group in [false, true] {
+            let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+            if group {
+                cfg["qq"]["group_settings"] = json!({"30001":{"memory_profile_id":id}});
+            } else {
+                cfg["qq"]["memory_profile_id"] = json!(id);
+            }
+            assert!(
+                integrations::save_config(&f.app, &f.user, cfg)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    assert!(f.mock.model_requests.lock().unwrap().is_empty());
+    assert!(
+        qq::config(&f.app, &f.user)
+            .await
+            .unwrap()
+            .memory_profile_id
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn deleted_personality_model_does_not_silently_use_another_preset() {
+    let f = Fixture::new().await;
+    let mut profiles = settings::profiles(&f.app, &f.user, true).await.unwrap();
+    let mut extraction = profiles[0].clone();
+    extraction.id = "selected-memory".into();
+    profiles.push(extraction);
+    settings::save_profiles(&f.app, &f.user, profiles.clone())
+        .await
+        .unwrap();
+    let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+    cfg["qq"]["collect_memory"] = json!(true);
+    cfg["qq"]["memory_profile_id"] = json!("selected-memory");
+    integrations::save_config(&f.app, &f.user, cfg)
+        .await
+        .unwrap();
+    f.ingest(15101, "10002", "30001", "请记住我喜欢简单表达", false)
+        .await;
+    profiles.retain(|p| p.id != "selected-memory");
+    settings::save_profiles(&f.app, &f.user, profiles)
+        .await
+        .unwrap();
+    assert!(
+        worker::extract(
+            &f.app,
+            &f.user,
+            &json!({"group_id":"30001","qq_id":"10002"}),
+            &CancellationToken::new()
+        )
+        .await
+        .is_err()
+    );
+    assert!(f.mock.model_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 #[ignore = "requires isolated Qdrant; set LINGXI_TEST_QDRANT_URL and run --ignored"]
 async fn real_qdrant_indexes_filters_and_deletes_member_vectors() {
     let f = Fixture::new().await;

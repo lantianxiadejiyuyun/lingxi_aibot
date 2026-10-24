@@ -49,6 +49,7 @@ pub struct Config {
     pub vector: Endpoint,
     pub embedding: Endpoint,
     pub profile_id: Option<String>,
+    pub memory_profile_id: Option<String>,
     pub collect_memory: bool,
     pub reply_mentioned: bool,
     pub reply_mention_sender: bool,
@@ -72,6 +73,7 @@ impl Default for Config {
             vector: Endpoint::default(),
             embedding: Endpoint::default(),
             profile_id: None,
+            memory_profile_id: None,
             collect_memory: true,
             reply_mentioned: true,
             reply_mention_sender: false,
@@ -92,6 +94,7 @@ impl Config {
         if let Some(settings) = self.group_settings.get(group) {
             cfg.enabled &= settings.enabled;
             cfg.profile_id = settings.profile_id.clone().or(cfg.profile_id);
+            cfg.memory_profile_id = settings.memory_profile_id.clone().or(cfg.memory_profile_id);
             cfg.reply_mentioned = settings.reply_mentioned.unwrap_or(cfg.reply_mentioned);
             cfg.reply_mention_sender = settings
                 .reply_mention_sender
@@ -144,6 +147,9 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
     cfg.decision.validate()?;
     cfg.reply_style.validate()?;
     cfg.followup.validate()?;
+    if let Some(profile) = &cfg.memory_profile_id {
+        crate::settings::active_profile(app, user, Some(profile)).await?;
+    }
     let unique: std::collections::HashSet<_> = cfg.groups.iter().collect();
     if unique.len() != cfg.groups.len() || cfg.groups.iter().any(|g| !valid_id(g)) {
         return Err(invalid("群号须为有效数字，不能重复添加同一个群"));
@@ -171,6 +177,9 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
             }
         }
         if let Some(profile) = &settings.profile_id {
+            crate::settings::active_profile(app, user, Some(profile)).await?;
+        }
+        if let Some(profile) = &settings.memory_profile_id {
             crate::settings::active_profile(app, user, Some(profile)).await?;
         }
     }
@@ -234,8 +243,18 @@ pub async fn validate_config(app: &App, user: &User, value: &Value, old: &Value)
         return Err(invalid("人物记忆需要独立 Qdrant 地址及嵌入模型配置"));
     }
     for group in &active {
-        if group.collect_memory
-            || group.reply_mentioned
+        if group.collect_memory {
+            crate::settings::active_profile(
+                app,
+                user,
+                group
+                    .memory_profile_id
+                    .as_deref()
+                    .or(group.profile_id.as_deref()),
+            )
+            .await?;
+        }
+        if group.reply_mentioned
             || group
                 .group_settings
                 .values()

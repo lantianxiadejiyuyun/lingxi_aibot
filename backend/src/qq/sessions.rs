@@ -22,6 +22,7 @@ pub struct GroupSettings {
     pub name: String,
     pub enabled: bool,
     pub profile_id: Option<String>,
+    pub memory_profile_id: Option<String>,
     pub system_prompt: String,
     pub reply_mentioned: Option<bool>,
     pub reply_mention_sender: Option<bool>,
@@ -38,6 +39,7 @@ impl Default for GroupSettings {
             name: String::new(),
             enabled: true,
             profile_id: None,
+            memory_profile_id: None,
             system_prompt: String::new(),
             reply_mentioned: None,
             reply_mention_sender: None,
@@ -149,7 +151,7 @@ pub async fn list(State(app): State<App>, user: User) -> Result<Json<Value>> {
         .bind(group)
         .fetch_one(&app.pool)
         .await?;
-        groups.push(json!({"group_id":group,"settings":settings,"conversation":session,"messages":member.0+owner.0,"last_seen":member.1.max(owner.1),"active":effective.enabled,"profile_id":effective.profile_id,"reply_mentioned":effective.reply_mentioned,"reply_mention_sender":effective.reply_mention_sender,"collect_memory":effective.collect_memory}));
+        groups.push(json!({"group_id":group,"settings":settings,"conversation":session,"messages":member.0+owner.0,"last_seen":member.1.max(owner.1),"active":effective.enabled,"memory_profile_id":effective.memory_profile_id.as_ref().or(effective.profile_id.as_ref()),"profile_id":effective.profile_id,"reply_mentioned":effective.reply_mentioned,"reply_mention_sender":effective.reply_mention_sender,"collect_memory":effective.collect_memory}));
     }
     Ok(ok(json!(groups)))
 }
