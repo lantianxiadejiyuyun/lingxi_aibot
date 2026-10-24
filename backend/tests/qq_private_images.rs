@@ -25,6 +25,11 @@ struct Mock {
     image_requests: Arc<Mutex<Vec<String>>>,
     vision_failure: Arc<AtomicBool>,
     vision_responses: Arc<Mutex<VecDeque<(StatusCode, String)>>>,
+    chat_response: Arc<Mutex<Option<String>>>,
+    hold_push: Arc<AtomicBool>,
+    push_entered: Arc<tokio::sync::Notify>,
+    push_release: Arc<tokio::sync::Notify>,
+    large_original: Arc<Mutex<Vec<u8>>>,
 }
 
 async fn model(State(mock): State<Mock>, Json(body): Json<Value>) -> impl IntoResponse {
@@ -48,7 +53,11 @@ async fn model(State(mock): State<Mock>, Json(body): Json<Value>) -> impl IntoRe
     let text = if is_image {
         json!({"description":"一条蓝色圆滚滚的小鱼，正在微笑。"}).to_string()
     } else {
-        "这条蓝色小鱼看起来很开心呀。".into()
+        mock.chat_response
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "这条蓝色小鱼看起来很开心呀。".into())
     };
     (
         StatusCode::OK,
@@ -62,6 +71,10 @@ async fn model(State(mock): State<Mock>, Json(body): Json<Value>) -> impl IntoRe
 
 async fn push(State(mock): State<Mock>, Json(body): Json<Value>) -> Json<Value> {
     mock.pushes.lock().unwrap().push(body);
+    if mock.hold_push.load(Ordering::SeqCst) {
+        mock.push_entered.notify_one();
+        mock.push_release.notified().await;
+    }
     Json(json!({"status":"ok","retcode":0,"data":{"message_id":200}}))
 }
 
@@ -121,7 +134,14 @@ async fn short_gif() -> impl IntoResponse {
 async fn oversized() -> impl IntoResponse {
     (
         [("content-type", "image/png")],
-        vec![0u8; 8 * 1024 * 1024 + 1],
+        vec![0u8; 32 * 1024 * 1024 + 1],
+    )
+}
+
+async fn large_original(State(mock): State<Mock>) -> impl IntoResponse {
+    (
+        [("content-type", "image/png")],
+        mock.large_original.lock().unwrap().clone(),
     )
 }
 
@@ -163,6 +183,12 @@ impl Fixture {
             .route("/short-gif", get(short_gif))
             .route("/broken", get(|| async { "not an image" }))
             .route("/oversized", get(oversized))
+            .route("/large-original", get(large_original))
+            .route("/expired", get(|| async { StatusCode::FORBIDDEN }))
+            .route(
+                "/corrupt",
+                get(|| async { image_bytes(image::ImageFormat::Png)[..33].to_vec() }),
+            )
             .with_state(mock.clone());
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
@@ -237,6 +263,191 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn burst_images_and_text_make_one_turn_with_an_image_memory_anchor() {
+    let f = Fixture::new().await;
+    for event in [
+        f.event(901, json!([{"type":"text","data":{"text":"先看这张图"}}])),
+        f.event(902, json!([f.image("/image", "image")])),
+        f.event(
+            903,
+            json!([{"type":"text","data":{"text":"最后一起告诉我看到了什么"}}]),
+        ),
+    ] {
+        qq::api::ingest(&f.app, &f.user, &event).await.unwrap();
+    }
+    sqlx::query("UPDATE qq_private_events SET created_at=?")
+        .bind(db::now() - 6)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    let result = f.process(901).await;
+    assert_eq!(result["batched"], 3);
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.mock.models.lock().unwrap().len(),
+        2,
+        "one vision request and one combined chat request"
+    );
+    let history = f.history().await;
+    assert_eq!(history.matches("先看这张图").count(), 1);
+    assert_eq!(history.matches("最后一起告诉我看到了什么").count(), 1);
+    assert!(history.contains("蓝色圆滚滚"));
+    let anchor: String = sqlx::query_scalar("SELECT request_id FROM turns")
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    let image_key = db::digest(&format!("private:{}:20001:902", f.user.id));
+    assert_eq!(anchor, format!("qq-private:{image_key}"));
+    assert_eq!(f.process(902).await["duplicate"], true);
+    assert_eq!(f.process(903).await["duplicate"], true);
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM qq_private_events WHERE status='sent'")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 3);
+    assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
+}
+
+#[tokio::test]
+async fn cancelled_wait_leaves_private_burst_pending_without_model_or_send() {
+    let f = Fixture::new().await;
+    let event = f.event(
+        904,
+        json!([{"type":"text","data":{"text":"稍等我还没说完"}}]),
+    );
+    qq::api::ingest(&f.app, &f.user, &event).await.unwrap();
+    let key = db::digest(&format!("private:{}:20001:904", f.user.id));
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    assert!(
+        private::process_qq(&f.app, &f.user, &json!({"id":key}), &cancel)
+            .await
+            .is_err()
+    );
+    assert!(f.mock.models.lock().unwrap().is_empty());
+    assert!(f.mock.pushes.lock().unwrap().is_empty());
+    let status: String = sqlx::query_scalar("SELECT status FROM qq_private_events")
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
+}
+
+#[tokio::test]
+async fn private_burst_limits_total_images_and_keeps_the_rest_pending() {
+    let f = Fixture::new().await;
+    let mut profiles = settings::profiles(&f.app, &f.user, true).await.unwrap();
+    profiles[0].context_window = 128000;
+    settings::save_profiles(&f.app, &f.user, profiles)
+        .await
+        .unwrap();
+    for id in 910..915 {
+        qq::api::ingest(
+            &f.app,
+            &f.user,
+            &f.event(id, json!([f.image("/image", "image")])),
+        )
+        .await
+        .unwrap();
+    }
+    sqlx::query("UPDATE qq_private_events SET created_at=?")
+        .bind(db::now() - 6)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(f.process(910).await["batched"], 4);
+    assert_eq!(f.mock.image_requests.lock().unwrap().len(), 4);
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+    let pending: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM qq_private_events WHERE status='pending'")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(pending, 1);
+    assert_eq!(f.process(914).await["batched"], 1);
+    assert_eq!(f.mock.image_requests.lock().unwrap().len(), 5);
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn interrupted_private_parts_only_update_their_own_assistant_record() {
+    let f = Fixture::new().await;
+    let reply = "第一段\n\n第二段\n\n第三段";
+    *f.mock.chat_response.lock().unwrap() = Some(reply.into());
+    f.mock.hold_push.store(true, Ordering::SeqCst);
+    let mut cfg = integrations::config(&f.app, &f.user).await.unwrap();
+    cfg["qq"]["reply_style"] = json!({"enabled":true,"max_messages":3,"interval_secs":2});
+    integrations::save_config(&f.app, &f.user, cfg)
+        .await
+        .unwrap();
+    qq::api::ingest(
+        &f.app,
+        &f.user,
+        &f.event(920, json!([{"type":"text","data":{"text":"请分段回答"}}])),
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE qq_private_events SET created_at=?")
+        .bind(db::now() - 6)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    let (app, user) = (f.app.clone(), f.user.clone());
+    let key = db::digest(&format!("private:{}:20001:920", f.user.id));
+    let task = tokio::spawn(async move {
+        private::process_qq(&app, &user, &json!({"id":key}), &CancellationToken::new()).await
+    });
+    f.mock.push_entered.notified().await;
+    let cid: String = sqlx::query_scalar(
+        "SELECT conversation_id FROM private_bindings WHERE user_id=? AND channel='onebot'",
+    )
+    .bind(&f.user.id)
+    .fetch_one(&f.app.pool)
+    .await
+    .unwrap();
+    let web = lingxi::chat::prepare(
+        &f.app,
+        &f.user,
+        &cid,
+        lingxi::chat::Send {
+            message: "网页里另问一句".into(),
+            request_id: "web-same-reply".into(),
+        },
+    )
+    .await
+    .unwrap();
+    lingxi::chat::run(f.app.clone(), web, None, CancellationToken::new())
+        .await
+        .unwrap();
+    qq::api::ingest(
+        &f.app,
+        &f.user,
+        &f.event(921, json!([{"type":"text","data":{"text":"等等还有补充"}}])),
+    )
+    .await
+    .unwrap();
+    f.mock.push_release.notify_one();
+    assert_eq!(task.await.unwrap().unwrap()["sent"], true);
+    let assistants: Vec<String> = sqlx::query_scalar(
+        "SELECT content FROM messages WHERE conversation_id=? AND role='assistant' ORDER BY id",
+    )
+    .bind(&cid)
+    .fetch_all(&f.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(assistants, vec!["第一段", reply]);
+    let web_reply: String =
+        sqlx::query_scalar("SELECT reply FROM turns WHERE request_id='web-same-reply'")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(web_reply, reply);
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn pure_images_are_seen_once_and_encrypted_only_in_main_database() {
     let f = Fixture::new().await;
     let event = f.event(1, json!([f.image("/image", "image")]));
@@ -293,6 +504,94 @@ async fn pure_images_are_seen_once_and_encrypted_only_in_main_database() {
     assert!(!f.history().await.contains("private-source-token"));
     assert_eq!(f.count("messages").await, 2);
     assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
+}
+
+#[tokio::test]
+async fn original_over_eight_mib_is_downloaded_and_only_bounded_preview_reaches_model() {
+    let f = Fixture::new().await;
+    let mut random = 37u32;
+    let image = image::RgbImage::from_fn(1800, 1800, |_, _| {
+        let mut channel = || {
+            random = random.wrapping_mul(1664525).wrapping_add(1013904223);
+            (random >> 24) as u8
+        };
+        image::Rgb([channel(), channel(), channel()])
+    });
+    let mut original = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(&mut original, image::ImageFormat::Png)
+        .unwrap();
+    let original = original.into_inner();
+    assert!(original.len() > 8 * 1024 * 1024);
+    *f.mock.large_original.lock().unwrap() = original.clone();
+    qq::api::ingest(
+        &f.app,
+        &f.user,
+        &f.event(101, json!([f.image("/large-original", "image")])),
+    )
+    .await
+    .unwrap();
+    assert_eq!(f.process(101).await["sent"], true);
+    let requests = f.mock.models.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let url = requests[0]["messages"][1]["content"][1]["image_url"]["url"]
+        .as_str()
+        .unwrap();
+    let model_image = STANDARD
+        .decode(url.strip_prefix("data:image/jpeg;base64,").unwrap())
+        .unwrap();
+    assert!(model_image.len() <= 384 * 1024);
+    let decoded = image::load_from_memory(&model_image).unwrap();
+    // Random noise may require a second resize to honor the strict byte cap.
+    assert!((512..=1024).contains(&decoded.width()));
+    assert_eq!(decoded.width(), decoded.height());
+    let raw: String = sqlx::query_scalar("SELECT media FROM qq_private_events")
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    let media: Value = serde_json::from_str(&f.app.secrets.decrypt(&raw).unwrap()).unwrap();
+    assert_eq!(
+        STANDARD
+            .decode(media["images"][0]["original"].as_str().unwrap())
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        media["images"][0]["description"],
+        "一条蓝色圆滚滚的小鱼，正在微笑。"
+    );
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
+    assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
+}
+
+#[tokio::test]
+async fn image_loading_failures_explain_safe_stage_and_never_expose_source_url() {
+    for (path, code, hint) in [
+        ("/expired", "image_download_http", "HTTP 403"),
+        ("/broken", "image_format", "图片格式不支持"),
+        ("/corrupt", "image_decode", "图片损坏"),
+        ("/oversized", "image_size", "32 MiB"),
+    ] {
+        let f = Fixture::new().await;
+        qq::api::ingest(
+            &f.app,
+            &f.user,
+            &f.event(102, json!([f.image(path, "image")])),
+        )
+        .await
+        .unwrap();
+        f.process(102).await;
+        let raw: String = sqlx::query_scalar("SELECT media FROM qq_private_events")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+        let media: Value = serde_json::from_str(&f.app.secrets.decrypt(&raw).unwrap()).unwrap();
+        assert_eq!(media["images"][0]["failure_code"], code);
+        assert_eq!(media["images"][0]["vision_attempts"], 0);
+        assert!(media["images"][0]["error"].as_str().unwrap().contains(hint));
+        assert!(!f.history().await.contains("private-source-token"));
+        assert!(f.mock.models.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -614,7 +913,8 @@ async fn separate_vision_profile_works_with_collection_disabled_and_partial_imag
     );
     let history = f.history().await;
     assert!(history.contains("图片 1：一条蓝色"));
-    assert!(history.contains("图片 2：图片未能读取"));
+    assert!(history.contains("图片 2：图片格式不支持"));
+    assert!(history.contains("未识别内容"));
     assert!(!f.app.data_dir.join("qq/people.sqlite3").exists());
 }
 
@@ -842,7 +1142,7 @@ async fn revoking_vision_during_retry_delay_stops_the_second_request() {
     .await
     .unwrap();
     let change = async {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
             while f.mock.models.lock().unwrap().is_empty() {
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             }
@@ -878,7 +1178,7 @@ async fn cancelling_vision_retry_never_sends_or_generates_a_chat() {
     .unwrap();
     let cancel = CancellationToken::new();
     let change = async {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
             while f.mock.models.lock().unwrap().is_empty() {
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             }
@@ -896,4 +1196,44 @@ async fn cancelling_vision_retry_never_sends_or_generates_a_chat() {
     assert_eq!(f.mock.models.lock().unwrap().len(), 1);
     assert!(f.mock.pushes.lock().unwrap().is_empty());
     assert_eq!(f.count("messages").await, 0);
+}
+
+#[tokio::test]
+async fn small_context_keeps_over_budget_burst_messages_pending() {
+    let f = Fixture::new().await;
+    let mut profiles = settings::profiles(&f.app, &f.user, false).await.unwrap();
+    profiles[0].context_window = 8192;
+    settings::save_profiles(&f.app, &f.user, profiles)
+        .await
+        .unwrap();
+    let mut permissions = lingxi::permissions::Config::default();
+    for (feature, access) in &mut permissions.features {
+        if *feature != lingxi::permissions::Feature::Chat {
+            access.private = false;
+        }
+    }
+    settings::put(&f.app, &f.user, "feature_permissions", &json!(permissions))
+        .await
+        .unwrap();
+    for id in [221, 222] {
+        qq::api::ingest(
+            &f.app,
+            &f.user,
+            &f.event(
+                id,
+                json!([{"type":"text","data":{"text":"测试".repeat(1000)}}]),
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(f.process(221).await["batched"], 1);
+    let pending: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM qq_private_events WHERE status='pending'")
+            .fetch_one(&f.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(pending, 1);
+    assert_eq!(f.mock.models.lock().unwrap().len(), 1);
+    assert_eq!(f.mock.pushes.lock().unwrap().len(), 1);
 }

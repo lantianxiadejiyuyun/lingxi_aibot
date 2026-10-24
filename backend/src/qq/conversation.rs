@@ -49,12 +49,23 @@ pub async fn generate(
     user: &User,
     cfg: &super::Config,
     event: &store::Event,
+    batch: &[store::Event],
     profile: &Profile,
     facts: &[store::Fact],
     automatic: bool,
     cancel: &CancellationToken,
 ) -> Result<Option<String>> {
-    let rows = sessions::history(app, user, &event.group_id, event.occurred_at, 24).await?;
+    let before = batch
+        .iter()
+        .map(|e| e.occurred_at)
+        .max()
+        .unwrap_or(event.occurred_at);
+    let mut rows = sessions::history(app, user, &event.group_id, before, 24).await?;
+    // Current inputs are transmitted once, in order, rather than being repeated
+    // both as historical context and individual queued reply requests.
+    rows.retain(|e| {
+        e.delivery_status != "pending" && !batch.iter().any(|current| current.id == e.id)
+    });
     let persona = cfg
         .group_settings
         .get(&event.group_id)
@@ -77,7 +88,12 @@ pub async fn generate(
         .min(6000)
         * 2;
     messages.extend(history(&rows, &event.id, budget));
-    messages.push(json!({"role":"user","content":json!({"speaker":event.qq_id,"name":event.name,"text":event.content,"observations":facts.iter().map(|f|&f.content).collect::<Vec<_>>()}).to_string()}));
+    let current = if batch.len() > 1 {
+        json!({"messages":batch.iter().map(|e|json!({"event_id":e.id,"speaker":e.qq_id,"name":e.name,"text":e.content})).collect::<Vec<_>>(),"instruction":"以上是在同一群连续发来的消息。理解完整上下文后统一回应，保留各自发言人，不逐条确认或逐条追问。调用需要来源的工具时，source_event_id 必须选实际提出请求或明确反馈的那条当前发言，不能将别人的请求或习惯记在最后发言者名下。","observations":facts.iter().map(|f|&f.content).collect::<Vec<_>>()})
+    } else {
+        json!({"event_id":event.id,"speaker":event.qq_id,"name":event.name,"text":event.content,"observations":facts.iter().map(|f|&f.content).collect::<Vec<_>>()})
+    };
+    messages.push(json!({"role":"user","content":current.to_string()}));
     let mut step = 0;
     // Any access change ends this generation, including previously fetched tool data.
     let access = json!(permissions::config(app, user).await?);
@@ -91,7 +107,7 @@ pub async fn generate(
         let defs = if round == 3 {
             vec![]
         } else {
-            capabilities::definitions(app, user).await?
+            capabilities::batch_definitions(app, user, batch.len()).await?
         };
         let reply = tokio::time::timeout(
             std::time::Duration::from_secs(90),
@@ -148,10 +164,11 @@ pub async fn generate(
             {
                 return Err(invalid("群设置已改变"));
             }
-            let result = capabilities::execute(
+            let result = capabilities::execute_batch(
                 app,
                 user,
                 event,
+                batch,
                 profile,
                 step as i64,
                 &call.name,

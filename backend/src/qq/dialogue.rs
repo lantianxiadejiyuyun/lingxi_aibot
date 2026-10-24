@@ -163,6 +163,38 @@ pub fn prompt(style: &Style) -> String {
     }
 }
 
+pub fn part_delay_secs() -> u64 {
+    rand::Rng::gen_range(&mut rand::thread_rng(), 1..=3)
+}
+
+/// Collect until five seconds of quiet, with a twenty-second bound per batch.
+/// Persisted receive times also prevent an old queued batch waiting again.
+pub async fn wait_window<F, Fut>(
+    app: &App,
+    received_at: i64,
+    cancel: &CancellationToken,
+    mut latest: F,
+) -> Result<i64>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<i64>>,
+{
+    loop {
+        if cancel.is_cancelled() || app.shutdown.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let cutoff = (latest().await? + 5).min(received_at + 20);
+        if now() >= cutoff {
+            return Ok(cutoff);
+        }
+        tokio::select! {
+            _=cancel.cancelled()=>return Err(Error::Cancelled),
+            _=app.shutdown.cancelled()=>return Err(Error::Cancelled),
+            _=tokio::time::sleep(std::time::Duration::from_millis(200))=>(),
+        }
+    }
+}
+
 pub async fn storage<'a>(app: &'a App, main: bool) -> Result<(&'a SqlitePool, &'static str)> {
     Ok(if main {
         (&app.pool, "qq_reply_parts")
@@ -177,6 +209,30 @@ pub async fn parts(app: &App, user: &User, key: &str, main: bool) -> Result<Vec<
         .into_iter()
         .map(|(position, body, status)| json!({"position":position,"body":body,"status":status}))
         .collect())
+}
+
+pub async fn delivered_text(
+    app: &App,
+    user: &User,
+    key: &str,
+    main: bool,
+    text: &str,
+    style: &Style,
+) -> Result<String> {
+    let chunks = split(text, style);
+    let sent = parts(app, user, key, main).await?;
+    Ok(chunks
+        .into_iter()
+        .enumerate()
+        .filter_map(|(position, body)| {
+            sent.iter()
+                .any(|part| {
+                    part["position"].as_u64() == Some(position as u64) && part["status"] == "sent"
+                })
+                .then_some(body)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -331,6 +387,9 @@ pub async fn send(
     cancel: &CancellationToken,
     anchor: Option<&str>,
 ) -> Result<usize> {
+    // Normal turns also stop their remaining paragraphs when a new input arrives.
+    // This snapshot is separate from the proactive permission/anchor contract.
+    let input_anchor = super::outreach::anchor(app, user, group).await?;
     let text_chunks = split(text, &style(cfg, group));
     if text_chunks.is_empty() || text_chunks.iter().any(|s| s.trim().is_empty()) {
         return Err(invalid("回复不能为空"));
@@ -374,8 +433,12 @@ pub async fn send(
         let mut sent = 0;
         for (i,part) in chunks.iter().enumerate(){
             let body = part.body();
-            if i>0 {tokio::select!{_=cancel.cancelled()=>return Err(Error::Cancelled),_=app.shutdown.cancelled()=>return Err(Error::Cancelled),_=tokio::time::sleep(std::time::Duration::from_secs(style(cfg,group).interval_secs))=>{}}}
+            if i>0 {tokio::select!{_=cancel.cancelled()=>return Err(Error::Cancelled),_=app.shutdown.cancelled()=>return Err(Error::Cancelled),_=tokio::time::sleep(std::time::Duration::from_secs(part_delay_secs()))=>{}}}
             check_delivery(app,user,cfg,group,cancel,anchor).await?;
+            if i>0 && super::outreach::anchor(app,user,group).await? != input_anchor {
+                sqlx::query(&format!("UPDATE {table} SET status='cancelled',updated_at=? WHERE user_id=? AND delivery_key=? AND status='pending'")).bind(now()).bind(&user.id).bind(delivery_key).execute(pool).await?;
+                return Ok(sent);
+            }
             let segment = match part {
                 Part::Text(text) => json!({"type":"text","data":{"text":text}}),
                 Part::Image {id,..} => {
@@ -426,6 +489,49 @@ pub async fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paragraph_delays_stay_within_requested_range() {
+        for _ in 0..100 {
+            assert!((1..=3).contains(&part_delay_secs()));
+        }
+    }
+    #[tokio::test]
+    async fn quiet_window_extends_from_latest_input_but_stops_after_twenty_seconds() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = App::new(
+            crate::db::connect(&temp.path().join("main.db"))
+                .await
+                .unwrap(),
+            crate::db::Secrets::from_key(&[3; 32]),
+            temp.path().into(),
+            true,
+        )
+        .unwrap();
+        let first = now() - 30;
+        let latest = now() - 1;
+        assert_eq!(
+            wait_window(&app, first, &CancellationToken::new(), || async {
+                Ok(latest)
+            })
+            .await
+            .unwrap(),
+            first + 20
+        );
+        let at = now();
+        let started = tokio::time::Instant::now();
+        let cutoff = wait_window(&app, at - 10, &CancellationToken::new(), || async {
+            Ok(at - 2)
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            cutoff,
+            at + 3,
+            "latest input extends an otherwise expired five-second window"
+        );
+        assert!(started.elapsed() >= std::time::Duration::from_secs(2));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
     #[test]
     fn split_preserves_all_content_and_protects_code() {
         let s = Style {

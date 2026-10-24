@@ -139,15 +139,84 @@ async fn observe(
     .await
 }
 
+struct LoadFailure {
+    stage: &'static str,
+    error: Error,
+}
+
 async fn load_picture(
     app: &App,
     cfg: &Config,
     source: &stickers::Source,
-) -> Result<stickers::Picture> {
-    let bytes = stickers::download(app, cfg, source).await?;
+) -> std::result::Result<stickers::Picture, LoadFailure> {
+    let bytes = stickers::download(app, cfg, source)
+        .await
+        .map_err(|error| LoadFailure {
+            stage: "image_download",
+            error,
+        })?;
     tokio::task::spawn_blocking(move || stickers::prepare(bytes))
         .await
-        .map_err(|_| invalid("图片解码任务失败"))?
+        .map_err(|_| LoadFailure {
+            stage: "image_decode",
+            error: invalid("图片解码任务失败"),
+        })?
+        .map_err(|error| LoadFailure {
+            stage: "image_decode",
+            error,
+        })
+}
+
+fn load_failure(failure: &LoadFailure) -> (&'static str, String) {
+    let safe_reason = match &failure.error {
+        Error::Invalid(reason)
+            if ["图片原文件超过", "GIF 原文件最多", "图片最多", "GIF 最多"]
+                .iter()
+                .any(|prefix| reason.starts_with(prefix)) =>
+        {
+            return ("image_size", format!("{reason}；未识别内容"));
+        }
+        Error::Invalid(reason) if reason.starts_with("仅支持 ") || reason == "不是可识别的图片" =>
+        {
+            return (
+                "image_format",
+                "图片格式不支持，请发送 PNG、JPEG、GIF 或 WebP；未识别内容".into(),
+            );
+        }
+        Error::Invalid(reason) if reason == "图片下载超时" => "图片下载超时，请稍后重发",
+        Error::Provider(reason) if reason.starts_with("外部服务返回 HTTP ") => {
+            let status = reason
+                .strip_prefix("外部服务返回 HTTP ")
+                .and_then(|v| v.parse::<u16>().ok());
+            return (
+                "image_download_http",
+                match status {
+                    Some(status) => format!(
+                        "图片下载返回 HTTP {status}，地址不可用或已过期，请重新发送图片；未识别内容"
+                    ),
+                    None => "图片下载地址不可用或已过期，请重新发送图片；未识别内容".into(),
+                },
+            );
+        }
+        Error::Provider(reason) if reason.starts_with("图片下载失败") => {
+            "图片下载失败，地址可能已过期，请重新发送图片"
+        }
+        Error::Invalid(reason) if reason.starts_with("GIF ") => {
+            return (
+                "image_decode_budget",
+                "GIF 损坏或超过解码预算，请缩小或缩短动图后重发；未识别内容".into(),
+            );
+        }
+        Error::Invalid(reason) if reason.contains("压缩失败") => {
+            "图片预览压缩失败，请换一张图片或先压缩后重发"
+        }
+        _ if failure.stage == "image_download" => {
+            "图片下载失败或下载地址未通过校验，请重新发送图片"
+        }
+        _ if failure.stage == "image_decode" => "图片损坏或无法解码，请重新导出或压缩后发送",
+        _ => "图片下载或解码超时，请压缩后重发",
+    };
+    (failure.stage, format!("{safe_reason}；未识别内容"))
 }
 
 /// Saves full image input only to the main database, under a serialized per-owner quota.
@@ -233,16 +302,16 @@ pub(crate) async fn describe(
             _ = cancel.cancelled() => return Err(Error::Cancelled),
             _ = app.shutdown.cancelled() => return Err(Error::Cancelled),
             result = tokio::time::timeout(Duration::from_secs(45), load_picture(app, cfg, &attachment.source)) => {
-                result.unwrap_or_else(|_| Err(invalid("图片下载超时")))
+                result.unwrap_or_else(|_| Err(LoadFailure {stage: "image_load_timeout", error: invalid("图片处理超时")}))
             }
         };
         let picture = match picture {
             Ok(picture) => picture,
-            Err(error) => {
-                attachment.failure_code = "image_load".into();
-                tracing::warn!(stage = "image_load", kind = ?std::mem::discriminant(&error), "QQ image download or decode failed");
-                attachment.error =
-                    "图片未能读取或验证，可能已过期、格式不支持或超过大小限制；未识别内容".into();
+            Err(failure) => {
+                let (code, message) = load_failure(&failure);
+                attachment.failure_code = code.into();
+                tracing::warn!(stage = failure.stage, code, kind = ?std::mem::discriminant(&failure.error), "QQ image download or decode failed");
+                attachment.error = message;
                 continue;
             }
         };

@@ -174,3 +174,143 @@ fn static_images_keep_one_image_payload_and_thumbnail_dimensions() {
     );
     assert_eq!(picture.vision_content("查看")[1]["type"], "image_url");
 }
+
+fn vision_bytes(picture: &stickers::Picture) -> (String, Vec<u8>) {
+    let content = picture.vision_content("查看原图");
+    let (mime, base64) = content[1]["image_url"]["url"]
+        .as_str()
+        .unwrap()
+        .split_once(";base64,")
+        .unwrap();
+    (
+        mime.into(),
+        base64::engine::general_purpose::STANDARD
+            .decode(base64)
+            .unwrap(),
+    )
+}
+
+#[test]
+fn phone_original_over_previous_pixel_limit_is_compressed_for_vision_only() {
+    let mut original = Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(5000, 4000)
+        .write_to(&mut original, image::ImageFormat::Jpeg)
+        .unwrap();
+    let original = original.into_inner();
+    let picture = stickers::prepare(original.clone()).unwrap();
+    assert_eq!((picture.width, picture.height), (5000, 4000));
+    assert_eq!(picture.bytes, original);
+    let (mime, model_image) = vision_bytes(&picture);
+    assert_eq!(mime, "data:image/jpeg");
+    let decoded = image::load_from_memory(&model_image).unwrap();
+    assert_eq!(decoded.width(), 1024);
+    assert!(decoded.height() <= 1024);
+    assert!(model_image.len() <= 384 * 1024);
+    assert_ne!(model_image, picture.bytes);
+    assert_eq!(
+        image::load_from_memory(&picture.preview).unwrap().width(),
+        512
+    );
+}
+
+#[test]
+fn high_entropy_and_transparent_inputs_have_bounded_previews() {
+    for mode in 0..3 {
+        let alpha = mode == 1;
+        let mut random = 37u32;
+        let pixels = image::RgbaImage::from_fn(1024, 1024, |_, _| {
+            let mut channel = || {
+                random = random.wrapping_mul(1664525).wrapping_add(1013904223);
+                (random >> 24) as u8
+            };
+            image::Rgba([
+                channel(),
+                channel(),
+                channel(),
+                if alpha { 90 } else { 255 },
+            ])
+        });
+        let image = if mode != 0 {
+            image::DynamicImage::ImageRgba8(pixels)
+        } else {
+            image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(pixels).into_rgb8())
+        };
+        let mut original = Cursor::new(Vec::new());
+        image
+            .write_to(&mut original, image::ImageFormat::Png)
+            .unwrap();
+        let picture = stickers::prepare(original.into_inner()).unwrap();
+        let (mime, compressed) = vision_bytes(&picture);
+        assert!(compressed.len() <= 384 * 1024);
+        assert!(picture.preview.len() <= 384 * 1024);
+        let decoded = image::load_from_memory(&compressed).unwrap();
+        assert!(decoded.width() <= 1024 && decoded.height() <= 1024);
+        if alpha {
+            assert_eq!(mime, "data:image/png");
+            assert_eq!(decoded.into_rgba8().get_pixel(0, 0).0[3], 90);
+        } else {
+            assert_eq!(mime, "data:image/jpeg");
+        }
+    }
+}
+
+#[test]
+fn oversized_sources_and_gifs_still_have_separate_resource_limits() {
+    let oversized = stickers::prepare(vec![0; 32 * 1024 * 1024 + 1]);
+    assert!(oversized.err().unwrap().to_string().contains("32 MiB"));
+    let mut gif = animation(&[10], 1, 1);
+    gif.resize(8 * 1024 * 1024 + 1, 0);
+    assert!(
+        stickers::prepare(gif)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("8 MiB")
+    );
+    // Reject dimensions before allocating a decompressed image.
+    let oversized_dimensions = animation(&[10], 8193, 1);
+    assert!(
+        stickers::prepare(oversized_dimensions)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("8192")
+    );
+}
+
+#[test]
+fn detailed_gif_frames_are_compressed_without_sending_original_animation() {
+    let palette: Vec<u8> = (0..=255u8)
+        .flat_map(|value| [value, value.rotate_left(3), value ^ 0xa5])
+        .collect();
+    let mut random = 37u32;
+    let pixels: Vec<u8> = (0..600 * 600)
+        .map(|_| {
+            random = random.wrapping_mul(1664525).wrapping_add(1013904223);
+            (random >> 24) as u8
+        })
+        .collect();
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = gif::Encoder::new(&mut bytes, 600, 600, &palette).unwrap();
+        encoder
+            .write_frame(&gif::Frame {
+                width: 600,
+                height: 600,
+                delay: 10,
+                buffer: Cow::Owned(pixels),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let picture = stickers::prepare(bytes.clone()).unwrap();
+    assert_eq!(picture.bytes, bytes);
+    assert_eq!(picture.frames.len(), 1);
+    assert!(picture.frames[0].png.len() <= 384 * 1024);
+    let content = picture.vision_content("查看动图");
+    let url = content[2]["image_url"]["url"].as_str().unwrap();
+    let frame = base64::engine::general_purpose::STANDARD
+        .decode(url.strip_prefix("data:image/png;base64,").unwrap())
+        .unwrap();
+    assert_eq!(frame, picture.frames[0].png);
+}

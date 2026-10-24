@@ -449,7 +449,7 @@ async fn process_inner(
         if i > 0 && style.enabled {
             tokio::select! {
                 _=cancel.cancelled()=>return Ok(false),
-                _=tokio::time::sleep(Duration::from_secs(style.interval_secs))=>(),
+                _=tokio::time::sleep(Duration::from_secs(crate::qq::dialogue::part_delay_secs()))=>(),
             }
         }
         if cancel.is_cancelled() || !permitted(app, user, eid).await? {

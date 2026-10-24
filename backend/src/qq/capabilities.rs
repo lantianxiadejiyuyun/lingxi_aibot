@@ -86,6 +86,31 @@ pub async fn definitions(app: &App, user: &User) -> Result<Vec<Value>> {
         })
         .collect())
 }
+
+fn needs_source(name: &str) -> bool {
+    matches!(
+        name,
+        "read_bilibili" | "learn_group_habit" | "save_group_record" | "delete_group_record"
+    )
+}
+
+/// A batched turn still attributes each operation to one real incoming message.
+pub async fn batch_definitions(app: &App, user: &User, count: usize) -> Result<Vec<Value>> {
+    let mut defs = definitions(app, user).await?;
+    for def in &mut defs {
+        let required = count > 1 && needs_source(def["function"]["name"].as_str().unwrap_or(""));
+        def["function"]["parameters"]["properties"]["source_event_id"] = json!({
+            "type":"string",
+            "description":"触发本次操作的当前 messages 中的 event_id。必须引用该条真实发言；不能使用其他群、历史或私人消息的 ID。"
+        });
+        if required {
+            if let Some(fields) = def["function"]["parameters"]["required"].as_array_mut() {
+                fields.push(json!("source_event_id"));
+            }
+        }
+    }
+    Ok(defs)
+}
 async fn require(app: &App, user: &User, group: &str, f: Feature) -> Result<()> {
     if !config(app, user)
         .await?
@@ -378,9 +403,85 @@ pub async fn execute(
     args: Value,
     cancel: &CancellationToken,
 ) -> Result<Value> {
+    let fingerprint = digest(&format!("{name}:{args}"));
+    execute_scoped(
+        app,
+        user,
+        event,
+        event,
+        profile,
+        step,
+        name,
+        args,
+        fingerprint,
+        cancel,
+    )
+    .await
+}
+
+/// Source selection is limited to this turn's already scoped batch. The ledger
+/// stays anchored to the turn so changing source cannot replay a completed step.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_batch(
+    app: &App,
+    user: &User,
+    event: &store::Event,
+    batch: &[store::Event],
+    profile: &Profile,
+    step: i64,
+    name: &str,
+    mut args: Value,
+    cancel: &CancellationToken,
+) -> Result<Value> {
+    let fields = args
+        .as_object_mut()
+        .ok_or_else(|| invalid("工具参数必须是对象"))?;
+    let source_id = fields.remove("source_event_id");
+    let source = match source_id.as_ref() {
+        Some(Value::String(id)) => batch
+            .iter()
+            .find(|source| source.id == *id)
+            .ok_or_else(|| invalid("工具来源必须是本轮当前群消息"))?,
+        Some(_) => return Err(invalid("source_event_id 必须是消息 ID")),
+        None if batch.len() > 1 && needs_source(name) => {
+            return Err(invalid("连续消息中的这项操作须提供 source_event_id"));
+        }
+        None => event,
+    };
+    if source.user_id != user.id || source.group_id != event.group_id || event.user_id != user.id {
+        return Err(invalid("工具来源不属于当前账号和群"));
+    }
+    let fingerprint = digest(&format!("{name}:source={}:{args}", source.id));
+    execute_scoped(
+        app,
+        user,
+        event,
+        source,
+        profile,
+        step,
+        name,
+        args,
+        fingerprint,
+        cancel,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_scoped(
+    app: &App,
+    user: &User,
+    event: &store::Event,
+    source: &store::Event,
+    profile: &Profile,
+    step: i64,
+    name: &str,
+    args: Value,
+    fingerprint: String,
+    cancel: &CancellationToken,
+) -> Result<Value> {
     require(app, user, &event.group_id, feature(name)?).await?;
     let pool = store::pool(app).await?;
-    let fingerprint = digest(&format!("{name}:{args}"));
     let claimed=sqlx::query("INSERT INTO group_tool_calls(user_id,group_id,event_id,step,fingerprint,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING")
         .bind(&user.id).bind(&event.group_id).bind(&event.id).bind(step).bind(&fingerprint).bind(now()).execute(pool).await?.rows_affected();
     if claimed == 0 {
@@ -396,7 +497,7 @@ pub async fn execute(
     }
     let result = tokio::select! {
         _=cancel.cancelled()=>return Err(Error::Cancelled),
-        r=tokio::time::timeout(std::time::Duration::from_secs(150),execute_inner(app,user,event,profile,name,&args,cancel))=>match r {
+        r=tokio::time::timeout(std::time::Duration::from_secs(150),execute_inner(app,user,source,profile,name,&args,cancel))=>match r {
             Ok(Ok(value))=>value,
             Ok(Err(error))=>json!({"error":error.to_string()}),
             Err(_)=>json!({"error":"工具响应超时，未确认结果，不重复执行"}),

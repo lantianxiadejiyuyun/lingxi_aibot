@@ -7,7 +7,7 @@ export function rhythmFields(c:Rhythm,group=false):Field[]{
  const fields:Field[]=[
   {...choice('split','一轮回复分成几条发',[['false','关闭 · 一条发完'],['true','开启 · 按完整意思分条']],!!c.reply_style?.enabled),hint:'模型用空行分段，一段一条；短回复仍可只发一条，不按句号硬拆。超出上限的尾段会合并，代码块保持完整。'},
   {...field('max_messages','一轮最多几条',c.reply_style?.max_messages??3,'number',true),min:2,max:4},
-  {...field('interval_secs','每条间隔（秒）',c.reply_style?.interval_secs??2,'number',true),min:1,max:10},
+  {...field('interval_mode','段间节奏','随机 1–3 秒'),readonly:true,hint:'每段发送前随机稍等一下。QQ 连续输入会等安静 5 秒后合并处理，最长等 20 秒。'},
   {...choice('followup','让模型决定是否继续聊',[['false','关闭'],['true','开启 · 是否补充和次数由模型决定']],!!c.followup?.enabled),hint:'模型可以不发、发一次或继续补充；没有新内容就结束。收到新消息就取消，也会遵守活动和免打扰时段。'},
   {...field('delay_minutes','至少等多久再想一想（分钟）',c.followup?.delay_minutes??10,'number',true),min:1,max:60,hint:'到点只允许模型判断，不代表一定发消息。'},
   {...field('max_followups','一轮补充上限',c.followup?.max_followups??3,'number',true),min:1,max:5,hint:'防止刷屏的上限，模型不用发满。'},

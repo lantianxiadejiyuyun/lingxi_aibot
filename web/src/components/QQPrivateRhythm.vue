@@ -15,6 +15,6 @@ async function edit(){
 <template>
  <section class="panel spaced"><div class="section-heading"><div class="inline-actions"><span class="stat-icon lilac"><MessagesSquare :size="22" /></span><div><h2>聊得自然一点</h2><p>给主人分几条说，也可以在有新想法时轻轻补充一句。</p></div></div><button class="button secondary" @click="run(edit)"><Settings2 :size="15" />私聊节奏</button></div>
  <div class="qq-group-meta"><span>{{settings?.reply_style?.enabled?`一轮最多 ${settings.reply_style.max_messages} 条`:'一轮一条'}}</span><span>{{settings?.followup?.enabled?`${settings.followup.delay_minutes} 分钟后由模型决定是否继续聊`:'延迟补充关闭'}}</span></div>
- <p class="muted small">分段回复适用于 QQ 和飞书私聊；延迟补充通过 NapCat 发送到主人的 QQ。各群可在自己的「聊天节奏」里单独设置。</p><RouterLink to="/settings?tab=activities" class="text-link">设置主人主动陪伴<ArrowUpRight :size="14" /></RouterLink>
+ <p class="muted small">QQ 连续消息会等安静 5 秒再打包，最长等待 20 秒；QQ 和飞书分段回复的间隔随机为 1–3 秒。延迟补充通过 NapCat 发送到主人的 QQ，各群有独立设置。</p><RouterLink to="/settings?tab=activities" class="text-link">设置主人主动陪伴<ArrowUpRight :size="14" /></RouterLink>
  </section>
 </template>

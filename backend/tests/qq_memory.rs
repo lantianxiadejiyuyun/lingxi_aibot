@@ -267,6 +267,44 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn group_burst_combines_speakers_once_without_cross_group_inputs() {
+    let f = Fixture::new().await;
+    let owner = f
+        .ingest(9801, "10001", "30001", "主人在群里先说一句", true)
+        .await;
+    let member = f
+        .ingest(9802, "10002", "30001", "群友补充完整问题", true)
+        .await;
+    f.ingest(9803, "10003", "30002", "另一个群的内容不能传进来", true)
+        .await;
+    sqlx::query("UPDATE qq_owner_events SET created_at=?")
+        .bind(db::now() - 6)
+        .execute(&f.app.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE events SET created_at=?")
+        .bind(db::now() - 6)
+        .execute(store::pool(&f.app).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(f.process(&owner).await["delivered"], true);
+    assert_eq!(f.mock.sends.lock().unwrap().len(), 1);
+    f.process(&member).await;
+    assert_eq!(
+        f.mock.sends.lock().unwrap().len(),
+        1,
+        "queued jobs must not reply separately"
+    );
+    let requests = f.mock.model_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let messages = requests[0]["messages"].to_string();
+    assert_eq!(messages.matches("主人在群里先说一句").count(), 1);
+    assert_eq!(messages.matches("群友补充完整问题").count(), 1);
+    assert!(!messages.contains("另一个群的内容不能传进来"));
+    assert!(messages.contains("10001") && messages.contains("10002"));
+}
+
+#[tokio::test]
 async fn reply_mentions_default_off_and_group_override_controls_real_onebot_payloads() {
     let f = Fixture::new().await;
     for (id, global, local, group, expected) in [
@@ -506,7 +544,7 @@ async fn turning_off_automatic_replies_during_generation_prevents_send() {
         )
         .await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(3), f.mock.entered.notified())
+    tokio::time::timeout(std::time::Duration::from_secs(8), f.mock.entered.notified())
         .await
         .unwrap();
     f.decision_mode("off").await;
@@ -1236,7 +1274,7 @@ async fn group_leases_serialize_duplicates_without_blocking_another_group() {
         tokio::spawn(
             async move { worker::process(&app, &user, &p, &CancellationToken::new()).await },
         );
-    tokio::time::timeout(std::time::Duration::from_secs(3), f.mock.entered.notified())
+    tokio::time::timeout(std::time::Duration::from_secs(8), f.mock.entered.notified())
         .await
         .unwrap();
     let (app, user, p) = (f.app.clone(), f.user.clone(), params);
@@ -1245,7 +1283,7 @@ async fn group_leases_serialize_duplicates_without_blocking_another_group() {
             async move { worker::process(&app, &user, &p, &CancellationToken::new()).await },
         );
     tokio::time::timeout(
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(8),
         worker::process(
             &f.app,
             &f.user,
@@ -1284,7 +1322,7 @@ async fn paused_group_ignores_input_and_disable_during_generation_prevents_send(
         )
         .await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(3), f.mock.entered.notified())
+    tokio::time::timeout(std::time::Duration::from_secs(8), f.mock.entered.notified())
         .await
         .unwrap();
     assert_eq!(
@@ -1923,6 +1961,243 @@ async fn group_model_tool_round_trip_does_not_load_private_tools() {
             .iter()
             .any(|m| m["role"] == "tool" && m["content"].as_str().unwrap().contains("saved"))
     );
+}
+
+#[tokio::test]
+async fn group_batched_tools_keep_the_requesting_speaker_and_current_event_id() {
+    let f = Fixture::new().await;
+    enable_group_capabilities(&f).await;
+    let first = f
+        .ingest(
+            9971,
+            "30003",
+            "30001",
+            "以后请叫我小蓝。帮群里记下周末打球。",
+            false,
+        )
+        .await;
+    let last = f
+        .ingest(9972, "30004", "30001", "也帮我看看前面这个请求", true)
+        .await;
+    let source = first["event_id"].as_str().unwrap();
+    f.mock.model_deltas.lock().unwrap().extend([
+        json!({"tool_calls":[
+            {"index":0,"id":"batch-save","function":{"name":"save_group_record","arguments":json!({"kind":"notes","title":"活动","content":"周末打球","source_event_id":source}).to_string()}},
+            {"index":1,"id":"batch-habit","function":{"name":"learn_group_habit","arguments":json!({"content":"称呼这位成员为小蓝","quote":"以后请叫我小蓝","source_event_id":source}).to_string()}}
+        ]}),
+        json!({"content":"活动记下了，小蓝。"}),
+    ]);
+    sqlx::query("UPDATE events SET created_at=?")
+        .bind(db::now() - 6)
+        .execute(store::pool(&f.app).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(f.process(&last).await["delivered"], true);
+    let records = qq::capabilities::resources(&f.app, &f.user, "30001", "record")
+        .await
+        .unwrap();
+    let habits = qq::capabilities::resources(&f.app, &f.user, "30001", "habit")
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["value"]["speaker"], "30003");
+    assert_eq!(habits.len(), 1);
+    assert_eq!(habits[0]["value"]["speaker"], "30003");
+    assert_eq!(habits[0]["value"]["event_id"], source);
+    let requests = f.mock.model_requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let material: Value = serde_json::from_str(
+        requests[0]["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        material["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["event_id"] == source && message["speaker"] == "30003")
+    );
+    for name in [
+        "save_group_record",
+        "learn_group_habit",
+        "read_bilibili",
+        "delete_group_record",
+    ] {
+        let definition = requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["function"]["name"] == name)
+            .unwrap();
+        assert!(
+            definition["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("source_event_id"))
+        );
+    }
+    assert!(!requests[0].to_string().contains("PRIVATE SYSTEM PROMPT"));
+}
+
+#[tokio::test]
+async fn group_batch_tool_source_validation_and_replay_are_scoped_to_the_turn() {
+    use qq::capabilities as cap;
+    let f = Fixture::new().await;
+    enable_group_capabilities(&f).await;
+    let a = f
+        .ingest(9981, "30003", "30001", "帮群里记下周末打球", true)
+        .await;
+    let b = f
+        .ingest(9982, "30004", "30001", "帮群里记下周末吃饭", true)
+        .await;
+    let c = f.ingest(9983, "30005", "30002", "别的群的请求", true).await;
+    let mut events = Vec::new();
+    for received in [&a, &b, &c] {
+        events.push(
+            store::event(
+                &f.app,
+                &f.user,
+                received["event_id"].as_str().unwrap(),
+                false,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let batch = &events[..2];
+    let anchor = &events[1];
+    let profile = settings::active_profile(&f.app, &f.user, None)
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let args = json!({"kind":"notes","title":"活动","content":"周末打球"});
+    assert!(
+        cap::execute_batch(
+            &f.app,
+            &f.user,
+            anchor,
+            batch,
+            &profile,
+            0,
+            "save_group_record",
+            args.clone(),
+            &cancel
+        )
+        .await
+        .is_err()
+    );
+    for source in [json!(42), json!("not-in-this-turn"), json!(events[2].id)] {
+        let mut invalid = args.clone();
+        invalid["source_event_id"] = source;
+        assert!(
+            cap::execute_batch(
+                &f.app,
+                &f.user,
+                anchor,
+                batch,
+                &profile,
+                0,
+                "save_group_record",
+                invalid,
+                &cancel
+            )
+            .await
+            .is_err()
+        );
+    }
+    // Even a mistakenly supplied cross-group batch cannot widen the source scope.
+    let mut foreign = args.clone();
+    foreign["source_event_id"] = json!(events[2].id);
+    assert!(
+        cap::execute_batch(
+            &f.app,
+            &f.user,
+            anchor,
+            &events,
+            &profile,
+            0,
+            "save_group_record",
+            foreign,
+            &cancel
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        cap::resources(&f.app, &f.user, "30001", "record")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut valid = args.clone();
+    valid["source_event_id"] = json!(events[0].id);
+    let saved = cap::execute_batch(
+        &f.app,
+        &f.user,
+        anchor,
+        batch,
+        &profile,
+        0,
+        "save_group_record",
+        valid.clone(),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved["saved"], true);
+    assert_eq!(
+        cap::execute_batch(
+            &f.app,
+            &f.user,
+            anchor,
+            batch,
+            &profile,
+            0,
+            "save_group_record",
+            valid.clone(),
+            &cancel
+        )
+        .await
+        .unwrap(),
+        saved
+    );
+    valid["source_event_id"] = json!(anchor.id);
+    assert!(
+        cap::execute_batch(
+            &f.app,
+            &f.user,
+            anchor,
+            batch,
+            &profile,
+            0,
+            "save_group_record",
+            valid,
+            &cancel
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        cap::resources(&f.app, &f.user, "30001", "record")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        cap::resources(&f.app, &f.user, "30002", "record")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let personal: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE user_id=?")
+        .bind(&f.user.id)
+        .fetch_one(&f.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(personal, 0);
 }
 #[tokio::test]
 async fn automatic_group_reply_can_choose_silence_and_current_message_occurs_once() {

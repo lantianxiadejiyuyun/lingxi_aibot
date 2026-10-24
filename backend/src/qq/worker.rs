@@ -90,13 +90,35 @@ async fn process_locked(
     if !cfg.enabled {
         return Ok(json!({"ignored":"disabled"}));
     }
-    let owner = params["owner"].as_bool().unwrap_or(false);
-    let event = store::event(app, user, params["id"].as_str().unwrap_or(""), owner).await?;
+    let mut owner = params["owner"].as_bool().unwrap_or(false);
+    let mut event = store::event(app, user, params["id"].as_str().unwrap_or(""), owner).await?;
     let Some(cfg) = cfg.for_group(&event.group_id).filter(|c| c.enabled) else {
         return Ok(json!({"ignored":"group_disabled"}));
     };
     if owner != (event.qq_id == cfg.owner_qq) {
         return Err(invalid("消息身份或群范围已改变"));
+    }
+    let mut batch = vec![event.clone()];
+    if event.delivery_status == "pending" {
+        let received = group_batch(app, user, &event.group_id, cancel).await?;
+        if let Some((last_owner, last)) = received
+            .iter()
+            .rev()
+            .find(|(_, e)| e.triggered)
+            .or_else(|| received.last())
+        {
+            owner = *last_owner;
+            event = last.clone();
+            batch = received.iter().map(|(_, e)| e.clone()).collect();
+            for (source_owner, earlier) in received.iter().filter(|(_, e)| e.id != event.id) {
+                let (source, table) = if *source_owner {
+                    (&app.pool, "qq_owner_events")
+                } else {
+                    (store::pool(app).await?, "events")
+                };
+                set_no_reply(source, table, &earlier.id).await?;
+            }
+        }
     }
     let pool = if owner {
         &app.pool
@@ -155,7 +177,7 @@ async fn process_locked(
                     }
                 };
                 let Some(reply) = super::conversation::generate(
-                    app, user, &cfg, &event, &profile, &facts, automatic, cancel,
+                    app, user, &cfg, &event, &batch, &profile, &facts, automatic, cancel,
                 )
                 .await?
                 else {
@@ -202,9 +224,19 @@ async fn process_locked(
                     None,
                 )
                 .await?;
+                let delivered_reply = dialogue::delivered_text(
+                    app,
+                    user,
+                    &event.id,
+                    owner,
+                    &reply,
+                    &dialogue::style(&cfg, Some(&event.group_id)),
+                )
+                .await?;
                 sqlx::query(&format!(
-                    "UPDATE {table} SET delivery_status='sent' WHERE id=? AND user_id=?"
+                    "UPDATE {table} SET delivery_status='sent',reply=? WHERE id=? AND user_id=?"
                 ))
+                .bind(&delivered_reply)
                 .bind(&event.id)
                 .bind(&user.id)
                 .execute(pool)
@@ -218,7 +250,7 @@ async fn process_locked(
                     .fetch_one(&app.pool)
                     .await?;
                     if let Some(cid) = cid {
-                        sqlx::query("INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?,'assistant',?,?)").bind(cid).bind(reply).bind(now()).execute(&app.pool).await?;
+                        sqlx::query("INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?,'assistant',?,?)").bind(cid).bind(delivered_reply).bind(now()).execute(&app.pool).await?;
                     }
                 }
                 delivered = true;
@@ -278,6 +310,84 @@ async fn process_locked(
     sqlx::query("DELETE FROM events WHERE user_id=? AND created_at<? AND delivery_status IN ('sent','no_reply')").bind(&user.id).bind(now()-cfg.retention_days*86400).execute(store::pool(app).await?).await?;
     sessions::touch(app, user, &event.group_id).await?;
     Ok(json!({"event_id":event.id,"owner":owner,"delivered":delivered}))
+}
+/// One group lease owns the whole window, including owner messages stored in the
+/// main database. Nothing from another group or a private chat is read here.
+async fn group_batch(
+    app: &App,
+    user: &User,
+    group: &str,
+    cancel: &CancellationToken,
+) -> Result<Vec<(bool, store::Event)>> {
+    let member = store::pool(app).await?;
+    let earliest = |pool: sqlx::SqlitePool, table: &'static str| {
+        let uid = user.id.clone();
+        let group = group.to_string();
+        async move {
+            sqlx::query_scalar::<_,Option<i64>>(&format!("SELECT MIN(created_at) FROM {table} WHERE user_id=? AND group_id=? AND delivery_status='pending'"))
+            .bind(uid).bind(group).fetch_one(&pool).await
+        }
+    };
+    let first = [
+        earliest(app.pool.clone(), "qq_owner_events").await?,
+        earliest(member.clone(), "events").await?,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(now());
+    let cutoff = dialogue::wait_window(app,first,cancel,|| async {
+        let mut latest = first;
+        for (pool,table) in [(&app.pool,"qq_owner_events"),(member,"events")] {
+            let at: Option<i64> = sqlx::query_scalar(&format!("SELECT MAX(created_at) FROM {table} WHERE user_id=? AND group_id=? AND delivery_status='pending' AND created_at<?"))
+                .bind(&user.id).bind(group).bind(first+20).fetch_one(pool).await?;
+            latest = latest.max(at.unwrap_or(first));
+        }
+        Ok(latest)
+    }).await?;
+    #[derive(sqlx::FromRow)]
+    struct Received {
+        #[sqlx(flatten)]
+        event: store::Event,
+        received_order: i64,
+    }
+    let mut batch = Vec::new();
+    for (owner, pool, table) in [
+        (true, &app.pool, "qq_owner_events"),
+        (false, member, "events"),
+    ] {
+        let rows: Vec<Received> = sqlx::query_as(&format!("SELECT *,rowid AS received_order FROM {table} WHERE user_id=? AND group_id=? AND delivery_status='pending' AND created_at<? ORDER BY created_at,rowid LIMIT 24"))
+            .bind(&user.id).bind(group).bind(cutoff).fetch_all(pool).await?;
+        batch.extend(
+            rows.into_iter()
+                .map(|row| (owner, row.event, row.received_order)),
+        );
+    }
+    batch.sort_by(|(_, a, ai), (_, b, bi)| {
+        (a.created_at, a.occurred_at, ai, &a.id).cmp(&(b.created_at, b.occurred_at, bi, &b.id))
+    });
+    let cfg = config(app, user).await?;
+    let profile_id = cfg.for_group(group).and_then(|c| c.profile_id);
+    let budget = crate::settings::active_profile(app, user, profile_id.as_deref())
+        .await
+        .map(|profile| {
+            profile
+                .context_window
+                .saturating_sub(profile.max_output + 6000)
+                .saturating_mul(2)
+                .clamp(1024, 100000)
+        })
+        .unwrap_or(32000);
+    let mut used = 0;
+    Ok(batch
+        .into_iter()
+        .enumerate()
+        .take_while(|(index, (_, event, _))| {
+            used += event.content.len() + 256;
+            *index == 0 || used <= budget
+        })
+        .map(|(_, (owner, event, _))| (owner, event))
+        .collect())
 }
 async fn set_no_reply(pool: &sqlx::SqlitePool, table: &str, id: &str) -> Result<()> {
     sqlx::query(&format!(

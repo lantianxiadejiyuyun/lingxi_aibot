@@ -693,6 +693,68 @@ async fn deleting_selected_image_before_delivery_cancels_only_the_optional_part(
 }
 
 #[tokio::test]
+async fn new_private_input_stops_remaining_paragraphs_without_replaying_the_first() {
+    let f = Fixture::new().await;
+    let mut integrations = integrations::config(&f.app, &f.user).await.unwrap();
+    integrations["qq"]["reply_style"] = json!({"enabled":true,"max_messages":3,"interval_secs":2});
+    integrations::save_config(&f.app, &f.user, integrations)
+        .await
+        .unwrap();
+    f.mock.hold_text.store(true, Ordering::SeqCst);
+    let (app, user, cfg) = (f.app.clone(), f.user.clone(), f.config(None).await);
+    let task = tokio::spawn(async move {
+        dialogue::send(
+            &app,
+            &user,
+            &cfg,
+            None,
+            None,
+            "interrupted-burst",
+            "第一段\n\n第二段\n\n第三段",
+            true,
+            &CancellationToken::new(),
+            None,
+        )
+        .await
+    });
+    f.mock.text_entered.notified().await;
+    sqlx::query("INSERT INTO qq_private_events(id,user_id,content,bot_qq,owner_qq,created_at,updated_at) VALUES('new-input',?,'我还没说完','20001','10001',?,?)")
+        .bind(&f.user.id).bind(db::now()).bind(db::now()).execute(&f.app.pool).await.unwrap();
+    f.mock.text_release.notify_one();
+    assert_eq!(task.await.unwrap().unwrap(), 1);
+    assert_eq!(f.sends().len(), 1);
+    let parts = dialogue::parts(&f.app, &f.user, "interrupted-burst", true)
+        .await
+        .unwrap();
+    assert_eq!(
+        parts
+            .iter()
+            .map(|part| part["status"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["sent", "cancelled", "cancelled"]
+    );
+    assert_eq!(
+        dialogue::delivered_text(
+            &f.app,
+            &f.user,
+            "interrupted-burst",
+            true,
+            "第一段\n\n第二段\n\n第三段",
+            &f.config(None).await.reply_style
+        )
+        .await
+        .unwrap(),
+        "第一段"
+    );
+    assert!(
+        f.send(None, "interrupted-burst", "第一段\n\n第二段\n\n第三段")
+            .await
+            .is_err()
+    );
+    assert_eq!(f.sends().len(), 1);
+}
+
+#[tokio::test]
 async fn new_message_during_image_selection_cancels_delayed_reply_before_any_send() {
     let f = Fixture::new().await;
     f.insert(None, "owner-cute", "小鱼", None).await;
