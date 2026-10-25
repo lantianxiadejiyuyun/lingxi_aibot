@@ -16,7 +16,7 @@ async function stickers() {
     {...field('hourly_limit', '每小时最多判断收藏', c.hourly_limit, 'number', true), min: 1, max: 200, hint: '仅限制自动收藏判断；主人明确命令不占此额度。'},
     {...field('max_items', '每个图库最多收藏张数', c.max_items, 'number', true), min: 1, max: 2000},
     {...field('max_megabytes', '每个图库容量（MB）', c.max_megabytes, 'number', true), min: 1, max: 1024},
-  ], save: async v => { await put('/qq/stickers/settings', {enabled: v.enabled === 'true', auto_review: v.auto_review === 'true', profile_id: v.profile_id || null, taste: v.taste, hourly_limit: Number(v.hourly_limit), max_items: Number(v.max_items), max_megabytes: Number(v.max_megabytes)}); notify('收藏偏好已保存'); await load() } })
+  ].map(f=>({...f,advanced:['hourly_limit','max_items','max_megabytes'].includes(f.key)})), save: async v => { await put('/qq/stickers/settings', {enabled: v.enabled === 'true', auto_review: v.auto_review === 'true', profile_id: v.profile_id || null, taste: v.taste, hourly_limit: Number(v.hourly_limit), max_items: Number(v.max_items), max_megabytes: Number(v.max_megabytes)}); notify('收藏偏好已保存'); await load() } })
 }
 async function bilibili() {
   const profiles = await api<Profile[]>('/profiles'), c = data.value.bili.config
@@ -30,7 +30,7 @@ async function bilibili() {
     {...field('daily_limit', '每天最多尝试几条', c.daily_limit, 'number', true), min: 1, max: 20},
     {...field('per_run', '每次最多几条', c.per_run, 'number', true), min: 1, max: 5},
     {...field('recent_days', '发现最近几天的视频', c.recent_days, 'number', true), min: 1, max: 30},
-  ], save: async v => {
+  ].map(f=>({...f,advanced:['taste','daily_limit','per_run','recent_days'].includes(f.key)})), save: async v => {
     await put('/bilibili', { enabled: v.enabled === 'true', autonomous: v.autonomous === 'true', daily_at: v.daily_at, keywords: v.keywords.split(/[,，\r\n]+/).map(s => s.trim()).filter(Boolean), daily_limit: Number(v.daily_limit), per_run: Number(v.per_run), recent_days: Number(v.recent_days), profile_id: v.profile_id || null, taste: v.taste })
     notify('阅读安排已保存'); await load()
   } })

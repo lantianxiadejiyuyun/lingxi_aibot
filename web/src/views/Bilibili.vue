@@ -84,7 +84,7 @@ function disconnect() { confirmAction('断开 B 站账号？', '会清除本机�
 </script>
 <template>
   <PageHeading title="看见新鲜，也留下想法" description="从好奇心出发，自己挑选想读的视频，带着新的理解回来。" eyebrow="A QUIET CORNER FOR CURIOSITY">
-    <RouterLink class="button secondary" to="/settings?tab=activities"><Settings2 :size="16" />阅读设置</RouterLink>
+    <RouterLink class="button secondary" to="/settings?tab=activities&panel=interests"><Settings2 :size="16" />阅读设置</RouterLink>
   </PageHeading>
   <section class="bili-hero">
     <div class="bili-hero-copy"><span class="bili-eyebrow"><TvMinimalPlay :size="16" />灵犀的 B 站书房</span><h2>好内容，<br />值得慢慢读。</h2><p>{{data.config.autonomous?'想看什么，让灵犀自己决定。':'从兴趣出发，读原始字幕，记下感想。'}}<br />{{data.config.autonomous?'先挑话题，再挑视频；也可以今天不看。':'下一次聊天，也许就有了新的话题。'}}</p><div class="bili-keywords"><span v-for="kw in data.config.keywords.slice(0, 4)" :key="kw">{{ kw }}</span><span v-if="!data.config.keywords.length">好奇心，从一个视频开始</span></div></div>

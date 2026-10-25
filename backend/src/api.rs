@@ -40,6 +40,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/tokens",get(tokens).post(create_token))
         .route("/api/v2/tokens/{hash}",axum::routing::delete(revoke_token))
         .route("/api/v2/dashboard",get(dashboard))
+        .route("/api/v2/interaction",get(crate::interaction::view).put(crate::interaction::save))
         .route("/api/v2/records/{kind}",get(list_records).post(create_record))
         .route("/api/v2/records/{kind}/{id}",get(get_record).put(update_record).delete(delete_record))
         .route("/api/v2/search",get(search))

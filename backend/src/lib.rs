@@ -8,6 +8,7 @@ pub mod db;
 pub mod deployment;
 pub mod error;
 pub mod integrations;
+pub mod interaction;
 pub mod jobs;
 pub mod media;
 pub mod memory;

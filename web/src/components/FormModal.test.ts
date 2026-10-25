@@ -39,3 +39,15 @@ it('applies numeric presets without submitting and preserves custom values', asy
  expect(save).toHaveBeenCalledWith({context_window:'1000000',max_output:'12000'})
  wrapper.unmount()
 })
+
+it('preserves folded advanced values and opens them when a field is invalid',async()=>{
+ const save=vi.fn().mockResolvedValue(undefined),w=mount(FormModal)
+ openForm({title:'简单配置',fields:[field('name','名称','小鱼'),{...field('limit','上限',7,'number',true),advanced:true,min:1,max:20}],save})
+ await nextTick();await nextTick()
+ expect(w.find('.form-advanced').attributes('open')).toBeUndefined()
+ const advanced=w.find('.form-advanced input')
+ await advanced.trigger('invalid');await nextTick()
+ expect(w.find('.form-advanced').attributes('open')).toBeDefined()
+ await advanced.setValue('9');await w.get('form').trigger('submit');await flushPromises()
+ expect(save).toHaveBeenCalledWith({name:'小鱼',limit:'9'});w.unmount()
+})

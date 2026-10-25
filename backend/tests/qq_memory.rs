@@ -727,6 +727,28 @@ async fn model_chooses_followup_count_and_skip_ends_round() {
     assert!(!all.contains("PRIVATE SYSTEM PROMPT"));
     assert!(all.contains("构图"));
 }
+
+#[tokio::test]
+async fn clear_conversation_closing_skips_followup_without_model_call_or_send() {
+    let f = Fixture::new().await;
+    rhythm_config(&f, false, true, false).await;
+    f.ingest(792, "10002", "30001", "晚安！", false).await;
+    let cfg = qq::config(&f.app, &f.user)
+        .await
+        .unwrap()
+        .for_group("30001")
+        .unwrap();
+    qq::outreach::schedule_followup(&f.app, &f.user, &cfg, Some("30001"), "closing")
+        .await
+        .unwrap();
+    let before = f.mock.model_requests.lock().unwrap().len();
+    let key = due_outreach(&f).await;
+    let result = run_outreach(&f, &key).await;
+    assert_eq!(result["reason"], "conversation_closed");
+    assert_eq!(result["status"], "skip");
+    assert_eq!(f.mock.model_requests.lock().unwrap().len(), before);
+    assert!(f.mock.sends.lock().unwrap().is_empty());
+}
 #[tokio::test]
 async fn followup_round_cap_and_incoming_messages_stop_continuation() {
     let f = Fixture::new().await;

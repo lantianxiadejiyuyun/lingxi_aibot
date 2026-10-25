@@ -21,7 +21,7 @@ export function rhythmFields(c:Rhythm,group=false):Field[]{
   {...field('min_interval_minutes','两次主动开场至少间隔（分钟）',p?.min_interval_minutes??180,'number',true),min:30,max:1440},
   {...field('daily_limit','每天最多主动开场几次',p?.daily_limit??2,'number',true),min:1,max:6},
   {...field('topics','适合这个群的话题',(p?.topics??[]).join('\n'),'textarea'),hint:'一行一个，最多8个、每个40字。留空时参考当前群的近期话题。'}
- );} return fields;
+ );} return fields.map(f=>({...f,advanced:!['split','followup','proactive'].includes(f.key)}));
 }
 export function rhythmValue(v:Record<string,string>,group=false):Rhythm{
  const value:Rhythm={reply_style:{enabled:v.split==='true',max_messages:Number(v.max_messages??3),interval_secs:Number(v.interval_secs??2)},followup:{enabled:v.followup==='true',delay_minutes:Number(v.delay_minutes??10),max_followups:Number(v.max_followups??3),daily_limit:Number(v.followup_daily??6)}};

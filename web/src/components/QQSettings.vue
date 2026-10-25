@@ -11,6 +11,7 @@ import NapCatConnect from './NapCatConnect.vue'
 import QQGroups from './QQGroups.vue'
 import QQDecision from './QQDecision.vue'
 import QQPrivateRhythm from './QQPrivateRhythm.vue'
+import SettingsSection from './SettingsSection.vue'
 const origin=window.location.origin
 const router=useRouter(),draft=ref<Record<string,any>>({}),saving=ref(false),saveError=ref('')
 const {data,loading,error,load}=useResource(async()=>{const [integrations,profiles]=await Promise.all([api<Record<string,any>>('/integrations'),api<Profile[]>('/profiles')]);return {integrations,profiles}},{integrations:{} as Record<string,any>,profiles:[] as Profile[]})
@@ -26,8 +27,8 @@ async function save(){saving.value=true;saveError.value='';try{const fresh=await
    <details class="config-details"><summary>连接地址与独立人物库</summary><p>使用一键连接后通常无需调整。群人物记忆需要下方独立向量库与嵌入模型。</p><div class="config-form-grid"><label>OneBot HTTP 地址<input v-model="draft.onebot.url" type="url" /></label><label>OneBot Token<input v-model="draft.onebot.token" type="password" autocomplete="new-password" /></label><label class="full">事件回调密钥<input v-model="draft.inbound.secret" type="password" autocomplete="new-password" /></label><label>群人物 Qdrant 地址<input v-model="draft.vector.url" type="url" /></label><label>Qdrant API Key<input v-model="draft.vector.api_key" type="password" autocomplete="new-password" /></label><label>嵌入服务 Base URL<input v-model="draft.embedding.url" type="url" /></label><label>嵌入模型 ID<input v-model="draft.embedding.model" /></label><label>嵌入 API Key<input v-model="draft.embedding.api_key" type="password" autocomplete="new-password" /></label></div><small>保留掩码沿用已保存密钥。关闭接入或权限会保留连接信息。</small></details>
    <p v-if="saveError" role="alert" class="form-error">{{saveError}}</p><div class="config-form-actions"><button class="button" :disabled="saving">{{saving?'保存中…':'保存 QQ 设置'}}</button><RouterLink to="/settings?tab=features" class="text-link">查看私聊 / 群聊权限</RouterLink></div>
   </form>
-  <QQPrivateRhythm :settings="data.integrations.qq" @changed="load" />
+  <SettingsSection title="私聊节奏 · 单独微调" description="分段与延迟补充；也可以在日常相处中统一选择"><QQPrivateRhythm :settings="data.integrations.qq" @changed="load" /></SettingsSection>
   <QQGroups class="spaced" @changed="load" @filter="g=>router.push(`/qq?group=${g}`)" />
-  <QQDecision :settings="data.integrations.qq?.decision" @changed="load" />
+  <SettingsSection title="本地判断模型 · 高级" description="Ollama 接口、识别称呼与判断测试"><QQDecision :settings="data.integrations.qq?.decision" @changed="load" /></SettingsSection>
  </ResourceState>
 </template>

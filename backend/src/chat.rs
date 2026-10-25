@@ -272,6 +272,7 @@ pub async fn build_context(
     ];
     // This rule also applies when an older image is discussed in a later text turn.
     messages.push(json!({"role":"system","content":crate::qq::media::CONTEXT_RULE}));
+    messages.push(json!({"role":"system","content":crate::interaction::prompt(app,user).await?}));
     let memories =
         memory::context(app, user, query, (profile.context_window / 20).min(2000)).await?;
     let growth = crate::growth::context(app, user, &profile.id).await?;

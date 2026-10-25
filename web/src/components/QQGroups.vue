@@ -35,7 +35,7 @@ function edit(group?:QQGroup) {
     {...choice('sticker_limits','表情发送频率限制',[['true','开启'],['false','关闭']],c?.sticker_limits_enabled??true),hint:'开启时：间隔5分钟、穿插两轮文字、同图30分钟不重复、每小时最多3次。关闭后仍需发图意愿达到75%。'},
     {...field('decision_cooldown','自动接话间隔（秒）',c?.decision?.cooldown_secs??120,'number',true),min:30,max:3600,hint:'仅开启自动接话频率限制时生效。'},
     {...field('decision_max','每小时最多自动接话',c?.decision?.max_replies_per_hour??6,'number',true),min:1,max:30,hint:'仅开启自动接话频率限制时生效，被 @ 的回复不占额度。'},
-  ],save:async v=>{
+  ].map(f=>({...f,advanced:!['group_id','name','enabled','profile_id','system_prompt','decision_mode'].includes(f.key)})),save:async v=>{
     const settings:GroupSettings={...c,name:v.name.trim(),enabled:v.enabled==='true',profile_id:v.profile_id||null,memory_profile_id:v.memory_profile_id||null,system_prompt:v.system_prompt.trim(),reply_mentioned:toggle(v.reply_mentioned),reply_mention_sender:toggle(v.reply_mention_sender??'inherit'),sticker_limits_enabled:v.sticker_limits!=='false',collect_memory:toggle(v.collect_memory),decision:{limits_enabled:v.decision_limits!=='false',mode:(v.decision_mode||'off') as 'off'|'observe'|'auto',cooldown_secs:Number(v.decision_cooldown??120),max_replies_per_hour:Number(v.decision_max??6)}}
     if(group) await put(`/qq/groups/${group.group_id}`,settings)
     else await post('/qq/groups',{group_id:v.group_id.trim(),settings})
