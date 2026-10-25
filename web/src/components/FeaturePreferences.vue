@@ -20,19 +20,20 @@ async function stickers() {
 }
 async function bilibili() {
   const profiles = await api<Profile[]>('/profiles'), c = data.value.bili.config
-  openForm({ title: '安排一点阅读时间', description: `按 ${data.value.bili.timezone} 运行，保存后从下一次约定时间开始。每次读取字幕会调用你选择的模型。`, fields: [
+  openForm({ title: '安排一点阅读时间', description: `按 ${data.value.bili.timezone} 运行，保存后从下一次约定时间开始。自主模式最多额外调用模型两次来选题和选片；读取字幕也会调用模型。`, fields: [
+    choice('autonomous', '视频由谁来选', [['true', 'AI 自己决定想看什么'], ['false', '按我填写的固定兴趣发现']], c.autonomous ?? false),
     choice('enabled', '每天自动发现', [['false', '关闭，仅手动阅读'], ['true', '开启']], c.enabled),
     {...field('daily_at', '每天几点开始', c.daily_at, 'time', true)},
-    {...field('keywords', '感兴趣的内容', c.keywords.join('\n'), 'textarea'), hint: '一行一个，或用逗号分隔。最多 8 项，每项 40 字。'},
+    {...field('keywords', '兴趣线索（自主选片可留空）', c.keywords.join('\n'), 'textarea'), hint: '自主模式由 AI 结合人设、近期个人交流和阅读心得选择话题、筛选视频，也可以不看。这里仅作为可选线索；固定模式必填。最多 8 项，每项 40 字。'},
     {...choice('profile_id', '阅读模型与人设', [['', '沿用默认模型'], ...profiles.map(p => [p.id, p.name] as [string, string])], c.profile_id || ''), wide: true},
     {...field('taste', '想从视频中发现什么', c.taste, 'textarea'), hint: '例如：喜欢真实经验和有新意的观点，留意和日常生活有关的小发现。最多 1000 字。'},
     {...field('daily_limit', '每天最多尝试几条', c.daily_limit, 'number', true), min: 1, max: 20},
     {...field('per_run', '每次最多几条', c.per_run, 'number', true), min: 1, max: 5},
     {...field('recent_days', '发现最近几天的视频', c.recent_days, 'number', true), min: 1, max: 30},
   ], save: async v => {
-    await put('/bilibili', { enabled: v.enabled === 'true', daily_at: v.daily_at, keywords: v.keywords.split(/[,，\r\n]+/).map(s => s.trim()).filter(Boolean), daily_limit: Number(v.daily_limit), per_run: Number(v.per_run), recent_days: Number(v.recent_days), profile_id: v.profile_id || null, taste: v.taste })
+    await put('/bilibili', { enabled: v.enabled === 'true', autonomous: v.autonomous === 'true', daily_at: v.daily_at, keywords: v.keywords.split(/[,，\r\n]+/).map(s => s.trim()).filter(Boolean), daily_limit: Number(v.daily_limit), per_run: Number(v.per_run), recent_days: Number(v.recent_days), profile_id: v.profile_id || null, taste: v.taste })
     notify('阅读安排已保存'); await load()
   } })
 }
 </script>
-<template><ResourceState :loading="loading" :error="error" @retry="load"><div class="integration-grid"><article class="integration-card"><span class="stat-icon lilac"><Image :size="23" /></span><h3>图片与表情</h3><p>看图模型、收藏偏好、判断频率与图库容量。</p><p class="muted small">自动发图需模型意愿达到 75%；默认至少间隔 5 分钟并穿插两轮文字，同图 30 分钟内不重复，每个会话每小时最多 3 次。各群可在群设置中独立开关表情限频。</p><span class="tag neutral">{{data.stickers.settings.enabled?'已开启收藏流程':'收藏流程未开启'}}</span><button class="text-link" @click="run(stickers)"><Settings2 :size="16" />配置图片与收藏</button></article><article class="integration-card"><span class="stat-icon blue"><BookOpen :size="23" /></span><h3>B 站阅读</h3><p>阅读模型、兴趣关键词、每天的阅读时间与上限。</p><span class="tag neutral">{{data.bili.config.enabled?'已安排定时阅读':'仅手动阅读'}}</span><button class="text-link" @click="run(bilibili)"><Settings2 :size="16" />配置阅读安排</button><RouterLink to="/bilibili" class="text-link">管理 B 站登录与阅读记录</RouterLink></article></div></ResourceState></template>
+<template><ResourceState :loading="loading" :error="error" @retry="load"><div class="integration-grid"><article class="integration-card"><span class="stat-icon lilac"><Image :size="23" /></span><h3>图片与表情</h3><p>看图模型、收藏偏好、判断频率与图库容量。</p><p class="muted small">自动发图需模型意愿达到 75%；默认至少间隔 5 分钟并穿插两轮文字，同图 30 分钟内不重复，每个会话每小时最多 3 次。各群可在群设置中独立开关表情限频。</p><span class="tag neutral">{{data.stickers.settings.enabled?'已开启收藏流程':'收藏流程未开启'}}</span><button class="text-link" @click="run(stickers)"><Settings2 :size="16" />配置图片与收藏</button></article><article class="integration-card"><span class="stat-icon blue"><BookOpen :size="23" /></span><h3>B 站阅读</h3><p>自主选片或固定兴趣，统一设置阅读模型、时间与上限。</p><span class="tag neutral">{{data.bili.config.autonomous?'AI 自主选片 · ':''}}{{data.bili.config.enabled?'已安排定时阅读':'仅手动阅读'}}</span><button class="text-link" @click="run(bilibili)"><Settings2 :size="16" />配置阅读安排</button><RouterLink to="/bilibili" class="text-link">管理 B 站登录与阅读记录</RouterLink></article></div></ResourceState></template>

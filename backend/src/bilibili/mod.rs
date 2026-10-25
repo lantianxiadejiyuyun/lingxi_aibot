@@ -1,5 +1,6 @@
 //! Account-owned video reading, with durable runs and a bounded daily budget.
 pub mod client;
+mod discovery;
 pub mod reader;
 use crate::{
     auth::{self, User},
@@ -21,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub enabled: bool,
+    pub autonomous: bool,
     pub keywords: Vec<String>,
     pub daily_at: String,
     pub daily_limit: i64,
@@ -33,6 +35,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: false,
+            autonomous: false,
             keywords: vec![],
             daily_at: "19:00".into(),
             daily_limit: 6,
@@ -55,9 +58,11 @@ impl Config {
         self.keywords.dedup();
         if self.keywords.len() > 8
             || self.keywords.iter().any(|s| s.chars().count() > 40)
-            || (self.enabled && self.keywords.is_empty())
+            || (self.enabled && !self.autonomous && self.keywords.is_empty())
         {
-            return Err(invalid("请填写1至8个兴趣关键词，每个不超过40字"));
+            return Err(invalid(
+                "固定兴趣模式请填写1至8个关键词，每个不超过40字；自主选片可以留空",
+            ));
         }
         if self.daily_at.len() != 5
             || chrono::NaiveTime::parse_from_str(&self.daily_at, "%H:%M").is_err()
@@ -165,7 +170,7 @@ pub async fn queue(app: &App, user: &User, input: Input, automatic: bool) -> Res
     let cfg = config(app, user).await?;
     if !input.video.is_empty() {
         client::parse_video(&input.video)?;
-    } else if cfg.keywords.is_empty() {
+    } else if !cfg.autonomous && cfg.keywords.is_empty() {
         return Err(invalid("先设置兴趣关键词，或粘贴一个视频链接"));
     }
     if automatic && !cfg.enabled {
@@ -469,10 +474,12 @@ pub async fn login_poll(
 }
 pub async fn disconnect(State(app): State<App>, user: User) -> Result<Json<Value>> {
     let mut tx = app.pool.begin().await?;
-    sqlx::query("UPDATE bili_state SET credential='',account_name='' WHERE user_id=?")
-        .bind(&user.id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE bili_state SET credential='',account_name='',revision=revision+1 WHERE user_id=?",
+    )
+    .bind(&user.id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM bili_login WHERE user_id=?")
         .bind(&user.id)
         .execute(&mut *tx)
@@ -580,20 +587,39 @@ async fn run_inner(
     .await?;
     let input: Input = serde_json::from_str(input).map_err(|_| invalid("阅读输入损坏"))?;
     let cfg: Config = serde_json::from_str(cfg).map_err(|_| invalid("阅读设置损坏"))?;
-    if mode == "automatic" {
-        let current: i64 = sqlx::query_scalar("SELECT revision FROM bili_state WHERE user_id=?")
-            .bind(&user.id)
-            .fetch_one(&app.pool)
-            .await?;
-        if revision != current || !config(app, user).await?.enabled {
-            return Err(invalid("设置已变更，本轮定时阅读取消"));
-        }
-    }
+    let guard = discovery::Guard {
+        app,
+        user,
+        cancel,
+        revision,
+        automatic: mode == "automatic",
+        permissions: json!(crate::permissions::config(app, user).await?),
+    };
+    guard.check().await?;
     let profile = settings::active_profile(app, user, cfg.profile_id.as_deref()).await?;
     let mut candidates = Vec::new();
     let mut warnings = Vec::new();
+    let mut selection_report = String::new();
     if !input.video.is_empty() {
-        candidates.push(client::parse_video(&input.video)?);
+        candidates.push((client::parse_video(&input.video)?, None));
+    } else if cfg.autonomous {
+        let used: i64 = sqlx::query_scalar(
+            "SELECT COALESCE((SELECT attempts FROM bili_usage WHERE user_id=? AND day=?),0)",
+        )
+        .bind(&user.id)
+        .bind(day(user)?)
+        .fetch_one(&app.pool)
+        .await?;
+        let limit = cfg.per_run.min((cfg.daily_limit - used).max(0)) as usize;
+        if limit == 0 {
+            return Ok((
+                "completed".into(),
+                "今日阅读额度已用完，没有启动选题或选片。".into(),
+            ));
+        }
+        let discovered = discovery::choose(&guard, &cfg, &profile, source, rid, limit).await?;
+        candidates = discovered.candidates;
+        selection_report = discovered.report;
     } else {
         for kw in &cfg.keywords {
             if cancel.is_cancelled() {
@@ -610,8 +636,8 @@ async fn run_inner(
             match source.search(kw, cfg.recent_days).await {
                 Ok(v) => {
                     for id in v {
-                        if !candidates.contains(&id) {
-                            candidates.push(id)
+                        if !candidates.iter().any(|(existing, _)| existing == &id) {
+                            candidates.push((id, None))
                         }
                     }
                 }
@@ -623,10 +649,12 @@ async fn run_inner(
         }
     }
     let mut report = format!("# B 站阅读小记 · {}\n\n", day(user)?);
+    report.push_str(&selection_report);
     let mut attempted = 0;
     let mut completed = 0;
     let mut failed = 0;
-    for video_id in candidates {
+    for (video_id, metadata) in candidates {
+        guard.check().await?;
         crate::permissions::require(
             app,
             user,
@@ -667,7 +695,11 @@ async fn run_inner(
             &format!("正在阅读第 {attempted} 条 · {}", video_id.bvid),
         )
         .await?;
-        let result = read_one(app, user, &eid, &video_id, &profile, &cfg, cancel, source).await;
+        let result = read_one(
+            app, user, &eid, &video_id, &profile, &cfg, cancel, source, metadata, &guard,
+        )
+        .await;
+        guard.check().await?;
         let url = client::video_url(&video_id.bvid, video_id.page);
         match result {
             Ok(Some((title, a))) => {
@@ -699,7 +731,9 @@ async fn run_inner(
             }
         }
     }
-    if attempted == 0 {
+    if attempted == 0 && !selection_report.is_empty() {
+        report.push_str("本轮未开始字幕阅读。\n");
+    } else if attempted == 0 {
         report
             .push_str("本轮没有新的可读视频：可能已在阅读记录中，或没有找到符合时间范围的视频。\n");
     }
@@ -731,8 +765,16 @@ async fn read_one(
     cfg: &Config,
     cancel: &CancellationToken,
     source: &impl Source,
+    metadata: Option<client::Video>,
+    guard: &discovery::Guard<'_>,
 ) -> Result<Option<(String, reader::Analysis)>> {
-    let video = source.info(video_id).await?;
+    guard.check().await?;
+    let video = if let Some(video) = metadata {
+        video
+    } else {
+        source.info(video_id).await?
+    };
+    guard.check().await?;
     sqlx::query("UPDATE bili_entries SET title=?,author=?,duration=? WHERE id=? AND user_id=?")
         .bind(&video.title)
         .bind(&video.author)
@@ -741,10 +783,13 @@ async fn read_one(
         .bind(&user.id)
         .execute(&app.pool)
         .await?;
-    let Some(captions) = source.captions(video_id, &video).await? else {
+    let captions = source.captions(video_id, &video).await?;
+    guard.check().await?;
+    let Some(captions) = captions else {
         sqlx::query("UPDATE bili_entries SET status='skipped',reason='当前账号没有取得字幕；可扫码后重试。未读取音频或画面。',updated_at=? WHERE id=? AND user_id=?").bind(now()).bind(eid).bind(&user.id).execute(&app.pool).await?;
         return Ok(None);
     };
+    guard.check().await?;
     let analysis = reader::read(
         app,
         user,
@@ -755,9 +800,7 @@ async fn read_one(
         cancel,
     )
     .await?;
-    if cancel.is_cancelled() {
-        return Err(Error::Cancelled);
-    }
+    guard.check().await?;
     sqlx::query("UPDATE bili_entries SET status='completed',reason='',source='bilibili_subtitles',language=?,segments=?,analysis=?,updated_at=? WHERE id=? AND user_id=? AND status='reading'").bind(&captions.language).bind(json!(captions.segments).to_string()).bind(json!(analysis).to_string()).bind(now()).bind(eid).bind(&user.id).execute(&app.pool).await?;
     Ok(Some((video.title, analysis)))
 }

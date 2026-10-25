@@ -11,13 +11,13 @@ import EmptyState from '../components/EmptyState.vue'
 import ResourceState from '../components/ResourceState.vue'
 import '../styles/bilibili.css'
 
-interface Config { enabled: boolean; keywords: string[]; daily_at: string; daily_limit: number; per_run: number; recent_days: number; profile_id: string | null; taste: string }
+interface Config { enabled: boolean; autonomous: boolean; keywords: string[]; daily_at: string; daily_limit: number; per_run: number; recent_days: number; profile_id: string | null; taste: string }
 interface Analysis { summary: string; thought: string; worth_reading: boolean; tags: string[]; points: { segment: number; text: string }[] }
 interface Entry { id: string; bvid: string; page: number; url: string; title: string; author: string; duration: number; status: string; reason: string; source: string; language: string; analysis: Partial<Analysis>; favorite: boolean; updated_at: number }
 interface ReadingRun { id: string; job_id: string; status: string; progress: string; report: string; created_at: number }
 interface View { config: Config; account: { connected: boolean; name: string }; items: Entry[]; total: number; page: number; timezone: string; next_run_at: number; stats: { total: number; completed: number; favorites: number; today: number }; runs: ReadingRun[] }
 interface Detail { segments: { start: number; end: number; text: string }[]; analysis: Partial<Analysis> }
-const defaults: Config = { enabled: false, keywords: [], daily_at: '19:00', daily_limit: 6, per_run: 3, recent_days: 7, profile_id: null, taste: '' }
+const defaults: Config = { enabled: false, autonomous: false, keywords: [], daily_at: '19:00', daily_limit: 6, per_run: 3, recent_days: 7, profile_id: null, taste: '' }
 const video = ref(''), submitting = ref(false), submitError = ref(''), search = ref(''), query = ref(''), status = ref(''), favoriteOnly = ref(false), page = ref(1), tab = ref('library')
 const initial: View = { config: defaults, account: { connected: false, name: '' }, items: [], total: 0, page: 1, timezone: 'Asia/Shanghai', next_run_at: 0, stats: { total: 0, completed: 0, favorites: 0, today: 0 }, runs: [] }
 const { data, loading, error, load } = useResource(() => api<View>(`/bilibili?q=${encodeURIComponent(query.value)}&status=${status.value}&favorite=${favoriteOnly.value}&page=${page.value}`), initial)
@@ -83,11 +83,11 @@ async function startLogin() {
 function disconnect() { confirmAction('断开 B 站账号？', '会清除本机保存的登录凭据，并取消尚未完成的阅读。阅读记录会保留。', async () => { await remove('/bilibili/login'); await load(); notify('B 站账号已断开') }) }
 </script>
 <template>
-  <PageHeading title="看见新鲜，也留下想法" description="让灵犀读一读你喜欢的视频，带着自己的理解回来。" eyebrow="A QUIET CORNER FOR CURIOSITY">
+  <PageHeading title="看见新鲜，也留下想法" description="从好奇心出发，自己挑选想读的视频，带着新的理解回来。" eyebrow="A QUIET CORNER FOR CURIOSITY">
     <RouterLink class="button secondary" to="/settings?tab=activities"><Settings2 :size="16" />阅读设置</RouterLink>
   </PageHeading>
   <section class="bili-hero">
-    <div class="bili-hero-copy"><span class="bili-eyebrow"><TvMinimalPlay :size="16" />灵犀的 B 站书房</span><h2>好内容，<br />值得慢慢读。</h2><p>从兴趣出发，读原始字幕，记下感想。<br />下一次聊天，也许就有了新的话题。</p><div class="bili-keywords"><span v-for="kw in data.config.keywords.slice(0, 4)" :key="kw">{{ kw }}</span><span v-if="!data.config.keywords.length">好奇心，从一个视频开始</span></div></div>
+    <div class="bili-hero-copy"><span class="bili-eyebrow"><TvMinimalPlay :size="16" />灵犀的 B 站书房</span><h2>好内容，<br />值得慢慢读。</h2><p>{{data.config.autonomous?'想看什么，让灵犀自己决定。':'从兴趣出发，读原始字幕，记下感想。'}}<br />{{data.config.autonomous?'先挑话题，再挑视频；也可以今天不看。':'下一次聊天，也许就有了新的话题。'}}</p><div class="bili-keywords"><span v-for="kw in data.config.keywords.slice(0, 4)" :key="kw">{{ kw }}</span><span v-if="!data.config.keywords.length">好奇心，从一个视频开始</span></div></div>
     <div class="bili-art" aria-hidden="true"><span class="bili-spark">✧</span><div class="bili-paper back"><i></i><i></i><i></i></div><div class="bili-paper front"><span class="bili-paper-label">TODAY'S DISCOVERY</span><div class="bili-tv"><i></i><i></i><Play :size="28" /></div><span>读到喜欢的，记下来。</span><div class="bili-paper-lines"><i></i><i></i></div><Heart :size="22" /></div><span class="bili-orbit">○</span></div>
   </section>
   <div class="bili-overview">
@@ -95,7 +95,7 @@ function disconnect() { confirmAction('断开 B 站账号？', '会清除本机�
     <span class="tag neutral">{{ data.config.enabled ? `每天 ${data.config.daily_at} · ${data.timezone}` : '按你的节奏，手动阅读' }}</span>
   </div>
   <div class="bili-start-layout">
-    <section class="panel bili-submit"><h3>把这条视频交给灵犀</h3><p>粘贴完整 B 站链接或 BV 号。分 P 视频只读链接中的那一 P。</p><form @submit.prevent="submit()"><label class="sr-only" for="bili-video">B 站视频链接或 BV 号</label><input id="bili-video" v-model="video" placeholder="https://www.bilibili.com/video/BV…" maxlength="500" :disabled="submitting" /><button class="button" :disabled="submitting || !!active || !video.trim()"><BookOpen :size="16" />{{ submitting ? '提交中…' : '读这条' }}</button></form><div class="bili-discover"><button class="text-link" :disabled="submitting || !!active" @click="submit('')"><Sparkles :size="15" />按兴趣发现几条</button><small>会调用阅读模型；无字幕时跳过。</small></div><p v-if="submitError" role="alert" class="form-error">{{ submitError }}</p></section>
+    <section class="panel bili-submit"><h3>把这条视频交给灵犀</h3><p>粘贴完整 B 站链接或 BV 号。分 P 视频只读链接中的那一 P。</p><form @submit.prevent="submit()"><label class="sr-only" for="bili-video">B 站视频链接或 BV 号</label><input id="bili-video" v-model="video" placeholder="https://www.bilibili.com/video/BV…" maxlength="500" :disabled="submitting" /><button class="button" :disabled="submitting || !!active || !video.trim()"><BookOpen :size="16" />{{ submitting ? '提交中…' : '读这条' }}</button></form><div class="bili-discover"><button class="text-link" :disabled="submitting || !!active" @click="submit('')"><Sparkles :size="15" />{{data.config.autonomous?'让它自己逛逛':'按兴趣发现几条'}}</button><small>{{data.config.autonomous?'会调用模型选题、选片和读字幕，选择理由留在阅读小记。':'会调用阅读模型；无字幕时跳过。'}}</small></div><p v-if="submitError" role="alert" class="form-error">{{ submitError }}</p></section>
     <section class="panel bili-account"><div class="section-heading"><h3>B 站账号</h3><span :class="['tag', data.account.connected ? 'green' : 'neutral']">{{ data.account.connected ? '已连接' : '未连接' }}</span></div><p>{{ data.account.connected ? data.account.name : '部分视频的字幕需要登录后才能获取。' }}</p><small>登录凭据加密保存在你的服务中，只用于获取内容。</small><div><button v-if="!data.account.connected" class="button secondary" @click="startLogin"><ScanLine :size="16" />扫码连接</button><template v-else><button class="text-link" @click="startLogin">重新登录</button><button class="text-link" @click="disconnect">断开连接</button></template></div></section>
   </div>
   <section v-if="active" class="bili-progress" role="status"><span class="bili-reading-dot"></span><div><strong>{{ active.progress }}</strong><small>可以离开页面，阅读会在后台继续。</small></div><button class="button secondary" @click="run(cancelReading)"><Pause :size="14" />停止</button></section>

@@ -4,7 +4,7 @@ import Bilibili from './Bilibili.vue'
 import { api, post } from '../lib/api'
 vi.mock('../lib/api', () => ({ api: vi.fn(), post: vi.fn(), patch: vi.fn(), put: vi.fn(), remove: vi.fn(), requestId: () => 'request-key' }))
 vi.mock('../lib/ui', () => ({ choice: vi.fn(), field: vi.fn(), openForm: vi.fn(), confirmAction: vi.fn(), notify: vi.fn(), date: () => '10-22 19:00', run: (f: () => Promise<unknown>) => f() }))
-const initial = () => ({ config: { enabled: false, keywords: [], daily_at: '19:00', daily_limit: 6, per_run: 3, recent_days: 7, profile_id: null, taste: '' }, account: { connected: false, name: '' }, items: [], total: 0, page: 1, timezone: 'Asia/Shanghai', next_run_at: 0, stats: { total: 0, completed: 0, favorites: 0, today: 0 }, runs: [] })
+const initial = () => ({ config: { enabled: false, autonomous: false, keywords: [], daily_at: '19:00', daily_limit: 6, per_run: 3, recent_days: 7, profile_id: null, taste: '' }, account: { connected: false, name: '' }, items: [], total: 0, page: 1, timezone: 'Asia/Shanghai', next_run_at: 0, stats: { total: 0, completed: 0, favorites: 0, today: 0 }, runs: [] })
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(api).mockResolvedValue(initial()); vi.mocked(post).mockResolvedValue({ id: 'run' }) })
 function setup() { return mount(Bilibili, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } }) }
 it('preserves failed video input and reports a real error instead of showing success', async () => {
@@ -26,4 +26,14 @@ it('shows missing subtitles honestly and filters the requested history', async (
   vi.mocked(api).mockResolvedValue({ ...initial(), total: 1, items: [{ id: 'e', title: '测试视频', bvid: 'BV1xx411c7mD', page: 1, author: 'UP主', duration: 10, status: 'skipped', reason: '当前没有取得字幕', analysis: {}, favorite: false }] })
   const w = setup(); await flushPromises(); expect(w.find('.bili-card').text()).toContain('没有字幕'); expect(w.find('.bili-card').text()).not.toContain('已读字幕')
   await w.find('[aria-label="筛选阅读状态"]').setValue('skipped'); await flushPromises(); expect(api).toHaveBeenLastCalledWith('/bilibili?q=&status=skipped&favorite=false&page=1'); w.unmount()
+})
+it('starts autonomous discovery without requiring a video URL or keywords', async () => {
+  const data = initial(); data.config.autonomous = true
+  vi.mocked(api).mockResolvedValue(data)
+  const w = setup(); await flushPromises()
+  expect(w.find('.bili-discover button').text()).toBe('让它自己逛逛')
+  expect(w.find('.bili-discover').text()).toContain('选择理由留在阅读小记')
+  await w.find('.bili-discover button').trigger('click'); await flushPromises()
+  expect(post).toHaveBeenCalledWith('/bilibili/run', { video: '', retry: false, request_id: 'request-key' })
+  w.unmount()
 })
