@@ -482,6 +482,11 @@ pub async fn process_qq(
             sqlx::query("UPDATE qq_private_events SET status='sent',updated_at=? WHERE id=? AND user_id=?")
                 .bind(now()).bind(&received.id).bind(&user.id).execute(&app.pool).await?;
         }
+        let mood_turn:Option<String>=sqlx::query_scalar("SELECT id FROM turns WHERE user_id=? AND conversation_id=? AND request_id=? AND status='completed'").bind(&user.id).bind(&cid).bind(format!("qq-private:{chat_key}")).fetch_optional(&app.pool).await?;
+        if let Some(tid)=mood_turn {
+            if let Err(error)=crate::memory::automatic::queue(app,user,&tid).await{tracing::warn!(%error,"QQ private memory dispatch failed");}
+            if let Err(error)=crate::mood::queue(app,user,&format!("private:{cid}"),&tid,"turn",false).await{tracing::warn!(%error,"QQ private mood dispatch failed");}
+        }
         let latest: Option<String> = sqlx::query_scalar("SELECT id FROM qq_private_events WHERE user_id=? ORDER BY rowid DESC LIMIT 1")
             .bind(&user.id).fetch_optional(&app.pool).await?;
         if !unreadable_only && latest.as_deref().is_some_and(|id|batch.iter().any(|r|r.id==id))

@@ -275,6 +275,11 @@ pub async fn build_context(
     let memories =
         memory::context(app, user, query, (profile.context_window / 20).min(2000)).await?;
     let growth = crate::growth::context(app, user, &profile.id).await?;
+    if let Ok(mood) = crate::mood::context(app, user, &format!("private:{cid}")).await
+        && !mood.is_empty()
+    {
+        messages.push(json!({"role":"system","content":mood}));
+    }
     if !growth.is_empty() {
         messages.push(json!({"role":"system","content":growth}));
     }
@@ -348,19 +353,20 @@ pub async fn prepare(app: &App, user: &User, cid: &str, input: Send) -> Result<S
         (tid, Some((status, reply, error)))
     } else {
         let tid = id();
+        let turn_at = now();
         let mut tx = app.pool.begin().await?;
         sqlx::query("INSERT INTO turns(id,user_id,conversation_id,request_id,input_hash,status,created_at) VALUES(?,?,?,?,?,'running',?)")
-            .bind(&tid).bind(&user.id).bind(cid).bind(&input.request_id).bind(digest(&input.message)).bind(now()).execute(&mut *tx).await?;
+            .bind(&tid).bind(&user.id).bind(cid).bind(&input.request_id).bind(digest(&input.message)).bind(turn_at).execute(&mut *tx).await?;
         sqlx::query(
             "INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?,'user',?,?)",
         )
         .bind(cid)
         .bind(&input.message)
-        .bind(now())
+        .bind(turn_at)
         .execute(&mut *tx)
         .await?;
         sqlx::query("UPDATE conversations SET updated_at=? WHERE id=?")
-            .bind(now())
+            .bind(turn_at)
             .bind(cid)
             .execute(&mut *tx)
             .await?;
@@ -428,6 +434,26 @@ pub async fn run(
     if outcome.is_ok() && !result.is_empty() {
         if let Err(error) = crate::growth::observe(&app, &session).await {
             tracing::warn!(%error, "persona observation failed");
+        }
+        // QQ queues only after delivery, so unsent paragraphs do not affect mood.
+        if !session.input.request_id.starts_with("qq-private:") {
+            if let Err(error) =
+                crate::memory::automatic::queue(&app, &session.user, &session.turn_id).await
+            {
+                tracing::warn!(%error,"automatic memory dispatch failed");
+            }
+            if let Err(error) = crate::mood::queue(
+                &app,
+                &session.user,
+                &format!("private:{}", session.conversation_id),
+                &session.turn_id,
+                "turn",
+                false,
+            )
+            .await
+            {
+                tracing::warn!(%error,"mood observation dispatch failed");
+            }
         }
     }
     session.lease.release().await?;

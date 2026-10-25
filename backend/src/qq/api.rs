@@ -274,6 +274,11 @@ pub async fn person(
     } else {
         serde_json::to_value(store::facts(&app, &user, &q.group_id, &q.qq_id).await?).unwrap()
     };
+    let life = if owner {
+        json!({"memories":memories,"last_recall":null})
+    } else {
+        crate::memory::lifecycle::group_view(&app, &user, &q.group_id, &q.qq_id, memories).await?
+    };
     let history = store::history(
         &app,
         &user,
@@ -285,7 +290,7 @@ pub async fn person(
     )
     .await?;
     Ok(ok(
-        json!({"storage":if owner {"main"}else{"qq"},"memories":memories,"history":history}),
+        json!({"storage":if owner {"main"}else{"qq"},"memories":life["memories"],"last_recall":life["last_recall"],"history":history}),
     ))
 }
 pub async fn remember(

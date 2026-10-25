@@ -10,6 +10,8 @@ use std::{str::FromStr, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 pub const ACTIONS: &[&str] = &[
+    "mood_observe",
+    "memory_observe",
     "persona_reflect",
     "bili_read",
     "companion_tick",
@@ -300,6 +302,8 @@ async fn execute(app: &App, job: &Job, cancel: &CancellationToken) -> Result<Val
     }
     let params = &job.params.0;
     match job.action.as_str() {
+        "mood_observe" => crate::mood::observe(app, &user, params, cancel).await,
+        "memory_observe" => crate::memory::automatic::observe(app, &user, params, cancel).await,
         "feishu_message" => crate::feishu::process(app, &user, params, cancel).await,
         "persona_reflect" => crate::growth::reflect(app, &user, params, cancel).await,
         "bili_read" => crate::bilibili::process(app, &user, params, cancel).await,

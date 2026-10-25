@@ -87,6 +87,11 @@ pub async fn generate(
         .saturating_sub(profile.max_output + 5000)
         .min(6000)
         * 2;
+    if let Ok(mood) = crate::mood::context(app, user, &format!("group:{}", event.group_id)).await
+        && !mood.is_empty()
+    {
+        messages.push(json!({"role":"system","content":mood}));
+    }
     messages.extend(history(&rows, &event.id, budget));
     let current = if batch.len() > 1 {
         json!({"messages":batch.iter().map(|e|json!({"event_id":e.id,"speaker":e.qq_id,"name":e.name,"text":e.content})).collect::<Vec<_>>(),"instruction":"以上是在同一群连续发来的消息。理解完整上下文后统一回应，保留各自发言人，不逐条确认或逐条追问。调用需要来源的工具时，source_event_id 必须选实际提出请求或明确反馈的那条当前发言，不能将别人的请求或习惯记在最后发言者名下。","observations":facts.iter().map(|f|&f.content).collect::<Vec<_>>()})

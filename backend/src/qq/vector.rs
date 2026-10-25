@@ -155,15 +155,23 @@ pub async fn recall(
     if qq == cfg.owner_qq {
         return Ok(vec![]);
     }
+    let lifecycle = crate::memory::lifecycle::config(app, user).await?;
     let vector =
         crate::search::embed(app, &serde_json::to_value(&cfg.embedding).unwrap(), query).await?;
-    let response = request(app,&cfg,reqwest::Method::POST,&format!("/collections/{}/points/query",collection(user,&cfg)),Some(&json!({"query":vector,"filter":scope_filter(user,group,qq),"limit":8,"with_payload":true}))).await?;
+    let response = request(app,&cfg,reqwest::Method::POST,&format!("/collections/{}/points/query",collection(user,&cfg)),Some(&json!({"query":vector,"filter":scope_filter(user,group,qq),"limit":(lifecycle.max_recall*3).min(60),"with_payload":true}))).await?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(vec![]);
     }
     let data = crate::integrations::json_response(response).await?;
     let mut output = Vec::new();
     for point in data["result"]["points"].as_array().into_iter().flatten() {
+        if lifecycle.enabled
+            && !point["score"]
+                .as_f64()
+                .is_some_and(|score| score.is_finite() && score >= lifecycle.relevance_threshold)
+        {
+            continue;
+        }
         let Some(fid) = point["id"].as_str() else {
             continue;
         };
@@ -179,5 +187,5 @@ pub async fn recall(
             }
         }
     }
-    Ok(output)
+    crate::memory::lifecycle::group_rank(app, user, group, qq, query, output, true).await
 }

@@ -64,7 +64,21 @@ async fn upsert(State(s): State<Mock>, Json(v): Json<Value>) -> Json<Value> {
 }
 async fn query(State(s): State<Mock>, Json(v): Json<Value>) -> Json<Value> {
     s.requests.lock().unwrap().push(v);
-    Json(json!({"result":{"points":s.points.lock().unwrap().clone()}}))
+    let points: Vec<_> = s
+        .points
+        .lock()
+        .unwrap()
+        .iter()
+        .cloned()
+        .map(|mut p| {
+            p.as_object_mut()
+                .unwrap()
+                .entry("score")
+                .or_insert(json!(0.9));
+            p
+        })
+        .collect();
+    Json(json!({"result":{"points":points}}))
 }
 async fn delete(State(s): State<Mock>, Json(v): Json<Value>) -> Json<Value> {
     s.points
@@ -1055,6 +1069,22 @@ async fn vector_retrieval_enforces_tenant_group_person_and_tombstones() {
         .unwrap();
     assert_eq!(recalled.len(), 1);
     assert_eq!(recalled[0].id, own);
+    {
+        let mut points = f.mock.points.lock().unwrap();
+        points.iter_mut().find(|p| p["id"] == own).unwrap()["score"] = json!(0.01);
+    }
+    assert!(
+        vector::recall(&f.app, &f.user, "30001", "10002", "沟通风格")
+            .await
+            .unwrap()
+            .is_empty(),
+        "low relevance is not rescued by freshness"
+    );
+    {
+        let mut points = f.mock.points.lock().unwrap();
+        points.iter_mut().find(|p| p["id"] == own).unwrap()["score"] = json!(0.9);
+    }
+
     let request = f.mock.requests.lock().unwrap()[0].clone();
     assert_eq!(request["filter"]["must"][0]["match"]["value"], f.user.id);
     assert_eq!(request["filter"]["must"][1]["match"]["value"], "30001");

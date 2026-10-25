@@ -12,6 +12,7 @@ pub mod jobs;
 pub mod media;
 pub mod memory;
 pub mod migration;
+pub mod mood;
 pub mod network;
 pub mod permissions;
 pub mod provider;

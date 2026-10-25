@@ -31,6 +31,9 @@ pub async fn pool(app: &App) -> Result<&SqlitePool> {
             sqlx::raw_sql(include_str!("../../qq_schema.sql"))
                 .execute(&pool)
                 .await?;
+            sqlx::raw_sql(include_str!("../../mind_schema.sql"))
+                .execute(&pool)
+                .await?;
             Ok::<_, Error>(pool)
         })
         .await
@@ -169,8 +172,9 @@ pub async fn save_fact(
             sqlx::query_scalar("SELECT id FROM memories WHERE user_id=? AND fact_key=?")
                 .bind(&user.id)
                 .bind(key)
-                .fetch_one(&app.pool)
-                .await?,
+                .fetch_optional(&app.pool)
+                .await?
+                .unwrap_or_default(),
         );
     }
     let key = digest(
@@ -229,5 +233,11 @@ pub async fn forget(app: &App, user: &User, fid: &str) -> Result<()> {
     if affected == 0 {
         return Err(Error::NotFound);
     }
-    enqueue_index(app, user, &fact(app, user, fid).await?).await
+    let fact = fact(app, user, fid).await?;
+    sqlx::query("DELETE FROM memory_recalls WHERE user_id=? AND scope_id=?")
+        .bind(&user.id)
+        .bind(format!("{}:{}", fact.group_id, fact.qq_id))
+        .execute(pool(app).await?)
+        .await?;
+    enqueue_index(app, user, &fact).await
 }

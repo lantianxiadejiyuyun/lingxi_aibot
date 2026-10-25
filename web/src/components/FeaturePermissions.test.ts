@@ -5,7 +5,7 @@ import { api, put } from '../lib/api'
 
 vi.mock('../lib/api',()=>({api:vi.fn(),put:vi.fn()}))
 vi.mock('../lib/ui',()=>({notify:vi.fn()}))
-const initial=()=>({enabled:true,features:Object.fromEntries(['chat','vision','sticker_collection','sticker_reply','memory','persona_growth','proactive','bilibili','web_search','tools'].map(key=>[key,{enabled:true,private:true,group:!['persona_growth','bilibili','web_search','tools'].includes(key)}]))})
+const initial=()=>({enabled:true,features:Object.fromEntries(['chat','vision','sticker_collection','sticker_reply','memory','mood','persona_growth','proactive','bilibili','web_search','tools'].map(key=>[key,{enabled:true,private:true,group:!['persona_growth','bilibili','web_search','tools'].includes(key)}]))})
 beforeEach(()=>{vi.clearAllMocks();vi.mocked(api).mockImplementation(async()=>initial());vi.mocked(put).mockImplementation(async(_path,body)=>body as any)})
 it('changes only group permission and preserves the private grant',async()=>{
  const w=mount(FeaturePermissions);await flushPromises()
@@ -33,7 +33,7 @@ it('restores the displayed switch when saving fails',async()=>{
 
 it('exposes every group switch and saves web search independently of tools',async()=>{
  const w=mount(FeaturePermissions);await flushPromises()
- expect(w.findAll('input[aria-label$="QQ 群聊"]')).toHaveLength(10)
+ expect(w.findAll('input[aria-label$="QQ 群聊"]')).toHaveLength(11)
  await w.get('input[aria-label="联网搜索 · 个人会话"]').setValue(false);await flushPromises()
  const value=vi.mocked(put).mock.calls[0]![1] as ReturnType<typeof initial>
  expect(value.features.web_search!.private).toBe(false)

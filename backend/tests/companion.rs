@@ -247,7 +247,7 @@ async fn timezone_windows_cooldown_and_recurring_calendar_suppress_calls() {
     );
     assert_eq!(f.gate(&c, at("2026-10-22T02:00:00+08:00")).await, None);
     c = f.config();
-    let t = db::now();
+    let t = at("2026-10-22T03:00:00+08:00");
     let conv = lingxi::chat::create(&f.app, &f.user, "个人会话", None)
         .await
         .unwrap();
@@ -282,7 +282,9 @@ async fn budgets_use_local_days_and_silence_after_unanswered_shares() {
 #[tokio::test]
 async fn concurrent_ticks_send_once_with_persona_and_only_owner_memory() {
     let f = Fixture::new().await;
-    f.enable().await;
+    let mut cfg = f.enable().await;
+    cfg.interests = vec!["摄影".into()];
+    companion::save(&f.app, &f.user, cfg).await.unwrap();
     sqlx::query("INSERT INTO memories(id,user_id,fact_key,content,source,importance,created_at,updated_at) VALUES(?,?,?,'OWNER_MEMORY:喜欢摄影','manual',5,?,?)").bind(db::id()).bind(&f.user.id).bind(db::id()).bind(db::now()).bind(db::now()).execute(&f.app.pool).await.unwrap();
     let other = auth::create_user(&f.app, "other", "other-test-password".into(), false)
         .await

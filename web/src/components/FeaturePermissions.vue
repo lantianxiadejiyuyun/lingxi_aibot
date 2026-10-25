@@ -13,6 +13,7 @@ const items = [
  {key:'sticker_collection',name:'图片收藏',detail:'模型喜欢才收下，或按主人命令收藏',group:true},
  {key:'sticker_reply',name:'表情回复',detail:'按语境选用当前会话的收藏图片',group:true},
  {key:'memory',name:'长期记忆',detail:'自动提取与使用记忆；关闭后保留已有记录',group:true},
+ {key:'mood',name:'持续心情',detail:'交流后判断心情、缓慢回稳；各会话独立，需另开会话与心情总开关',group:true},
  {key:'persona_growth',name:'人设养成',detail:'学习交流反馈；群内按成员保存习惯，基础人设不变',group:true},
  {key:'proactive',name:'主动消息与延迟补充',detail:'按已配置的时段和频率主动聊天',group:true},
  {key:'bilibili',name:'B 站阅读',detail:'个人：手动或定时阅读；群聊：读取群内提供的视频字幕，保存本群心得',group:true},

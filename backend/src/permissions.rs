@@ -18,6 +18,7 @@ pub enum Feature {
     StickerCollection,
     StickerReply,
     Memory,
+    Mood,
     PersonaGrowth,
     Proactive,
     Bilibili,
@@ -38,12 +39,13 @@ impl Scope {
         }
     }
 }
-pub const FEATURES: [Feature; 10] = [
+pub const FEATURES: [Feature; 11] = [
     Feature::Chat,
     Feature::Vision,
     Feature::StickerCollection,
     Feature::StickerReply,
     Feature::Memory,
+    Feature::Mood,
     Feature::PersonaGrowth,
     Feature::Proactive,
     Feature::Bilibili,
@@ -54,7 +56,7 @@ impl Feature {
     pub fn group_default(self) -> bool {
         !matches!(
             self,
-            Self::PersonaGrowth | Self::Bilibili | Self::Tools | Self::WebSearch
+            Self::Mood | Self::PersonaGrowth | Self::Bilibili | Self::Tools | Self::WebSearch
         )
     }
     pub fn label(self) -> &'static str {
@@ -64,6 +66,7 @@ impl Feature {
             Self::StickerCollection => "图片收藏",
             Self::StickerReply => "表情回复",
             Self::Memory => "长期记忆",
+            Self::Mood => "持续心情",
             Self::PersonaGrowth => "人设养成",
             Self::Proactive => "主动消息与延迟补充",
             Self::Bilibili => "B 站阅读",
@@ -95,7 +98,7 @@ impl Default for Config {
                     (
                         f,
                         Grant {
-                            enabled: true,
+                            enabled: f != Feature::Mood,
                             private: true,
                             group: f.group_default(),
                         },
@@ -146,6 +149,11 @@ pub async fn config(app: &App, user: &User) -> Result<Config> {
                 grant.group = false;
                 config.features.insert(Feature::WebSearch, grant);
             }
+            config.features.entry(Feature::Mood).or_insert(Grant {
+                enabled: false,
+                private: true,
+                group: false,
+            });
             config.validate()?;
             Ok(config)
         }

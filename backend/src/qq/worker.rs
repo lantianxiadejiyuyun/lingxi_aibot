@@ -168,11 +168,16 @@ async fn process_locked(
                         Ok(facts) => facts,
                         Err(error) => {
                             tracing::warn!(%error,"QQ recall failed, using scoped local observations");
-                            store::facts(app, user, &event.group_id, &event.qq_id)
-                                .await?
-                                .into_iter()
-                                .take(5)
-                                .collect()
+                            crate::memory::lifecycle::group_rank(
+                                app,
+                                user,
+                                &event.group_id,
+                                &event.qq_id,
+                                &event.content,
+                                store::facts(app, user, &event.group_id, &event.qq_id).await?,
+                                false,
+                            )
+                            .await?
                         }
                     }
                 };
@@ -307,6 +312,20 @@ async fn process_locked(
         }
     }
     // Only group-member raw messages expire here. Owner history remains in the main DB.
+    if delivered {
+        if let Err(error) = crate::mood::queue(
+            app,
+            user,
+            &format!("group:{}", event.group_id),
+            &event.id,
+            "group",
+            owner,
+        )
+        .await
+        {
+            tracing::warn!(%error,"group mood dispatch failed");
+        }
+    }
     sqlx::query("DELETE FROM events WHERE user_id=? AND created_at<? AND delivery_status IN ('sent','no_reply')").bind(&user.id).bind(now()-cfg.retention_days*86400).execute(store::pool(app).await?).await?;
     sessions::touch(app, user, &event.group_id).await?;
     Ok(json!({"event_id":event.id,"owner":owner,"delivered":delivered}))

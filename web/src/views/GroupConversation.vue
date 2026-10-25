@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MoodPanel from '../components/MoodPanel.vue'
 import { computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowLeft, MessageSquare, RefreshCw } from '@lucide/vue'
@@ -27,6 +28,7 @@ watch(group,load)
 </script>
 <template>
   <PageHeading :title="title" :description="`群号 ${group} · 一个群，一个独立会话`" eyebrow="ONE GROUP, ONE CONVERSATION"><RouterLink to="/qq" class="button secondary"><ArrowLeft :size="15" />返回群管理</RouterLink><button class="icon-button" aria-label="刷新群会话" @click="load"><RefreshCw :size="18" /></button></PageHeading>
+  <MoodPanel :scope="`group:${group}`" />
   <ResourceState :loading="loading" :error="error" @retry="load"><section class="panel qq-conversation">
     <div class="section-heading"><div><h2><MessageSquare :size="18" />群聊记录</h2><p>只展示当前群的最近 100 条发言及回复。暂停或移除群不会清空历史。</p></div><span :class="['tag',data.group?.active?'green':'neutral']">{{data.group?.active?'接入中':'未接入'}}</span></div>
     <div v-if="data.group?.settings.system_prompt" class="qq-conversation-persona"><strong>这个群的交流风格</strong><p>{{data.group.settings.system_prompt}}</p></div>

@@ -43,8 +43,14 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/records/{kind}",get(list_records).post(create_record))
         .route("/api/v2/records/{kind}/{id}",get(get_record).put(update_record).delete(delete_record))
         .route("/api/v2/search",get(search))
-        .route("/api/v2/memories",get(memories).post(remember))
-        .route("/api/v2/memories/{id}",axum::routing::delete(forget))
+        .route("/api/v2/memories",get(memories).post(crate::memory::lifecycle::create))
+        .route("/api/v2/memories/{id}",axum::routing::delete(forget).patch(crate::memory::lifecycle::update))
+        .route("/api/v2/memory/state",get(crate::memory::lifecycle::view))
+        .route("/api/v2/memory/settings",axum::routing::put(crate::memory::lifecycle::save))
+        .route("/api/v2/memory/preview",get(crate::memory::lifecycle::preview))
+        .route("/api/v2/mood",get(crate::mood::view).put(crate::mood::save))
+        .route("/api/v2/mood/{scope}",get(crate::mood::state_api).patch(crate::mood::toggle))
+        .route("/api/v2/mood/{scope}/reset",post(crate::mood::reset))
         .route("/api/v2/skills/{id}/run",post(run_skill))
         .route("/api/v2/profiles",get(profiles).put(save_profiles))
         .route("/api/v2/permissions",get(crate::permissions::view).put(crate::permissions::save))
@@ -95,7 +101,7 @@ pub fn router(app: App) -> Router {
         .route("/api/v2/qq/groups/{group}/resources/{kind}/{key}",axum::routing::delete(crate::qq::capabilities::delete_api))
         .route("/api/v2/qq/person",get(crate::qq::api::person))
         .route("/api/v2/qq/memories",post(crate::qq::api::remember))
-        .route("/api/v2/qq/memories/{id}",axum::routing::delete(crate::qq::api::forget))
+        .route("/api/v2/qq/memories/{id}",axum::routing::delete(crate::qq::api::forget).patch(crate::memory::lifecycle::update_group))
         .route("/api/v2/qq/reindex",post(crate::qq::api::reindex))
         .route("/api/v2/qq/stickers",get(crate::qq::stickers::list))
         .route("/api/v2/qq/stickers/settings",axum::routing::put(crate::qq::stickers::save_settings))
@@ -308,14 +314,6 @@ async fn search(
 async fn memories(State(app): State<App>, user: User) -> Result<Json<Value>> {
     Ok(ok(crate::memory::list(&app, &user).await?))
 }
-async fn remember(
-    State(app): State<App>,
-    user: User,
-    Json(input): Json<crate::memory::Input>,
-) -> Result<Json<Value>> {
-    crate::memory::remember(&app, &user, &input, "manual", &json!([])).await?;
-    Ok(ok(json!({"remembered":true})))
-}
 async fn forget(State(app): State<App>, user: User, Path(id): Path<String>) -> Result<Json<Value>> {
     crate::memory::forget(&app, &user, &id).await?;
     Ok(ok(json!({"deleted":true})))
@@ -417,12 +415,23 @@ async fn delete_conversation(
     Path(cid): Path<String>,
 ) -> Result<Json<Value>> {
     let lease = chat::Lease::acquire(&app, &user, &cid).await?;
+    let mut tx = app.pool.begin().await?;
     sqlx::query("DELETE FROM conversations WHERE id=? AND user_id=? AND lease_token=?")
-        .bind(cid)
-        .bind(user.id)
+        .bind(&cid)
+        .bind(&user.id)
         .bind(&lease.token)
-        .execute(&app.pool)
+        .execute(&mut *tx)
         .await?;
+    for table in ["mood_events", "mood_states"] {
+        sqlx::query(&format!(
+            "DELETE FROM {table} WHERE user_id=? AND scope_id=?"
+        ))
+        .bind(&user.id)
+        .bind(format!("private:{cid}"))
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(ok(json!({"deleted":true})))
 }
 #[derive(Deserialize)]
